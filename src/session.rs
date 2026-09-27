@@ -100,7 +100,7 @@ impl Framed {
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow::anyhow!("no endpoint address"))?;
-        let socket = TcpStream::connect_timeout(&addr, timeout.min(duration))?;
+        let socket = connect_socket(&addr, timeout.min(duration), &stop)?;
         Self::from_socket(socket, duration, stop)
     }
     pub fn from_socket(
@@ -239,6 +239,128 @@ impl Framed {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+// A blocking connect kept cancelled handshake slots (and transport race losers)
+// alive for up to eight seconds. Poll a single nonblocking attempt instead of
+// repeatedly reconnecting and restarting the TCP handshake.
+#[cfg(target_os = "linux")]
+fn connect_socket(
+    address: &std::net::SocketAddr,
+    timeout: Duration,
+    stop: &Option<Arc<AtomicBool>>,
+) -> Result<TcpStream> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    ensure!(!timeout.is_zero(), "TCP connect timeout");
+    let domain = if address.is_ipv4() {
+        libc::AF_INET
+    } else {
+        libc::AF_INET6
+    };
+    // SAFETY: socket has no borrowed pointers; OwnedFd closes it on every exit.
+    let raw = unsafe {
+        libc::socket(
+            domain,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if raw < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let connected = match address {
+        std::net::SocketAddr::V4(address) => {
+            let mut raw: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            raw.sin_family = libc::AF_INET as _;
+            raw.sin_port = address.port().to_be();
+            raw.sin_addr.s_addr = u32::from_ne_bytes(address.ip().octets());
+            // SAFETY: pointer and length describe a live IPv4 sockaddr.
+            unsafe {
+                libc::connect(
+                    fd.as_raw_fd(),
+                    (&raw as *const libc::sockaddr_in).cast(),
+                    std::mem::size_of_val(&raw) as _,
+                )
+            }
+        }
+        std::net::SocketAddr::V6(address) => {
+            let mut raw: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+            raw.sin6_family = libc::AF_INET6 as _;
+            raw.sin6_port = address.port().to_be();
+            raw.sin6_addr.s6_addr = address.ip().octets();
+            raw.sin6_flowinfo = address.flowinfo().to_be();
+            raw.sin6_scope_id = address.scope_id();
+            // SAFETY: pointer and length describe a live IPv6 sockaddr.
+            unsafe {
+                libc::connect(
+                    fd.as_raw_fd(),
+                    (&raw as *const libc::sockaddr_in6).cast(),
+                    std::mem::size_of_val(&raw) as _,
+                )
+            }
+        }
+    };
+    if connected < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINPROGRESS) {
+            return Err(error.into());
+        }
+    }
+    let stream = TcpStream::from(fd);
+    let until = Instant::now() + timeout;
+    loop {
+        ensure!(
+            !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
+            "cancelled"
+        );
+        if connected == 0 {
+            break;
+        }
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "TCP connect timeout");
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: poll mutates one valid descriptor for at most 50 ms.
+        let result = unsafe {
+            libc::poll(
+                &mut descriptor,
+                1,
+                remaining.as_millis().clamp(1, 50) as i32,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        if result > 0 {
+            if let Some(error) = stream.take_error()? {
+                return Err(error.into());
+            }
+            ensure!(
+                !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
+                "cancelled"
+            );
+            break;
+        }
+    }
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn connect_socket(
+    address: &std::net::SocketAddr,
+    timeout: Duration,
+    _stop: &Option<Arc<AtomicBool>>,
+) -> Result<TcpStream> {
+    Ok(TcpStream::connect_timeout(address, timeout)?)
 }
 
 /// Submit header and payload together without a concatenation allocation. TCP

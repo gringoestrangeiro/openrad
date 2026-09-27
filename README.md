@@ -43,7 +43,7 @@ An existing profile will not silently replace a different saved identity. Use an
 
 ## Prebuilt release
 
-The [OpenRad v0.3.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.3.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. This stability release protects heartbeats under load, preserves peer connections across online roster updates, adds individual peer recovery, and records rotating connection diagnostics. It also includes private-network creation, joining, and administration. See [the desktop guide](docs/desktop.md) and [CLI guide](docs/cli.md) for usage.
+The [OpenRad v0.4.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.4.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. This release speeds up initial peer connections through parallel UDP discovery and transport negotiation, raises outgoing handshake capacity from 24 to 64, and prioritizes first attempts over retries. It also fixes unnecessary reconnects when membership status or removal events contain an optional second identifier. See [the performance notes](docs/performance.md), [desktop guide](docs/desktop.md), and [CLI guide](docs/cli.md) for details.
 
 [Desktop and identity guide](docs/desktop.md) · [CLI guide](docs/cli.md) · [Architecture](docs/architecture.md)
 

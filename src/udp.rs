@@ -86,63 +86,125 @@ pub fn mapped_response(data: &[u8], transaction: &[u8; 16]) -> Result<SocketAddr
     }
     mapped.ok_or_else(|| anyhow::anyhow!("missing UES mapping"))
 }
+/// Query two authenticated hosts concurrently on the same socket. Both must
+/// agree; a response from one host never substitutes for the other.
 pub fn discover_mapping(
     socket: &UdpSocket,
     hosts: &[std::net::Ipv4Addr],
     stop: &Option<Arc<AtomicBool>>,
 ) -> Result<SocketAddr> {
+    let hosts: Vec<_> = hosts
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     ensure!(hosts.len() >= 2, "insufficient authenticated UES hosts");
-    socket.set_nonblocking(true)?;
-    let mut previous = None;
-    // Pick one native service port at each of two authenticated hosts. Never
-    // walk a host's ports or contact addresses outside LoginComplete.
     let choice = crate::crypto::random(3);
     let start = choice[0] as usize % hosts.len();
-    for index in 0..2 {
-        let host = hosts[(start + index) % hosts.len()];
-        let server = SocketAddr::new(host.into(), 17301 + (choice[index + 1] as u16 % 99));
-        let transaction: [u8; 16] = crate::crypto::random(16).try_into().unwrap();
-        let request = [vec![0, 1, 0, 0], transaction.to_vec()].concat();
-        let until = Instant::now() + Duration::from_secs(2);
-        let mut next = Instant::now();
-        let mut sends = 0;
-        let mut data = [0; 2048];
-        let mut responses = 0;
-        let address = loop {
-            ensure!(
-                !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
-                "cancelled"
-            );
-            ensure!(
-                Instant::now() < until,
-                "UES mapping timeout at {server} (responses={responses})"
-            );
-            if sends < 2 && Instant::now() >= next {
-                socket.send_to(&request, mapped(server))?;
-                sends += 1;
-                next = Instant::now() + Duration::from_millis(750);
+    let servers = std::array::from_fn(|index| {
+        SocketAddr::new(
+            hosts[(start + index) % hosts.len()].into(),
+            17301 + (choice[index + 1] as u16 % 99),
+        )
+    });
+    discover_mapping_at(socket, servers, stop, Duration::from_secs(2))
+}
+
+fn discover_mapping_at(
+    socket: &UdpSocket,
+    servers: [SocketAddr; 2],
+    stop: &Option<Arc<AtomicBool>>,
+    duration: Duration,
+) -> Result<SocketAddr> {
+    socket.set_nonblocking(true)?;
+    let transactions: [[u8; 16]; 2] =
+        std::array::from_fn(|_| crate::crypto::random(16).try_into().unwrap());
+    let mut addresses = [None; 2];
+    let until = Instant::now() + duration;
+    let mut next = Instant::now();
+    let mut sends = 0;
+    let mut data = [0; 2048];
+    loop {
+        ensure!(
+            !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
+            "cancelled"
+        );
+        ensure!(Instant::now() < until, "UES mapping timeout");
+        if sends < 2 && Instant::now() >= next {
+            for (index, server) in servers.iter().enumerate() {
+                if addresses[index].is_none() {
+                    let request = [vec![0, 1, 0, 0], transactions[index].to_vec()].concat();
+                    socket.send_to(&request, mapped(*server))?;
+                }
             }
-            match socket.recv_from(&mut data) {
-                Ok((n, source)) if canonical(source) == server => {
-                    responses += 1;
-                    if let Ok(a) = mapped_response(&data[..n], &transaction) {
-                        break a;
+            sends += 1;
+            next = Instant::now() + Duration::from_millis(750);
+        }
+        match socket.recv_from(&mut data) {
+            Ok((n, source)) => {
+                if let Some(index) = servers.iter().position(|s| *s == canonical(source)) {
+                    if addresses[index].is_none() {
+                        if let Ok(address) = mapped_response(&data[..n], &transactions[index]) {
+                            addresses[index] = Some(address);
+                        }
                     }
                 }
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5))
+                if let [Some(a), Some(b)] = addresses {
+                    ensure!(
+                        a == b,
+                        "UES mapping changes by destination; no port prediction attempted"
+                    );
+                    return Ok(a);
                 }
-                Err(e) => return Err(e.into()),
             }
-        };
-        ensure!(
-            previous.is_none_or(|p| p == address),
-            "UES mapping changes by destination; no port prediction attempted"
-        );
-        previous = Some(address);
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => return Err(e.into()),
+        }
     }
-    Ok(previous.unwrap())
+}
+
+/// Mapping is independent of coordinator reads and direct/relay handshakes.
+/// Own and join this worker so a winning path or disconnect closes its socket.
+pub(crate) struct MappingDiscovery {
+    results: std::sync::mpsc::Receiver<Result<(UdpSocket, SocketAddr)>>,
+    cancel: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl MappingDiscovery {
+    pub(crate) fn start(hosts: Vec<std::net::Ipv4Addr>) -> Result<Self> {
+        let (sender, results) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let worker = std::thread::Builder::new()
+            .name("udp-mapping".into())
+            .spawn(move || {
+                let result = (|| {
+                    let socket = UdpSocket::bind("[::]:0")?;
+                    let endpoint = discover_mapping(&socket, &hosts, &Some(stop))?;
+                    Ok((socket, endpoint))
+                })();
+                let _ = sender.send(result);
+            })?;
+        Ok(Self {
+            results,
+            cancel,
+            worker: Some(worker),
+        })
+    }
+    pub(crate) fn poll(&self) -> Option<Result<(UdpSocket, SocketAddr)>> {
+        self.results.try_recv().ok()
+    }
+}
+impl Drop for MappingDiscovery {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 /// Advertise only addresses on the interface used by the authenticated coordinator.
@@ -782,6 +844,106 @@ impl Enet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
+
+    fn mapping_response(transaction: &[u8], port: u16) -> Vec<u8> {
+        [
+            vec![1, 1, 0, 12],
+            transaction.to_vec(),
+            vec![0, 1, 0, 8, 0, 1],
+            port.to_be_bytes().to_vec(),
+            vec![192, 0, 2, 10],
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn mapping_queries_both_servers_before_waiting_and_correlates_reordered_replies() {
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for socket in [&a, &b] {
+            socket
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+        }
+        let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
+        let worker = std::thread::spawn(move || {
+            discover_mapping_at(
+                &UdpSocket::bind("[::]:0").unwrap(),
+                servers,
+                &None,
+                Duration::from_secs(3),
+            )
+        });
+        let mut request_a = [0; 20];
+        let mut request_b = [0; 20];
+        let (_, client_a) = a.recv_from(&mut request_a).unwrap();
+        // The sequential implementation would wait for A's reply here.
+        let (_, client_b) = b.recv_from(&mut request_b).unwrap();
+        assert_eq!(client_a, client_b);
+        let mut wrong_transaction = request_a[4..].to_vec();
+        wrong_transaction[0] ^= 1;
+        a.send_to(&mapping_response(&wrong_transaction, 1234), client_a)
+            .unwrap();
+        b.send_to(&mapping_response(&request_b[4..], 1234), client_b)
+            .unwrap();
+        a.send_to(&mapping_response(&request_a[4..], 1234), client_a)
+            .unwrap();
+        assert_eq!(
+            worker.join().unwrap().unwrap().to_string(),
+            "192.0.2.10:1234"
+        );
+    }
+
+    #[test]
+    fn mapping_rejects_disagreement_and_needs_both_servers() {
+        for disagree in [true, false] {
+            let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+            for socket in [&a, &b] {
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+            }
+            let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
+            let worker = std::thread::spawn(move || {
+                discover_mapping_at(
+                    &UdpSocket::bind("[::]:0").unwrap(),
+                    servers,
+                    &None,
+                    Duration::from_millis(300),
+                )
+            });
+            let mut request = [0; 20];
+            let (_, client) = a.recv_from(&mut request).unwrap();
+            let response = mapping_response(&request[4..], 1234);
+            a.send_to(&response, client).unwrap();
+            a.send_to(&response, client).unwrap();
+            if disagree {
+                let (_, client) = b.recv_from(&mut request).unwrap();
+                b.send_to(&mapping_response(&request[4..], 1235), client)
+                    .unwrap();
+            }
+            let error = worker.join().unwrap().unwrap_err().to_string();
+            assert!(error.contains(if disagree {
+                "changes by destination"
+            } else {
+                "timeout"
+            }));
+        }
+    }
+
+    #[test]
+    fn dropping_mapping_discovery_cancels_without_waiting_for_unresponsive_hosts() {
+        let mapping = MappingDiscovery::start(vec![
+            Ipv4Addr::new(127, 0, 0, 2),
+            Ipv4Addr::new(127, 0, 0, 3),
+        ])
+        .unwrap();
+        let started = Instant::now();
+        drop(mapping);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     fn pair() -> (Enet, UdpSocket) {
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();

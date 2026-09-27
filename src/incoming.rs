@@ -4,6 +4,7 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, PeerStream, TransportPath},
     protocol::*,
+    scheduling::MAX_PENDING_OFFERS,
     session::Framed,
     udp,
 };
@@ -91,7 +92,7 @@ impl Hub {
                 rid != 0 && (6..=1024).contains(&password.len()),
                 "invalid incoming credentials"
             );
-            if self.pending.len() >= 32
+            if self.pending.len() >= MAX_PENDING_OFFERS
                 || self.pending.values().any(|p| p.rid == rid)
                 || self.routes.values().any(|p| p.rid == rid)
             {
@@ -273,26 +274,29 @@ impl Setup {
                     }
                     Err(e) => attempts.push(json!({"phase":"udp_bind","error":e.to_string()})),
                 }
-                // Mapping runs while the TCP listener can already accept.
-                if self.policy == Policy::All {
-                    let mapping = (|| -> Result<_> {
-                        let (s, _) = udp::bind_candidates(self.route_ip)?;
-                        let endpoint = udp::discover_mapping(&s, &self.ues, &Some(stop.clone()))?;
-                        Ok((s, endpoint))
-                    })();
-                    match mapping {
-                        Ok((s, endpoint)) => {
-                            self.wire.try_send(advertise_mapped_udp_with_nonce(
-                                self.cid, endpoint, nonce,
-                            )?)?;
-                            mapped_socket = Some(s);
-                        }
-                        Err(e) => {
-                            attempts.push(json!({"phase":"mapped_discovery","error":e.to_string()}))
-                        }
-                    }
-                }
             }
+            let mut mapping = if self.policy == Policy::All {
+                Some(udp::MappingDiscovery::start(self.ues.clone())?)
+            } else {
+                None
+            };
+            let spawn_udp = |socket, candidates: Vec<TcpCandidate>, name: &'static str| {
+                let endpoints: Vec<_> = candidates.iter().map(|c| c.endpoint).collect();
+                let tx = tx.clone();
+                let cancel = cancel.clone();
+                let start = &start;
+                scope.spawn(move || {
+                    let r = udp::Enet::accept(
+                        socket,
+                        &endpoints,
+                        nonce,
+                        Duration::from_secs(12),
+                        Some(cancel),
+                    )
+                    .and_then(|s| start(name, PeerStream::Udp(s), TransportPath::DirectUdp));
+                    let _ = tx.send((name, r));
+                });
+            };
             let mut relay_started = false;
             loop {
                 ensure!(!stop.load(Ordering::Relaxed), "cancelled");
@@ -310,6 +314,26 @@ impl Setup {
                             return Ok(p);
                         }
                         Err(e) => attempts.push(json!({"path":name,"error":format!("{e:#}")})),
+                    }
+                }
+                if let Some(result) = mapping.as_ref().and_then(udp::MappingDiscovery::poll) {
+                    mapping = None;
+                    match result {
+                        Ok((socket, endpoint)) => {
+                            self.wire.try_send(advertise_mapped_udp_with_nonce(
+                                self.cid, endpoint, nonce,
+                            )?)?;
+                            mapped_socket = Some(socket);
+                        }
+                        Err(error) => attempts
+                            .push(json!({"phase":"mapped_discovery","error":error.to_string()})),
+                    }
+                }
+                // Candidates can arrive before our mapping result. Retain them
+                // and start as soon as both halves are available.
+                if !mapped_candidates.is_empty() {
+                    if let Some(socket) = mapped_socket.take() {
+                        spawn_udp(socket, mapped_candidates.clone(), "mapped-udp");
                     }
                 }
                 let data = match self.records.recv_timeout(Duration::from_millis(10)) {
@@ -343,24 +367,11 @@ impl Setup {
                             mapped_socket.take()
                         };
                         if let Some(socket) = socket {
-                            let endpoints: Vec<_> = c.iter().map(|c| c.endpoint).collect();
-                            let tx = tx.clone();
-                            let cancel = cancel.clone();
-                            let start = &start;
-                            let name = if operation == 29 { "udp" } else { "mapped-udp" };
-                            scope.spawn(move || {
-                                let r = udp::Enet::accept(
-                                    socket,
-                                    &endpoints,
-                                    nonce,
-                                    Duration::from_secs(12),
-                                    Some(cancel),
-                                )
-                                .and_then(|s| {
-                                    start(name, PeerStream::Udp(s), TransportPath::DirectUdp)
-                                });
-                                let _ = tx.send((name, r));
-                            });
+                            spawn_udp(
+                                socket,
+                                c,
+                                if operation == 29 { "udp" } else { "mapped-udp" },
+                            );
                         }
                     }
                     23 if !relay_started => {
@@ -517,10 +528,10 @@ mod tests {
         h.pending.get_mut(&8).unwrap().created = Instant::now() - Duration::from_secs(31);
         h.expire();
         assert!(h.take(11, Policy::All).is_none());
-        for rid in 100..200 {
+        for rid in 100..500 {
             h.ingest(&offer(rid, rid)).unwrap();
         }
-        assert_eq!(h.pending.len(), 32);
+        assert_eq!(h.pending.len(), MAX_PENDING_OFFERS);
         for _ in 0..100 {
             h.ingest(&record(100)).unwrap();
         }

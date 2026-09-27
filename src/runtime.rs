@@ -7,7 +7,7 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
     protocol::*,
-    scheduling::{peer_retry_delay, HandshakeBudget},
+    scheduling::{peer_priority, peer_retry_delay, HandshakeBudget, ADVERTISEMENT_QUEUE},
     session::Session,
     tap::Tap,
     tunnel,
@@ -261,7 +261,7 @@ fn control_loop(
                     json!({"duration_ms": since.elapsed().as_millis()}),
                 );
             }
-            for bytes in wire.try_iter().take(8) {
+            for bytes in wire.try_iter().take(32) {
                 session
                     .send(&bytes)
                     .context("sending incoming peer advertisement")?;
@@ -713,7 +713,7 @@ pub fn run(
     let (packet_tx, packets) = mpsc::sync_channel::<(u64, Vec<u8>)>(512);
     let traffic = Arc::new(TrafficCounters::default());
     let (control_tx, control_rx) = mpsc::sync_channel(8);
-    let (wire_tx, wire_rx) = mpsc::sync_channel(64);
+    let (wire_tx, wire_rx) = mpsc::sync_channel(ADVERTISEMENT_QUEUE);
     let mut incoming = Hub::new(
         session.stream.socket.local_addr()?.ip(),
         session.ues.clone(),
@@ -948,7 +948,14 @@ pub fn run(
                 })
                 .map(|p| p.peer.rid)
                 .collect();
-            queued.sort_by_key(|rid| (!pending.contains(rid), !options.allows(*rid), *rid));
+            queued.sort_by_key(|rid| {
+                peer_priority(
+                    pending.contains(rid),
+                    options.allows(*rid),
+                    retries.get(rid).map_or(0, |retry| retry.failures),
+                    *rid,
+                )
+            });
             for rid in queued {
                 if !budget.try_start(pending.contains(&rid)) {
                     continue;
@@ -1130,6 +1137,40 @@ mod control_tests {
     use super::*;
     use crate::{crypto::Channel, session::Framed};
     use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn two_rid_member_events_keep_the_attachment_and_heartbeats_alive() {
+        let mut h = Harness::new(false);
+        for tag in [0x1318, 0x131d] {
+            let change = [
+                u32v(SERVER_OP, 41),
+                tlv(
+                    0x131f,
+                    &tlv(
+                        tag,
+                        &[
+                            tlv(0x0d000309, &[7; 16]),
+                            u64v(0x020001e1, 11),
+                            u64v(0x020001e1, 22),
+                            u32v(0x0100030a, 2),
+                        ]
+                        .concat(),
+                    ),
+                ),
+            ]
+            .concat();
+            h.remote.send(&change).unwrap();
+            match h.events.recv_timeout(Duration::from_secs(2)).unwrap() {
+                Message::Membership(m) => assert_eq!(
+                    m.role(&hex::encode([7; 16]), 11),
+                    if tag == 0x1318 { Some(2) } else { None }
+                ),
+                _ => panic!("valid two-RID event must update membership without closing control"),
+            }
+        }
+        h.receive_operation(4);
+        assert!(!h.join.as_ref().unwrap().is_finished());
+    }
 
     struct Harness {
         remote: Session,

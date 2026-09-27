@@ -625,6 +625,23 @@ fn network_id(b: &[u8]) -> Result<String> {
     ensure!(b.len() == 16, "invalid network ID");
     Ok(hex::encode(b))
 }
+
+/// Native NodeRemoved/NodeStatus events carry the subject RID followed by an
+/// optional source RID using the same tag. Other message kinds remain strict
+/// singletons. See docs/re-engineering/network-management/member-events.md.
+fn event_member(fields: &[Record<'_>]) -> Result<u64> {
+    let mut ids = fields.iter().filter(|field| field.tag == 0x020001e1);
+    let member = int64(
+        ids.next()
+            .ok_or_else(|| anyhow::anyhow!("missing event member"))?
+            .value,
+    )?;
+    if let Some(source) = ids.next() {
+        int64(source.value)?;
+    }
+    ensure!(ids.next().is_none(), "too many member event identifiers");
+    Ok(member)
+}
 impl Membership {
     pub fn remove_network(&mut self, id: &str) {
         self.networks.remove(id);
@@ -652,10 +669,9 @@ impl Membership {
             }
         }
     }
-    fn read_role(&mut self, fields: &[Record<'_>]) -> Result<()> {
+    fn read_role(&mut self, fields: &[Record<'_>], rid: u64) -> Result<()> {
         if let Some(value) = optional(fields, 0x0100030a)? {
             let id = network_id(field(fields, 0x0d000309)?)?;
-            let rid = int64(field(fields, 0x020001e1)?)?;
             self.roles.entry(id).or_default().insert(rid, int32(value)?);
         }
         Ok(())
@@ -711,8 +727,9 @@ impl Membership {
         }
         for r in entries.iter().filter(|r| r.tag == 0x1318) {
             let f = records(r.value)?;
-            self.read_role(&f)?;
-            if let Some(p) = self.peers.get_mut(&int64(field(&f, 0x020001e1)?)?) {
+            let rid = int64(field(&f, 0x020001e1)?)?;
+            self.read_role(&f, rid)?;
+            if let Some(p) = self.peers.get_mut(&rid) {
                 p.network_ids.insert(network_id(field(&f, 0x0d000309)?)?);
             }
         }
@@ -726,8 +743,8 @@ impl Membership {
         let entries = records(root)?;
         for r in entries.iter().filter(|r| r.tag == 0x131e) {
             let f = records(r.value)?;
-            self.read_role(&f)?;
             let rid = int64(field(&f, 0x020001e1)?)?;
+            self.read_role(&f, rid)?;
             let id = network_id(field(&f, 0x0d000309)?)?;
             if let Some(vip) = optional(&f, 0x01000305)? {
                 let old = self.peers.remove(&rid);
@@ -753,14 +770,12 @@ impl Membership {
             self.snapshot(&tlv(0x1316, &tlv(0x1315, r.value)))?;
         }
         for r in entries.iter().filter(|r| r.tag == 0x1318) {
-            self.read_role(&records(r.value)?)?;
+            let f = records(r.value)?;
+            self.read_role(&f, event_member(&f)?)?;
         }
         for r in entries.iter().filter(|r| r.tag == 0x131d) {
             let f = records(r.value)?;
-            self.remove_member(
-                &network_id(field(&f, 0x0d000309)?)?,
-                int64(field(&f, 0x020001e1)?)?,
-            );
+            self.remove_member(&network_id(field(&f, 0x0d000309)?)?, event_member(&f)?);
         }
         for r in entries.iter().filter(|r| r.tag == 0x132e) {
             let f = records(r.value)?;

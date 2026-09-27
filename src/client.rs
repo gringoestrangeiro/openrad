@@ -4,7 +4,7 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, TransportReport},
     protocol::*,
-    scheduling::HandshakeBudget,
+    scheduling::{HandshakeBudget, ADVERTISEMENT_QUEUE},
     session::Session,
     tap::Tap,
     tunnel::{self, Packet},
@@ -207,7 +207,7 @@ pub fn run(
     let mut attempted = BTreeSet::new();
     let mut senders = BTreeMap::new();
     let mut active = BTreeMap::new();
-    let (wire_tx, wire_rx) = mpsc::sync_channel(64);
+    let (wire_tx, wire_rx) = mpsc::sync_channel(ADVERTISEMENT_QUEUE);
     let mut incoming = Hub::new(
         session.stream.socket.local_addr()?.ip(),
         session.ues.clone(),

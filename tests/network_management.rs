@@ -506,6 +506,81 @@ fn membership_pushes_apply_role_changes_self_kick_and_deletion() {
         .unwrap();
     assert!(m.networks.is_empty() && m.peers.is_empty() && m.roles.is_empty());
 }
+
+#[test]
+fn member_events_accept_optional_source_rid_without_changing_the_subject() {
+    let mut m = membership();
+    let own_role = m.role(GUID, OWN);
+    let status = tlv(
+        0x1318,
+        &[
+            id(GUID),
+            u64v(0x020001e1, MEMBER),
+            u64v(0x020001e1, OWN),
+            u32v(0x0100030a, 2),
+        ]
+        .concat(),
+    );
+    m.changes(&packet(41, 0x131f, &status)).unwrap();
+    assert_eq!(m.role(GUID, MEMBER), Some(2));
+    assert_eq!(m.role(GUID, OWN), own_role);
+    let removed = tlv(
+        0x131d,
+        &[id(GUID), u64v(0x020001e1, MEMBER), u64v(0x020001e1, OWN)].concat(),
+    );
+    m.changes(&packet(41, 0x131f, &removed)).unwrap();
+    assert!(m.networks.contains_key(GUID));
+    assert_eq!(m.role(GUID, OWN), own_role);
+    assert_eq!(m.role(GUID, MEMBER), None);
+    assert_eq!(
+        m.peers[&MEMBER].network_ids,
+        [OTHER.into()].into_iter().collect()
+    );
+
+    let self_removed = tlv(
+        0x131d,
+        &[id(GUID), u64v(0x020001e1, OWN), u64v(0x020001e1, MEMBER)].concat(),
+    );
+    m.changes(&packet(41, 0x131f, &self_removed)).unwrap();
+    assert!(!m.networks.contains_key(GUID));
+    assert!(m.networks.contains_key(OTHER));
+}
+
+#[test]
+fn member_events_still_reject_ambiguous_or_malformed_identifiers() {
+    for tag in [0x1318, 0x131d] {
+        for extra in [
+            [u64v(0x020001e1, OWN), u64v(0x020001e1, 999)].concat(),
+            tlv(0x020001e1, &[0; 7]),
+        ] {
+            let mut m = membership();
+            let before = serde_json::to_value(&m).unwrap();
+            let change = tlv(
+                tag,
+                &[
+                    id(GUID),
+                    u64v(0x020001e1, MEMBER),
+                    extra,
+                    u32v(0x0100030a, 2),
+                ]
+                .concat(),
+            );
+            assert!(m.changes(&packet(41, 0x131f, &change)).is_err());
+            assert_eq!(serde_json::to_value(m).unwrap(), before);
+        }
+    }
+    // A repeated RID in a presence update is still ambiguous, not a source RID.
+    let change = tlv(
+        0x1366,
+        &[
+            u64v(0x020001e1, MEMBER),
+            u64v(0x020001e1, OWN),
+            u32v(0x010003a0, 1),
+        ]
+        .concat(),
+    );
+    assert!(membership().changes(&packet(41, 0x131f, &change)).is_err());
+}
 #[test]
 fn pending_members_do_not_get_forwarding_until_a_shared_membership_is_approved() {
     let mut m = membership();

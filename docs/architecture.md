@@ -22,7 +22,7 @@ OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openra
 
 The authenticated service connection supplies membership, peer identities, connection credentials, and direct candidates. Candidates are validated and correlated with the intended peer/connection before use. Incoming offers are restricted to eligible joined-network members, with pending-offer and worker limits.
 
-Direct TCP and UDP candidates are attempted within time budgets. UDP endpoint discovery uses service-provided hosts and requires consistent mapped addresses before advertising the mapping. There is no arbitrary host scanning or predicted-port search. When direct authentication does not succeed, the client can fall back to a service-issued relay ticket.
+Direct TCP and UDP candidates start as they arrive, within time budgets. UDP endpoint discovery runs independently, queries two service-provided hosts concurrently, and requires consistent mapped addresses before advertising the mapping. There is no arbitrary host scanning or predicted-port search. A service-issued relay ticket starts a competing attempt after a short direct-path head start. The first path to complete peer authentication and the Ethernet service handshake wins; losing workers are cancelled and joined. See [performance](performance.md) for limits and timing.
 
 Both incoming and outgoing channels perform mutual authentication and the tunnel service handshake. A socket that merely connects does not become an authenticated peer channel. Transport reports separate path, authentication, service-handshake completion, and transferred traffic. Simultaneous incoming/outgoing attempts are resolved deterministically while retaining a working channel.
 
@@ -31,6 +31,12 @@ A path reported as Direct TCP or Direct UDP identifies the selected peer socket.
 ## Privileges and persistence
 
 The CLI and desktop use the same `NetworkOperation` state machine for creation, joining, leaving, deleting, kicking, and changing admin roles. Private joins verify the network's SH server proof before accepting membership. Administration acknowledgements must match the request, action, context, network, and member. Role and removal notifications update the desktop snapshot and forwarding membership. A kick only removes the affected network relationship; peers sharing another approved network remain eligible. Pending applicants are not eligible for traffic through that network.
+
+Membership removal and role/status events may carry a mandatory member RID and
+an optional source RID with the same tag. These events validate both values and
+apply the update only to the first. Other message kinds retain strict singleton
+validation. The [native event evidence](re-engineering/network-management/member-events.md)
+documents the 0.3.0 compatibility fix for unexpected attachment reconnects.
 
 Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations. Protocol provenance and the controlled CLI verification are recorded in [the network-management handoff](re-engineering/network-management/README.md).
 

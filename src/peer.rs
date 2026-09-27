@@ -97,6 +97,40 @@ pub struct PeerChannel {
     channel: Channel,
     _coordinator: Option<Session>,
 }
+struct RelayOffer {
+    host: String,
+    port: u16,
+    ticket: Vec<u8>,
+    start_at: Instant,
+}
+
+#[derive(Clone)]
+struct PeerDial<'a> {
+    identity: &'a Identity,
+    own_ip: Ipv4Addr,
+    peer: Peer,
+    password: Vec<u8>,
+    reports: &'a ReportDirectory,
+}
+impl PeerDial<'_> {
+    fn authenticate(
+        &self,
+        stream: PeerStream,
+        path: TransportPath,
+        name: &str,
+    ) -> Result<PeerChannel> {
+        PeerChannel::authenticate_peer(
+            stream,
+            path,
+            &self.password,
+            self.identity,
+            self.own_ip,
+            self.peer.clone(),
+            &self.reports.child(name)?,
+        )
+    }
+}
+
 impl PeerChannel {
     pub fn connect(
         identity: &Identity,
@@ -166,6 +200,7 @@ impl PeerChannel {
         stop: Option<Arc<AtomicBool>>,
         report: &mut TransportReport,
     ) -> Result<Self> {
+        let started = Instant::now();
         let host = peer
             .server
             .as_deref()
@@ -185,327 +220,388 @@ impl PeerChannel {
             5,
             Some(peer.rid),
         )?)?;
-        let mut pending = None;
-        let mut relay = None;
-        let mut server_id = None;
-        let mut udp_socket = None;
-        let mut mapped_socket = None;
-        let mut mapped_nonce = None;
-        let mut mapped_received = true;
-        let mut ues = vec![];
-        // The incoming role owns the rendezvous nonce.
-        let mut udp_nonce = None;
-        let mut tcp_received = false;
-        let mut udp_received = false;
-        let until = Instant::now() + Duration::from_secs(30).min(duration);
-        let mut discovery_until = until;
-        for _ in 0..32 {
-            while !coord.stream.ready(50)? {
-                if Instant::now() >= discovery_until {
-                    break;
-                }
-            }
-            if Instant::now() >= discovery_until {
-                break;
-            }
-            let data = coord.receive()?;
-            let fields = records(&data)?;
-            match op(&data)? {
-                21 => {
-                    server_id = optional(&fields, 0x0100025b)?.map(int32).transpose()?;
-                    ues = ues_hosts(&data)?;
-                }
-                11 => {
-                    ensure!(pending.is_none(), "duplicate NewConnection");
-                    let cid = int64(field(&fields, 0x020001c1)?)?;
-                    let f = records(field(&fields, 0x1235)?)?;
-                    ensure!(
-                        int64(field(&f, 0x020001e1)?)? == peer.rid,
-                        "NewConnection target mismatch"
-                    );
-                    pending = Some((cid, field(&f, 0x0a0001cd)?.to_vec()));
-                    // An empty native op-2 requests authenticated candidates. A
-                    // listener must race the native universal connector for its
-                    // whole lifetime before it is safe to advertise one.
-                    coord.send(&request_tcp_candidates(cid))?;
-                    let mapped = (|| -> Result<_> {
-                        let (socket, _) =
-                            crate::udp::bind_candidates(coord.stream.socket.local_addr()?.ip())?;
-                        let endpoint = crate::udp::discover_mapping(&socket, &ues, &stop)?;
-                        Ok((socket, endpoint))
-                    })();
-                    match mapped {
-                        Ok((socket, endpoint)) => {
-                            coord.send(&advertise_mapped_udp(cid, endpoint)?)?;
-                            mapped_socket = Some(socket); mapped_received = false;
-                            report.attempts.push(serde_json::json!({"path":"DirectUdp","phase":"ues_mapping","endpoint":endpoint,"result":"two_servers_agree"}));
-                        }
-                        Err(e) => report.attempts.push(serde_json::json!({"path":"DirectUdp","phase":"ues_mapping","error":e.to_string()})),
-                    }
-                    match crate::udp::bind_candidates(coord.stream.socket.local_addr()?.ip()) {
-                        Ok((socket, endpoints)) => {
-                            coord.send(&advertise_udp(cid, &endpoints, 0)?)?;
-                            udp_socket = Some(socket);
-                        }
-                        Err(e) => {
-                            udp_received = true;
-                            report.attempts.push(serde_json::json!({"path":"DirectUdp","phase":"local_bind","error":e.to_string()}));
-                        }
-                    }
-                    coord.send(&request_relay(cid))?;
-                }
-                operation @ (6 | 29) => {
-                    if relay.is_some() {
-                        discovery_until =
-                            discovery_until.min(Instant::now() + Duration::from_secs(3));
-                    }
-                    let (cid, _) = pending
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("candidates before NewConnection"))?;
-                    let path = if operation == 6 {
-                        TransportPath::DirectTcp
-                    } else {
-                        TransportPath::DirectUdp
-                    };
-                    match direct_candidates(&data, *cid, operation, if operation == 6 { 0x1236 } else { 0x127c }) {
-                        Ok((candidates, exclusions)) => {
-                            if operation == 6 { report.tcp_candidates = candidates; } else { report.udp_candidates = candidates; }
-                            for error in exclusions {
-                                report.attempts.push(serde_json::json!({"path":path,"phase":"candidate_exclusion","error":error}));
-                            }
-                        }
-                        Err(e) => report.attempts.push(serde_json::json!({"path":path,"phase":"candidate_validation","error":e.to_string()})),
-                    }
-                    if operation == 6 {
-                        tcp_received = true;
-                    } else {
-                        udp_received = true;
-                        udp_nonce = optional(&fields, 0x127c)?
-                            .map(records)
-                            .transpose()?
-                            .map(|f| optional(&f, 0x0100020a)?.map(int32).transpose())
-                            .transpose()?
-                            .flatten()
-                            .filter(|n| (1..=65535).contains(n))
-                            .map(|n| n as u16);
-                    }
-                    if tcp_received && udp_received && mapped_received && relay.is_some() {
-                        break;
-                    }
-                }
-                7 => {
-                    if relay.is_some() {
-                        discovery_until =
-                            discovery_until.min(Instant::now() + Duration::from_secs(3));
-                    }
-                    let cid = pending
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("mapped candidates before NewConnection"))?
-                        .0;
-                    match mapped_udp_candidate(&data, cid) {
-                        Ok((candidate, nonce)) => { report.mapped_udp_candidates.push(candidate); mapped_nonce = Some(nonce); }
-                        Err(e) => report.attempts.push(serde_json::json!({"path":"DirectUdp","phase":"mapped_candidate_validation","error":e.to_string()})),
-                    }
-                    mapped_received = true;
-                    if tcp_received && udp_received && relay.is_some() {
-                        break;
-                    }
-                }
-                23 => {
-                    let (cid, password) = pending
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("relay before NewConnection"))?;
-                    ensure!(
-                        int64(field(&fields, 0x020001c1)?)? == *cid,
-                        "relay correlation mismatch"
-                    );
-                    let f = records(field(&fields, 0x123f)?)?;
-                    let host = text(field(&f, 0x030001cb)?)?;
-                    let port = int32(field(&f, 0x010001cc)?)?;
-                    ensure!((1..=65535).contains(&port), "invalid relay port");
-                    relay = Some((
-                        host,
-                        port as u16,
-                        field(&f, 0x090001ca)?.to_vec(),
-                        password.clone(),
-                    ));
-                    // A new member can receive NewConnection before its batched
-                    // membership notification. Its incoming worker must wait for
-                    // that identity/VIP binding before advertising listeners.
-                    let grace = if tcp_received || udp_received { 3 } else { 12 };
-                    discovery_until = until.min(Instant::now() + Duration::from_secs(grace));
-                    if tcp_received && udp_received && mapped_received {
-                        break;
-                    }
-                }
-                16 | 44 => bail!("coordinator refused connection: operation {}", op(&data)?),
-                _ => {}
-            }
-        }
-        let (cid, password) = pending.ok_or_else(|| anyhow::anyhow!("missing NewConnection"))?;
-        // Native connectors race; serial transport attempts can outlive a
-        // peer's rendezvous window. Bound this to three transport workers per
-        // peer (the caller separately bounds concurrent peer setups). Only a complete peer
-        // proof AND Ethernet service handshake may win.
-        let mut tcp_candidates = report.tcp_candidates.clone();
-        tcp_candidates.sort_by_key(|c| match c.endpoint.ip() {
-            std::net::IpAddr::V4(v) => {
-                (v.is_private() || v.is_loopback() || v.is_link_local()) as u8
-            }
-            std::net::IpAddr::V6(v) => {
-                (v.is_unique_local() || v.is_loopback() || v.segments()[0..2] == [0x2001, 0]) as u8
-            }
-        });
-        let mut winner = None;
-        std::thread::scope(|scope| -> Result<()> {
-            let (tx, rx) = std::sync::mpsc::channel();
-            let mut cancellations = vec![];
-            if !tcp_candidates.is_empty() {
-                let cancel = Arc::new(AtomicBool::new(false));
-                cancellations.push(cancel.clone());
-                let tx = tx.clone();
-                let peer = peer.clone();
-                let password = &password;
-                scope.spawn(move || {
-                    let mut attempts = vec![];
-                    let result = (|| -> Result<Option<Self>> {
-                        let until = Instant::now() + Duration::from_secs(8);
-                        for (index, candidate) in tcp_candidates.iter().enumerate() {
-                            if Instant::now() >= until || cancel.load(std::sync::atomic::Ordering::Relaxed) { break; }
-                            let attempt = reports.child(&format!("direct-tcp-{index}"))?;
-                            let result = (|| -> Result<Self> {
-                                let mut stream = Framed::connect_timeout(
-                                    &candidate.endpoint.ip().to_string(), candidate.endpoint.port(),
-                                    until.saturating_duration_since(Instant::now()).min(Duration::from_secs(3)),
-                                    Some(cancel.clone()), Duration::from_secs(2))?;
-                                stream.peer_rendezvous(identity.rid, cid,
-                                    server_id.ok_or_else(|| anyhow::anyhow!("missing authenticated coordinator ID"))?)?;
-                                Self::authenticate_peer(PeerStream::Tcp(stream), TransportPath::DirectTcp,
-                                    password, identity, own_ip, peer.clone(), &attempt)
-                            })();
-                            match result {
-                                Ok(channel) => {
-                                    attempts.push(serde_json::json!({"path":"DirectTcp","endpoint":candidate.endpoint,"result":"authenticated_service"}));
-                                    return Ok(Some(channel));
-                                }
-                                Err(e) => attempts.push(serde_json::json!({"path":"DirectTcp","endpoint":candidate.endpoint,"error":e.to_string()})),
-                            }
-                        }
-                        Ok(None)
-                    })();
-                    let _ = tx.send((0, result, attempts));
-                });
-            }
-            for (kind, socket, candidates, nonce) in [
-                (
-                    "direct-udp",
-                    udp_socket,
-                    report.udp_candidates.clone(),
-                    udp_nonce,
-                ),
-                (
-                    "mapped-udp",
-                    mapped_socket,
-                    report.mapped_udp_candidates.clone(),
-                    mapped_nonce,
-                ),
-            ] {
-                let Some(socket) = socket.filter(|_| !candidates.is_empty()) else {
-                    continue;
-                };
-                let index = cancellations.len();
-                let cancel = Arc::new(AtomicBool::new(false));
-                cancellations.push(cancel.clone());
-                let tx = tx.clone();
-                let peer = peer.clone();
-                let password = &password;
-                scope.spawn(move || {
-                    let mut attempts = vec![];
-                    let result = (|| -> Result<Option<Self>> {
-                        let attempt = reports.child(kind)?;
-                        let endpoints: Vec<_> = candidates.iter().map(|c| c.endpoint).collect();
-                        let stream = crate::udp::Enet::connect(socket, &endpoints,
-                            nonce.ok_or_else(|| anyhow::anyhow!("missing authenticated UDP rendezvous nonce"))?,
-                            Duration::from_secs(8), Some(cancel))?;
-                        let channel = Self::authenticate_peer(PeerStream::Udp(stream), TransportPath::DirectUdp,
-                            password, identity, own_ip, peer, &attempt)?;
-                        attempts.push(serde_json::json!({"path":"DirectUdp","phase":kind,"endpoint":channel.transport.endpoint,"result":"authenticated_service"}));
-                        Ok(Some(channel))
-                    })();
-                    if let Err(ref e) = result {
-                        attempts.push(serde_json::json!({"path":"DirectUdp","phase":kind,"error":e.to_string()}));
-                    }
-                    let _ = tx.send((index, result, attempts));
-                });
-            }
-            drop(tx);
-            let mut remaining = cancellations.len();
-            while remaining > 0 {
-                if stop
-                    .as_ref()
-                    .is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed))
-                {
-                    for cancel in &cancellations {
-                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok((index, result, attempts)) => {
-                        remaining -= 1;
-                        report.attempts.extend(attempts);
-                        match result {
-                            Ok(Some(channel)) if winner.is_none() => {
-                                winner = Some(channel);
-                                for (i, cancel) in cancellations.iter().enumerate() {
-                                    if i != index { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
-                                }
-                            }
-                            Err(e) if !report.attempts.iter().any(|a| a.get("error").and_then(|v| v.as_str()) == Some(&e.to_string())) =>
-                                report.attempts.push(serde_json::json!({"phase":"direct_worker","error":e.to_string()})),
-                            _ => {}
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-            Ok(())
-        })?;
-        if let Some(mut channel) = winner {
-            channel.stream.set_stop(stop.clone());
-            channel.transport.tcp_candidates = report.tcp_candidates.clone();
-            channel.transport.udp_candidates = report.udp_candidates.clone();
-            channel.transport.mapped_udp_candidates = report.mapped_udp_candidates.clone();
-            channel.transport.attempts = report.attempts.clone();
-            *report = channel.transport.clone();
-            channel._coordinator = Some(coord);
-            return Ok(channel);
-        }
-        let (host, port, ticket, _) =
-            relay.ok_or_else(|| anyhow::anyhow!("relay setup record budget"))?;
-        ensure!(ticket.len() == 256, "unsupported relay ticket width");
-        let mut stream = Framed::connect_with_stop(&host, port, duration, stop)?;
-        stream.send(
-            &[
-                u32v(0x010001df, 1),
-                u32v(0x0100032b, 2),
-                tlv(0x090001ca, &ticket),
-            ]
-            .concat(),
-        )?;
-        ensure!(
-            int32(field(&records(&stream.receive(65536)?)?, 0x010001df)?)? == 2,
-            "relay ticket rejected"
-        );
-        let mut channel = Self::authenticate_peer(
-            PeerStream::Tcp(stream),
-            TransportPath::Relay,
-            &password,
+        Self::negotiate(
             identity,
             own_ip,
             peer,
             reports,
-        )?;
+            duration.saturating_sub(started.elapsed()),
+            stop,
+            coord,
+            report,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn negotiate(
+        identity: &Identity,
+        own_ip: Ipv4Addr,
+        peer: Peer,
+        reports: &ReportDirectory,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+        mut coord: Session,
+        report: &mut TransportReport,
+    ) -> Result<Self> {
+        let until = Instant::now() + duration;
+        let mut discovery_until = until.min(Instant::now() + Duration::from_secs(30));
+        let mut pending: Option<(u64, Vec<u8>)> = None;
+        let mut server_id = None;
+        let mut ues = vec![];
+        let mut mapping = None;
+        let mut udp_socket = None;
+        let mut mapped_socket = None;
+        let mut udp_nonce = None;
+        let mut mapped_nonce = None;
+        let mut tcp_started = false;
+        let mut tcp_received = false;
+        let mut udp_received = false;
+        let mut mapped_received = true;
+        let mut relay = None;
+        let mut relay_started = false;
+        let mut records_received = 0;
+        let mut channel = std::thread::scope(|scope| -> Result<Self> {
+            // This guard cancels every losing transport before scope joins it,
+            // including on malformed coordinator messages or user cancellation.
+            let mut tasks = crate::scheduling::SetupTasks::<Self>::new();
+            loop {
+                ensure!(
+                    !stop
+                        .as_ref()
+                        .is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)),
+                    "cancelled"
+                );
+                ensure!(Instant::now() < until, "peer setup timeout");
+                while let Some(completed) = tasks.poll() {
+                    match completed.result {
+                        Ok(channel) => {
+                            report.attempts.push(serde_json::json!({
+                                "phase":completed.name, "result":"authenticated_service",
+                                "setup_ms":completed.elapsed.as_millis(), "endpoint":channel.transport.endpoint,
+                            }));
+                            return Ok(channel);
+                        }
+                        Err(error) => report.attempts.push(serde_json::json!({
+                            "phase":completed.name, "error":format!("{error:#}"),
+                            "setup_ms":completed.elapsed.as_millis(),
+                        })),
+                    }
+                }
+                if let Some(result) = mapping
+                    .as_ref()
+                    .and_then(crate::udp::MappingDiscovery::poll)
+                {
+                    mapping = None;
+                    match result {
+                        Ok((socket, endpoint)) => {
+                            let cid = pending.as_ref().unwrap().0;
+                            coord.send(&advertise_mapped_udp(cid, endpoint)?)?;
+                            mapped_socket = Some(socket);
+                            mapped_received = mapped_nonce.is_some();
+                            report.attempts.push(serde_json::json!({"phase":"ues_mapping","endpoint":endpoint,"result":"two_servers_agree"}));
+                        }
+                        Err(error) => report.attempts.push(
+                            serde_json::json!({"phase":"ues_mapping","error":error.to_string()}),
+                        ),
+                    }
+                }
+                if let Some((cid, password)) = &pending {
+                    let dial = || PeerDial {
+                        identity,
+                        own_ip,
+                        peer: peer.clone(),
+                        password: password.clone(),
+                        reports,
+                    };
+                    if !tcp_started && !report.tcp_candidates.is_empty() {
+                        if let Some(server_id) = server_id {
+                            tcp_started = true;
+                            let mut candidates = report.tcp_candidates.clone();
+                            candidates.sort_by_key(|c| match c.endpoint.ip() {
+                                std::net::IpAddr::V4(v) => {
+                                    v.is_private() || v.is_loopback() || v.is_link_local()
+                                }
+                                std::net::IpAddr::V6(v) => {
+                                    v.is_unique_local()
+                                        || v.is_loopback()
+                                        || v.segments()[0..2] == [0x2001, 0]
+                                }
+                            });
+                            // Two lanes prevent an unreachable first address
+                            // from hiding a usable address of another family.
+                            let lanes = candidates.len().min(2);
+                            for (lane, name) in ["direct-tcp-0", "direct-tcp-1"]
+                                .into_iter()
+                                .take(lanes)
+                                .enumerate()
+                            {
+                                let candidates: Vec<_> = candidates
+                                    .iter()
+                                    .skip(lane)
+                                    .step_by(lanes)
+                                    .cloned()
+                                    .collect();
+                                let dial = dial();
+                                let cid = *cid;
+                                tasks.spawn(scope, name, move |cancel| {
+                                    let deadline =
+                                        until.min(Instant::now() + Duration::from_secs(8));
+                                    let mut errors = vec![];
+                                    for candidate in candidates {
+                                        if Instant::now() >= deadline
+                                            || cancel.load(std::sync::atomic::Ordering::Relaxed)
+                                        {
+                                            break;
+                                        }
+                                        let result = (|| {
+                                            let mut stream = Framed::connect_timeout(
+                                                &candidate.endpoint.ip().to_string(),
+                                                candidate.endpoint.port(),
+                                                deadline
+                                                    .saturating_duration_since(Instant::now())
+                                                    .min(Duration::from_secs(3)),
+                                                Some(cancel.clone()),
+                                                Duration::from_secs(2),
+                                            )?;
+                                            stream.peer_rendezvous(identity.rid, cid, server_id)?;
+                                            dial.authenticate(
+                                                PeerStream::Tcp(stream),
+                                                TransportPath::DirectTcp,
+                                                name,
+                                            )
+                                        })();
+                                        match result {
+                                            Ok(channel) => return Ok(channel),
+                                            Err(error) => errors
+                                                .push(format!("{}: {error:#}", candidate.endpoint)),
+                                        }
+                                    }
+                                    bail!("direct TCP candidates failed: {}", errors.join("; "))
+                                })?;
+                            }
+                        }
+                    }
+                    for (name, socket, candidates, nonce) in [
+                        (
+                            "direct-udp",
+                            &mut udp_socket,
+                            &report.udp_candidates,
+                            udp_nonce,
+                        ),
+                        (
+                            "mapped-udp",
+                            &mut mapped_socket,
+                            &report.mapped_udp_candidates,
+                            mapped_nonce,
+                        ),
+                    ] {
+                        if let Some(nonce) = nonce.filter(|_| !candidates.is_empty()) {
+                            if let Some(socket) = socket.take() {
+                                let endpoints: Vec<_> =
+                                    candidates.iter().map(|c| c.endpoint).collect();
+                                let dial = dial();
+                                tasks.spawn(scope, name, move |cancel| {
+                                    let stream = crate::udp::Enet::connect(
+                                        socket,
+                                        &endpoints,
+                                        nonce,
+                                        until
+                                            .saturating_duration_since(Instant::now())
+                                            .min(Duration::from_secs(8)),
+                                        Some(cancel),
+                                    )?;
+                                    dial.authenticate(
+                                        PeerStream::Udp(stream),
+                                        TransportPath::DirectUdp,
+                                        name,
+                                    )
+                                })?;
+                            }
+                        }
+                    }
+                    if !relay_started
+                        && relay
+                            .as_ref()
+                            .is_some_and(|r: &RelayOffer| Instant::now() >= r.start_at)
+                    {
+                        relay_started = true;
+                        let offer = relay.take().unwrap();
+                        let dial = dial();
+                        tasks.spawn(scope, "relay", move |cancel| {
+                            let mut stream = Framed::connect_with_stop(
+                                &offer.host,
+                                offer.port,
+                                until.saturating_duration_since(Instant::now()),
+                                Some(cancel),
+                            )?;
+                            stream.send(
+                                &[
+                                    u32v(0x010001df, 1),
+                                    u32v(0x0100032b, 2),
+                                    tlv(0x090001ca, &offer.ticket),
+                                ]
+                                .concat(),
+                            )?;
+                            // The other member may still be waiting for its
+                            // authenticated membership notification.
+                            let pairing_until = until.min(Instant::now() + Duration::from_secs(25));
+                            while !stream.ready(50)? {
+                                ensure!(Instant::now() < pairing_until, "relay pairing timeout");
+                            }
+                            ensure!(
+                                int32(field(&records(&stream.receive(65536)?)?, 0x010001df)?)? == 2,
+                                "relay ticket rejected"
+                            );
+                            dial.authenticate(
+                                PeerStream::Tcp(stream),
+                                TransportPath::Relay,
+                                "relay",
+                            )
+                        })?;
+                    }
+                }
+                let discovery_complete =
+                    tcp_received && udp_received && mapped_received && relay_started;
+                if discovery_complete || records_received >= 32 || Instant::now() >= discovery_until
+                {
+                    if tasks.is_idle() && mapping.is_none() && (relay_started || relay.is_none()) {
+                        bail!("all peer transports failed or no authenticated candidates arrived");
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                if !coord.stream.ready(10)? {
+                    continue;
+                }
+                let data = coord.receive()?;
+                records_received += 1;
+                let fields = records(&data)?;
+                match op(&data)? {
+                    21 => {
+                        server_id = optional(&fields, 0x0100025b)?.map(int32).transpose()?;
+                        ues = ues_hosts(&data)?;
+                    }
+                    11 => {
+                        ensure!(pending.is_none(), "duplicate NewConnection");
+                        let cid = int64(field(&fields, 0x020001c1)?)?;
+                        let f = records(field(&fields, 0x1235)?)?;
+                        ensure!(
+                            int64(field(&f, 0x020001e1)?)? == peer.rid,
+                            "NewConnection target mismatch"
+                        );
+                        let password = field(&f, 0x0a0001cd)?.to_vec();
+                        ensure!(
+                            cid != 0 && (6..=1024).contains(&password.len()),
+                            "invalid connection credentials"
+                        );
+                        pending = Some((cid, password));
+                        coord.send(&request_tcp_candidates(cid))?;
+                        match crate::udp::bind_candidates(coord.stream.socket.local_addr()?.ip()) {
+                            Ok((socket, endpoints)) => {
+                                coord.send(&advertise_udp(cid, &endpoints, 0)?)?;
+                                udp_socket = Some(socket);
+                            }
+                            Err(error) => report.attempts.push(
+                                serde_json::json!({"phase":"local_bind","error":error.to_string()}),
+                            ),
+                        }
+                        coord.send(&request_relay(cid))?;
+                        mapping = Some(crate::udp::MappingDiscovery::start(ues.clone())?);
+                    }
+                    operation @ (6 | 29) => {
+                        if relay.is_some() || relay_started {
+                            discovery_until =
+                                discovery_until.min(Instant::now() + Duration::from_secs(3));
+                        }
+                        let cid = pending
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("candidates before NewConnection"))?
+                            .0;
+                        match direct_candidates(
+                            &data,
+                            cid,
+                            operation,
+                            if operation == 6 { 0x1236 } else { 0x127c },
+                        ) {
+                            Ok((candidates, exclusions)) => {
+                                if operation == 6 {
+                                    report.tcp_candidates = candidates;
+                                    tcp_received = true;
+                                } else {
+                                    report.udp_candidates = candidates;
+                                    udp_received = true;
+                                }
+                                for error in exclusions {
+                                    report.attempts.push(serde_json::json!({"phase":"candidate_exclusion","error":error}));
+                                }
+                            }
+                            Err(error) => {
+                                report.attempts.push(serde_json::json!({"phase":"candidate_validation","error":error.to_string()}));
+                                continue;
+                            }
+                        }
+                        if operation == 29 {
+                            udp_nonce = optional(&fields, 0x127c)?
+                                .map(records)
+                                .transpose()?
+                                .map(|f| optional(&f, 0x0100020a)?.map(int32).transpose())
+                                .transpose()?
+                                .flatten()
+                                .filter(|n| (1..=65535).contains(n))
+                                .map(|n| n as u16);
+                        }
+                    }
+                    7 => {
+                        let cid = pending
+                            .as_ref()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("mapped candidates before NewConnection")
+                            })?
+                            .0;
+                        match mapped_udp_candidate(&data, cid) {
+                            Ok((candidate, nonce)) => {
+                                report.mapped_udp_candidates = vec![candidate];
+                                mapped_nonce = Some(nonce);
+                                mapped_received = true;
+                            }
+                            Err(error) => report.attempts.push(serde_json::json!({"phase":"mapped_candidate_validation","error":error.to_string()})),
+                        }
+                    }
+                    23 => {
+                        let cid = pending
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("relay before NewConnection"))?
+                            .0;
+                        ensure!(
+                            int64(field(&fields, 0x020001c1)?)? == cid,
+                            "relay correlation mismatch"
+                        );
+                        let f = records(field(&fields, 0x123f)?)?;
+                        let host = text(field(&f, 0x030001cb)?)?;
+                        let port = int32(field(&f, 0x010001cc)?)?;
+                        let ticket = field(&f, 0x090001ca)?.to_vec();
+                        ensure!(
+                            (1..=65535).contains(&port) && ticket.len() == 256,
+                            "invalid relay ticket"
+                        );
+                        if !relay_started && relay.is_none() {
+                            let grace = if tcp_received || udp_received { 3 } else { 12 };
+                            discovery_until =
+                                discovery_until.min(Instant::now() + Duration::from_secs(grace));
+                            relay = Some(RelayOffer {
+                                host,
+                                port: port as u16,
+                                ticket,
+                                start_at: Instant::now() + Duration::from_millis(750),
+                            });
+                        }
+                    }
+                    16 | 44 => bail!("coordinator refused connection: operation {}", op(&data)?),
+                    _ => {}
+                }
+            }
+        })?;
+        channel.stream.set_stop(stop);
         channel.transport.tcp_candidates = report.tcp_candidates.clone();
         channel.transport.udp_candidates = report.udp_candidates.clone();
         channel.transport.mapped_udp_candidates = report.mapped_udp_candidates.clone();
@@ -695,5 +791,255 @@ mod tests {
         }
         let ciphertext = receiver.receive(65536).unwrap();
         assert_eq!(decrypt.decrypt(&ciphertext).unwrap(), b"resumed");
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    use std::{
+        io::Read,
+        net::{SocketAddr, TcpListener, TcpStream},
+        sync::{atomic::Ordering, mpsc},
+        thread,
+    };
+
+    const CID: u64 = 99;
+    const PASSWORD: &[u8] = b"synthetic-peer-password";
+
+    fn peer(rid: u64) -> Peer {
+        Peer {
+            rid,
+            name: "synthetic".into(),
+            vip: Ipv4Addr::new(26, 0, 0, rid as u8),
+            server: Some("127.0.0.1".into()),
+            state: 1,
+            network_ids: Default::default(),
+        }
+    }
+    fn identity() -> Identity {
+        let mut identity = Identity::bootstrap("synthetic", "127.0.0.1").unwrap();
+        identity.rid = 11;
+        identity.vip = peer(11).vip;
+        identity
+    }
+    fn coordinator() -> (Session, Session) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let local = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let remote = listener.accept().unwrap().0;
+        let session = |socket| Session {
+            stream: Framed::from_socket(socket, Duration::from_secs(5), None).unwrap(),
+            channel: Channel::new(&[17; 32]).unwrap(),
+            latency: 0,
+            ues: vec![],
+        };
+        let mut remote = session(remote);
+        let login = [u32v(SERVER_OP, 21), u32v(0x0100025b, 17)];
+        remote.send(&login.concat()).unwrap();
+        remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 11),
+                    u64v(0x020001c1, CID),
+                    tlv(
+                        0x1235,
+                        &[u64v(0x020001e1, 42), tlv(0x0a0001cd, PASSWORD)].concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        (session(local), remote)
+    }
+    fn candidates(remote: &mut Session, endpoints: &[SocketAddr]) {
+        let body: Vec<_> = endpoints
+            .iter()
+            .flat_map(|endpoint| {
+                tlv(
+                    0x127d,
+                    &[
+                        textv(0x030001c2, &endpoint.ip().to_string()).unwrap(),
+                        u32v(0x010001c3, endpoint.port() as u32),
+                    ]
+                    .concat(),
+                )
+            })
+            .collect();
+        remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 6),
+                    u64v(0x020001c1, CID),
+                    tlv(0x1236, &body),
+                ]
+                .concat(),
+            )
+            .unwrap();
+    }
+    fn responder(listener: TcpListener, path: TransportPath) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut stream =
+                Framed::from_socket(listener.accept().unwrap().0, Duration::from_secs(5), None)
+                    .unwrap();
+            if path == TransportPath::Relay {
+                let ticket = stream.receive(65536).unwrap();
+                assert_eq!(
+                    field(&records(&ticket).unwrap(), 0x090001ca).unwrap(),
+                    &[23; 256]
+                );
+                stream.send(&u32v(0x010001df, 2)).unwrap();
+            } else {
+                stream.accept_rendezvous(11, CID).unwrap();
+            }
+            let mut channel = PeerChannel::accept_authenticated(
+                PeerStream::Tcp(stream),
+                path,
+                PASSWORD,
+                42,
+                peer(42).vip,
+                peer(11),
+                &ReportDirectory::disabled(),
+            )
+            .unwrap();
+            assert_eq!(
+                channel.receive().unwrap(),
+                b"still usable after cancelling losers"
+            );
+            channel.send(b"confirmed").unwrap();
+        })
+    }
+    fn stalled_listener() -> (SocketAddr, mpsc::Receiver<()>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut preamble = [0; 24];
+            socket.read_exact(&mut preamble).unwrap();
+            sender.send(()).unwrap();
+            let mut byte = [0];
+            assert_eq!(
+                socket.read(&mut byte).unwrap(),
+                0,
+                "losing socket must be closed"
+            );
+        });
+        (address, receiver, worker)
+    }
+    fn exchange(mut channel: PeerChannel) {
+        channel
+            .send(b"still usable after cancelling losers")
+            .unwrap();
+        assert_eq!(channel.receive().unwrap(), b"confirmed");
+    }
+
+    #[test]
+    fn direct_tcp_starts_before_other_candidates_and_bypasses_stalled_first_address() {
+        let (coord, mut remote) = coordinator();
+        let (stalled, entered, loser) = stalled_listener();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        candidates(&mut remote, &[stalled, listener.local_addr().unwrap()]);
+        let server = responder(listener, TransportPath::DirectTcp);
+        let mut report = TransportReport::default();
+        let started = Instant::now();
+        let channel = PeerChannel::negotiate(
+            &identity(),
+            peer(11).vip,
+            peer(42),
+            &ReportDirectory::disabled(),
+            Duration::from_secs(5),
+            None,
+            coord,
+            &mut report,
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "ready TCP waited for unrelated setup"
+        );
+        assert_eq!(channel.transport.path, Some(TransportPath::DirectTcp));
+        entered.recv_timeout(Duration::from_secs(1)).unwrap();
+        exchange(channel);
+        loser.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn relay_authenticates_while_direct_handshake_and_candidate_discovery_are_stalled() {
+        let (coord, mut remote) = coordinator();
+        let (stalled, entered, loser) = stalled_listener();
+        candidates(&mut remote, &[stalled]);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 23),
+                    u64v(0x020001c1, CID),
+                    tlv(
+                        0x123f,
+                        &[
+                            textv(0x030001cb, "127.0.0.1").unwrap(),
+                            u32v(0x010001cc, listener.local_addr().unwrap().port() as u32),
+                            tlv(0x090001ca, &[23; 256]),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        let server = responder(listener, TransportPath::Relay);
+        let mut report = TransportReport::default();
+        let started = Instant::now();
+        let channel = PeerChannel::negotiate(
+            &identity(),
+            peer(11).vip,
+            peer(42),
+            &ReportDirectory::disabled(),
+            Duration::from_secs(5),
+            None,
+            coord,
+            &mut report,
+        )
+        .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "relay waited for direct timeout"
+        );
+        assert_eq!(channel.transport.path, Some(TransportPath::Relay));
+        entered.recv_timeout(Duration::from_secs(1)).unwrap();
+        exchange(channel);
+        loser.join().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_negotiation_closes_in_progress_transports() {
+        let (coord, mut remote) = coordinator();
+        let (stalled, entered, loser) = stalled_listener();
+        candidates(&mut remote, &[stalled]);
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
+        let worker = thread::spawn(move || {
+            PeerChannel::negotiate(
+                &identity(),
+                peer(11).vip,
+                peer(42),
+                &ReportDirectory::disabled(),
+                Duration::from_secs(5),
+                Some(signal),
+                coord,
+                &mut TransportReport::default(),
+            )
+        });
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        let started = Instant::now();
+        stop.store(true, Ordering::Relaxed);
+        assert!(worker.join().unwrap().is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        loser.join().unwrap();
     }
 }
