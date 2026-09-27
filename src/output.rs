@@ -55,6 +55,9 @@ impl ReportDirectory {
         Ok(())
     }
     pub fn json(&self, name: &str, data: &impl serde::Serialize) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
         self.save(name, &serde_json::to_vec_pretty(data)?)
     }
     pub fn events(&self, name: &str) -> Result<EventLog> {

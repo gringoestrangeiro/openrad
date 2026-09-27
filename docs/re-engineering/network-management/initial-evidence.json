@@ -1,0 +1,981 @@
+{
+  "0x10041650": {
+    "addr": "0x10041650",
+    "code": "int __stdcall ROLClient_ManageNetwork2(int a1, int a2, int a3, int a4)\n{\n  int v4; // esi\n  _DWORD v6[4]; // [esp+Ch] [ebp-4Ch] BYREF\n  _DWORD v7[2]; // [esp+1Ch] [ebp-3Ch] BYREF\n  struct _EVENT_DATA_DESCRIPTOR UserData; // [esp+24h] [ebp-34h] BYREF\n  const char *v9; // [esp+34h] [ebp-24h]\n  int v10; // [esp+38h] [ebp-20h]\n  int v11; // [esp+3Ch] [ebp-1Ch]\n  int v12; // [esp+40h] [ebp-18h]\n  _DWORD *v13; // [esp+44h] [ebp-14h]\n  int v14; // [esp+48h] [ebp-10h]\n  int v15; // [esp+4Ch] [ebp-Ch]\n  int v16; // [esp+50h] [ebp-8h]\n\n  v6[0] = \"ROLClient_ManageNetwork2\"; /*0x10041673*/\n  v6[2] = a1; /*0x1004167a*/\n  v6[3] = a2; /*0x1004167d*/\n  if ( (dword_10186EC0 & 0x10) != 0 ) /*0x10041680*/\n  {\n    v7[0] = a1; /*0x10041685*/\n    v13 = v7; /*0x10041688*/\n    v7[1] = a2; /*0x1004169d*/\n    v9 = \"ROLClient_ManageNetwork2\"; /*0x100416a0*/\n    v10 = 0; /*0x100416a7*/\n    v11 = 25; /*0x100416ae*/\n    v12 = 0; /*0x100416b5*/\n    v14 = 0; /*0x100416bc*/\n    v15 = 8; /*0x100416c3*/\n    v16 = 0; /*0x100416ca*/\n    sub_10005F40((int)&unk_101750E0, &stru_10112640, nullptr, 3u, &UserData); /*0x100416d1*/\n  }\n  if ( sub_100402B0() ) /*0x100416d6*/\n    v4 = sub_1004A900(a1, a2, a3, a4); /*0x100416f0*/\n  else\n    v4 = 0; /*0x100416df*/\n  sub_10040200(v6); /*0x100416f5*/\n  return v4; /*0x100416fa*/\n}",
+    "refs": [
+      {
+        "addr": "0x10116434",
+        "name": "aRolclientManag_3",
+        "string": "ROLClient_ManageNetwork2"
+      },
+      {
+        "addr": "0x10005f40",
+        "name": "sub_10005F40"
+      },
+      {
+        "addr": "0x101750e0",
+        "name": "unk_101750E0"
+      },
+      {
+        "addr": "0x10112640",
+        "name": "stru_10112640"
+      },
+      {
+        "addr": "0x10186ec0",
+        "name": "dword_10186EC0"
+      },
+      {
+        "addr": "0x1004a900",
+        "name": "sub_1004A900"
+      },
+      {
+        "addr": "0x100402b0",
+        "name": "sub_100402B0"
+      },
+      {
+        "addr": "0x10040200",
+        "name": "sub_10040200"
+      }
+    ]
+  },
+  "0x100a16e0": {
+    "addr": "0x100a16e0",
+    "code": "BOOL __thiscall sub_100A16E0(volatile signed __int32 *this, int a2, int a3, int a4, int a5)\n{\n  volatile signed __int32 *v6; // esi\n  BOOL v7; // esi\n  _DWORD *v8; // eax\n  _DWORD *v9; // eax\n  __int32 v10; // edi\n  __int32 v11; // edi\n  DWORD LastError; // esi\n  __int32 v13; // edi\n  DWORD v14; // esi\n  __int32 v16; // [esp-4h] [ebp-48h]\n  volatile signed __int32 *v17; // [esp+Ch] [ebp-38h]\n  BOOL Block; // [esp+10h] [ebp-34h]\n  __int128 v19; // [esp+14h] [ebp-30h] BYREF\n  __int64 v20; // [esp+24h] [ebp-20h] BYREF\n  int v21; // [esp+2Ch] [ebp-18h]\n  __int32 v22; // [esp+30h] [ebp-14h] BYREF\n  int v23; // [esp+40h] [ebp-4h]\n\n  if ( !_InterlockedCompareExchange(this + 25, 0, 0) ) /*0x100a1719*/\n    return 0; /*0x100a1719*/\n  v17 = this + 67; /*0x100a1732*/\n  if ( !_InterlockedCompareExchange(this + 67, 0, 0) ) /*0x100a1737*/\n    return 0; /*0x100a1737*/\n  if ( sub_1001A240(_InterlockedCompareExchange(this + 25, 0, 0)) != 4 ) /*0x100a175a*/\n    return 0; /*0x100a175a*/\n  v6 = this + 68; /*0x100a1760*/\n  if ( *(_DWORD *)unknown_libname_2(v6) < 0x42u ) /*0x100a1775*/\n    return 0; /*0x100a1903*/\n  v21 = 0; /*0x100a177e*/\n  v20 = 0; /*0x100a1788*/\n  v19 = 0; /*0x100a178d*/\n  sub_100A5980(&v19); /*0x100a1791*/\n  LODWORD(v19) = &FamRT::CUniversalString::`vftable'; /*0x100a1799*/\n  sub_100DC2C0(&v20); /*0x100a17a0*/\n  LOBYTE(v21) = 0; /*0x100a17a5*/\n  v23 = 0; /*0x100a17af*/\n  if ( (unsigned __int8)sub_100ED550(a4, a5) ) /*0x100a17b9*/\n  {\n    v22 = 0; /*0x100a17d0*/\n    v8 = operator new(0x68u, (const struct std::nothrow_t *)&unk_101522CC); /*0x100a17d7*/\n    LOBYTE(v23) = 1; /*0x100a17e2*/\n    if ( v8 ) /*0x100a17e8*/\n    {\n      v9 = sub_10017950(v8, (int)v6); /*0x100a17ed*/\n      v10 = (__int32)v9; /*0x100a17f2*/\n      v22 = 0; /*0x100a17f4*/\n      if ( v9 ) /*0x100a17fd*/\n        _InterlockedIncrement(v9 + 1); /*0x100a17ff*/\n    }\n    else\n    {\n      v10 = 0; /*0x100a1805*/\n      v22 = 0; /*0x100a1807*/\n    }\n    v11 = _InterlockedExchange(&v22, v10); /*0x100a180d*/\n    if ( v11 && _InterlockedDecrement((volatile signed __int32 *)(v11 + 4)) < 0 ) /*0x100a181e*/\n    {\n      LastError = GetLastError(); /*0x100a182c*/\n      (**(void (__thiscall ***)(__int32, int))v11)(v11, 1); /*0x100a182e*/\n      SetLastError(LastError); /*0x100a1831*/\n    }\n    LOBYTE(v23) = 2; /*0x100a183a*/\n    if ( _InterlockedCompareExchange(&v22, 0, 0) /*0x100a1870*/\n      && sub_10017E60((_DWORD *)_InterlockedCompareExchange(&v22, 0, 0), a2, a3, (int)&v19) )\n    {\n      v16 = _InterlockedCompareExchange(&v22, 0, 0); /*0x100a188a*/\n      Block = sub_10074590( /*0x100a18af*/\n                (struct _RTL_CRITICAL_SECTION *)_InterlockedCompareExchange(v17, 0, 0),\n                dword_101751F0,\n                dword_101751F4,\n                v16);\n    }\n    else\n    {\n      Block = 0; /*0x100a18b4*/\n    }\n    v13 = _InterlockedExchange(&v22, 0); /*0x100a18c0*/\n    if ( v13 ) /*0x100a18c4*/\n    {\n      if ( _InterlockedDecrement((volatile signed __int32 *)(v13 + 4)) < 0 ) /*0x100a18cc*/\n      {\n        v14 = GetLastError(); /*0x100a18da*/\n        (**(void (__thiscall ***)(__int32, int))v13)(v13, 1); /*0x100a18dc*/\n        SetLastError(v14); /*0x100a18df*/\n      }\n    }\n    v7 = Block; /*0x100a18e5*/\n  }\n  else\n  {\n    v7 = 0; /*0x100a17c2*/\n  }\n  sub_100A9970(&v20); /*0x100a18eb*/\n  LODWORD(v19) = &FamRT::CUniversalString::`vftable'; /*0x100a18f3*/\n  sub_100A59A0(&v19); /*0x100a18fa*/\n  return v7; /*0x100a1905*/\n}",
+    "refs": [
+      {
+        "addr": "0x1001a240",
+        "name": "sub_1001A240"
+      },
+      {
+        "addr": "0x100165b0",
+        "name": "unknown_libname_2"
+      },
+      {
+        "addr": "0x100a5980",
+        "name": "sub_100A5980"
+      },
+      {
+        "addr": "0x101145d4",
+        "name": "??_7CUniversalString@FamRT@@6B@"
+      },
+      {
+        "addr": "0x100dc2c0",
+        "name": "sub_100DC2C0"
+      },
+      {
+        "addr": "0x100f1470",
+        "name": "??2@YAPAXIABUnothrow_t@std@@@Z"
+      },
+      {
+        "addr": "0x101522cc",
+        "name": "unk_101522CC"
+      },
+      {
+        "addr": "0x10017950",
+        "name": "sub_10017950"
+      },
+      {
+        "addr": "0x10111130",
+        "name": "GetLastError"
+      },
+      {
+        "addr": "0x1011112c",
+        "name": "SetLastError"
+      },
+      {
+        "addr": "0x10074590",
+        "name": "sub_10074590"
+      },
+      {
+        "addr": "0x101751f0",
+        "name": "dword_101751F0"
+      },
+      {
+        "addr": "0x101751f4",
+        "name": "dword_101751F4"
+      },
+      {
+        "addr": "0x10017e60",
+        "name": "sub_10017E60"
+      },
+      {
+        "addr": "0x100ed550",
+        "name": "sub_100ED550"
+      },
+      {
+        "addr": "0x100a9970",
+        "name": "sub_100A9970"
+      },
+      {
+        "addr": "0x100a59a0",
+        "name": "sub_100A59A0"
+      }
+    ]
+  },
+  "0x100ed550": {
+    "addr": "0x100ed550",
+    "code": "char __stdcall sub_100ED550(int a1, int a2)\n{\n  char v3; // bl\n  _OWORD v4[2]; // [esp+8h] [ebp-2Ch] BYREF\n  __int64 v5; // [esp+28h] [ebp-Ch]\n\n  if ( !a1 ) /*0x100ed569*/\n    return 0; /*0x100ed569*/\n  memset(v4, 0, sizeof(v4)); /*0x100ed571*/\n  v5 = 0; /*0x100ed579*/\n  sub_100A7610(v4); /*0x100ed57e*/\n  if ( !sub_100A7760(4891, a1, a2) ) /*0x100ed58f*/\n  {\n    nullsub_8(v4); /*0x100ed59b*/\n    return 0; /*0x100ed5b1*/\n  }\n  v3 = sub_100ED600(v4); /*0x100ed5c3*/\n  nullsub_8(v4); /*0x100ed5c5*/\n  return v3; /*0x100ed5a0*/\n}",
+    "refs": [
+      {
+        "addr": "0x100a7610",
+        "name": "sub_100A7610"
+      },
+      {
+        "addr": "0x100a7680",
+        "name": "nullsub_8"
+      },
+      {
+        "addr": "0x100a7760",
+        "name": "sub_100A7760"
+      },
+      {
+        "addr": "0x100ed600",
+        "name": "sub_100ED600"
+      }
+    ]
+  },
+  "0x100ed600": {
+    "addr": "0x100ed600",
+    "code": "char __thiscall sub_100ED600(char *this, int a2)\n{\n  if ( sub_100A8430(a2) != 4891 || !sub_100A7980(50332422, this) || !sub_1000F830(184550207, this + 24) ) /*0x100ed634*/\n    return 0; /*0x100ed660*/\n  if ( !sub_100DC350(134218509, a2) ) /*0x100ed646*/\n    sub_100DC2F0(); /*0x100ed652*/\n  return 1; /*0x100ed657*/\n}",
+    "refs": [
+      {
+        "addr": "0x100a8430",
+        "name": "sub_100A8430"
+      },
+      {
+        "addr": "0x100a7980",
+        "name": "sub_100A7980"
+      },
+      {
+        "addr": "0x1000f830",
+        "name": "sub_1000F830"
+      },
+      {
+        "addr": "0x100dc2f0",
+        "name": "sub_100DC2F0"
+      },
+      {
+        "addr": "0x100dc350",
+        "name": "sub_100DC350"
+      }
+    ]
+  },
+  "0x10017e60": {
+    "addr": "0x10017e60",
+    "code": "char __thiscall sub_10017E60(_DWORD *this, int a2, int a3, int a4)\n{\n  if ( !(unsigned __int8)sub_100ED690(a4) || (unsigned __int8)sub_100ED690(this + 19) ) /*0x10017e79*/\n    return 0; /*0x10017ea2*/\n  *(this + 17) = a2; /*0x10017e88*/\n  *(this + 18) = a3; /*0x10017e8f*/\n  sub_100ED490(a4); /*0x10017e92*/\n  return 1; /*0x10017e97*/\n}",
+    "refs": [
+      {
+        "addr": "0x100ed690",
+        "name": "sub_100ED690"
+      },
+      {
+        "addr": "0x100ed490",
+        "name": "sub_100ED490"
+      }
+    ]
+  },
+  "0x10017950": {
+    "addr": "0x10017950",
+    "code": "// REORC peer-protocol: CJoinNetworkPacket constructor passes logical operation 39 to sub_100165C0 (root 0x1232; selector tag 0x0100031F). D14/D19/V01. This is not an outer TCP length or SH message index.\n_DWORD *__thiscall sub_10017950(_DWORD *this, int a2)\n{\n  sub_100165C0(this, 39, a2); /*0x10017960*/\n  *this = &RolClient::CJoinNetworkPacket::`vftable'; /*0x10017965*/\n  *(this + 17) = 0; /*0x1001796e*/\n  *(this + 18) = 0; /*0x10017975*/\n  sub_100A5980(this + 19); /*0x1001797c*/\n  *(this + 19) = &FamRT::CUniversalString::`vftable'; /*0x10017984*/\n  sub_100DC2C0(this + 23); /*0x1001798b*/\n  *((_BYTE *)this + 100) = 0; /*0x10017990*/\n  return this; /*0x10017996*/\n}",
+    "refs": [
+      {
+        "addr": "0x100165c0",
+        "name": "sub_100165C0"
+      },
+      {
+        "addr": "0x101145e0",
+        "name": "??_7CJoinNetworkPacket@RolClient@@6B@"
+      },
+      {
+        "addr": "0x100a5980",
+        "name": "sub_100A5980"
+      },
+      {
+        "addr": "0x101145d4",
+        "name": "??_7CUniversalString@FamRT@@6B@"
+      },
+      {
+        "addr": "0x100dc2c0",
+        "name": "sub_100DC2C0"
+      }
+    ]
+  },
+  "svc_vtables": {
+    "result": "None",
+    "stdout": "sha256 546efad9ab3ff85c2a50d61524d754bec94a3f3e30d6ae8addef481a1e8daa1e\n0x519f1c ??_7CClnNetworkProps@rvpn@@6B@ [('0x409540', 'sub_409540'), ('0x5302d8', '??_R4CClnNewNetwork@rvpn@@6B@'), ('0x409590', 'sub_409590'), ('0x530324', '??_R4CSrvNewNetwork@rvpn@@6B@'), ('0x409c80', 'sub_409C80')]\n0x51a088 ??_7CCreateNetwork@cmd@msg@ControlSvc@@6B@ [('0x409610', 'sub_409610'), ('0x530a58', '??_R4CCreateNetwork@cmd@msg@ControlSvc@@6B@_0'), ('0x408e57', 'sub_408E57'), ('0x530a6c', '??_R4CCreateNetwork@cmd@msg@ControlSvc@@6B@_1'), ('0x408e5f', 'sub_408E5F')]\n0x51a090 ??_7CCreateNetwork@cmd@msg@ControlSvc@@6B@_0 [('0x408e57', 'sub_408E57'), ('0x530a6c', '??_R4CCreateNetwork@cmd@msg@ControlSvc@@6B@_1'), ('0x408e5f', 'sub_408E5F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0')]\n0x51a098 ??_7CCreateNetwork@cmd@msg@ControlSvc@@6B@_1 [('0x408e5f', 'sub_408E5F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0'), ('0x530a80', '??_R4CCreateNetwork@cmd@msg@ControlSvc@@6B@_2'), ('0x408e67', 'sub_408E67')]\n0x51a0a8 ??_7CCreateNetwork@cmd@msg@ControlSvc@@6B@_2 [('0x408e67', 'sub_408E67'), ('0x40a240', 'sub_40A240'), ('0x40acd0', 'sub_40ACD0'), ('0x40ed20', 'sub_40ED20'), ('0x530a94', '??_R4CDbgActivateProfile@cmd@msg@ControlSvc@@6B@')]\n0x51a204 ??_7CGrantAdmin@cmd@msg@ControlSvc@@6B@_0 [('0x409910', 'sub_409910'), ('0x53104c', '??_R4CGrantAdmin@cmd@msg@ControlSvc@@6B@_1'), ('0x408eff', 'sub_408EFF'), ('0x531060', '??_R4CGrantAdmin@cmd@msg@ControlSvc@@6B@_2'), ('0x408f07', 'sub_408F07')]\n0x51a20c ??_7CGrantAdmin@cmd@msg@ControlSvc@@6B@_1 [('0x408eff', 'sub_408EFF'), ('0x531060', '??_R4CGrantAdmin@cmd@msg@ControlSvc@@6B@_2'), ('0x408f07', 'sub_408F07'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0')]\n0x51a214 ??_7CGrantAdmin@cmd@msg@ControlSvc@@6B@_2 [('0x408f07', 'sub_408F07'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0'), ('0x531074', '??_R4CGrantAdmin@cmd@msg@ControlSvc@@6B@'), ('0x408f0f', 'sub_408F0F')]\n0x51a224 ??_7CGrantAdmin@cmd@msg@ControlSvc@@6B@ [('0x408f0f', 'sub_408F0F'), ('0x40a270', 'sub_40A270'), ('0x40ad40', 'sub_40AD40'), ('0x40ee80', 'sub_40EE80'), ('0x531088', '??_R4CJoinNetwork@cmd@msg@ControlSvc@@6B@')]\n0x51a238 ??_7CJoinNetwork@cmd@msg@ControlSvc@@6B@ [('0x4099b0', 'sub_4099B0'), ('0x5310f0', '??_R4CJoinNetwork@cmd@msg@ControlSvc@@6B@_0'), ('0x408f27', 'sub_408F27'), ('0x531104', '??_R4CJoinNetwork@cmd@msg@ControlSvc@@6B@_1'), ('0x408f2f', 'sub_408F2F')]\n0x51a240 ??_7CJoinNetwork@cmd@msg@ControlSvc@@6B@_0 [('0x408f27', 'sub_408F27'), ('0x531104', '??_R4CJoinNetwork@cmd@msg@ControlSvc@@6B@_1'), ('0x408f2f', 'sub_408F2F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0')]\n0x51a248 ??_7CJoinNetwork@cmd@msg@ControlSvc@@6B@_1 [('0x408f2f', 'sub_408F2F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0'), ('0x531118', '??_R4CKickNode@cmd@msg@ControlSvc@@6B@_0'), ('0x409a20', 'sub_409A20')]\n0x51a258 ??_7CKickNode@cmd@msg@ControlSvc@@6B@_0 [('0x409a20', 'sub_409A20'), ('0x531188', '??_R4CKickNode@cmd@msg@ControlSvc@@6B@_1'), ('0x408f37', 'sub_408F37'), ('0x53119c', '??_R4CKickNode@cmd@msg@ControlSvc@@6B@_2'), ('0x408f3f', 'sub_408F3F')]\n0x51a260 ??_7CKickNode@cmd@msg@ControlSvc@@6B@_1 [('0x408f37', 'sub_408F37'), ('0x53119c', '??_R4CKickNode@cmd@msg@ControlSvc@@6B@_2'), ('0x408f3f', 'sub_408F3F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0')]\n0x51a268 ??_7CKickNode@cmd@msg@ControlSvc@@6B@_2 [('0x408f3f', 'sub_408F3F'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0'), ('0x5311b0', '??_R4CKickNode@cmd@msg@ControlSvc@@6B@'), ('0x408f47', 'sub_408F47')]\n0x51a278 ??_7CKickNode@cmd@msg@ControlSvc@@6B@ [('0x408f47', 'sub_408F47'), ('0x40a280', 'sub_40A280'), ('0x40ad80', 'sub_40AD80'), ('0x40eed0', 'sub_40EED0'), ('0x5311c4', '??_R4CLanguageChanged@cmd@msg@ControlSvc@@6B@')]\n0x51a300 ??_7CRevokeAdmin@cmd@msg@ControlSvc@@6B@_0 [('0x409bb0', 'sub_409BB0'), ('0x531400', '??_R4CRevokeAdmin@cmd@msg@ControlSvc@@6B@_1'), ('0x408f9f', 'sub_408F9F'), ('0x531414', '??_R4CRevokeAdmin@cmd@msg@ControlSvc@@6B@_2'), ('0x408fa7', 'sub_408FA7')]\n0x51a308 ??_7CRevokeAdmin@cmd@msg@ControlSvc@@6B@_1 [('0x408f9f', 'sub_408F9F'), ('0x531414', '??_R4CRevokeAdmin@cmd@msg@ControlSvc@@6B@_2'), ('0x408fa7', 'sub_408FA7'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0')]\n0x51a310 ??_7CRevokeAdmin@cmd@msg@ControlSvc@@6B@_2 [('0x408fa7', 'sub_408FA7'), ('0x40a030', 'sub_40A030'), ('0x40a3b0', 'sub_40A3B0'), ('0x531428', '??_R4CRevokeAdmin@cmd@msg@ControlSvc@@6B@'), ('0x408faf', 'sub_408FAF')]\n0x51a320 ??_7CRevokeAdmin@cmd@msg@ControlSvc@@6B@ [('0x408faf', 'sub_408FAF'), ('0x40a2a0', 'sub_40A2A0'), ('0x40adf0', 'sub_40ADF0'), ('0x40ef50', 'sub_40EF50'), ('0x53143c', '??_R4CSetSettings@cmd@msg@ControlSvc@@6B@')]\n",
+    "stderr": ""
+  },
+  "0x45fdb0": {
+    "addr": "0x45fdb0",
+    "code": "BOOL __thiscall sub_45FDB0(int this, int a2)\n{\n  int v3; // esi\n  int v4; // eax\n  const unsigned __int16 *v5; // edx\n  int v6; // ecx\n  unsigned int v7; // ecx\n  const wchar_t *v8; // eax\n  int v9; // esi\n  int v10; // edi\n  signed __int32 v11; // ebx\n  __int64 v13; // rax\n  BOOL v14; // esi\n  int v15; // [esp-10h] [ebp-84h]\n  int v16; // [esp-Ch] [ebp-80h]\n  int v17; // [esp-8h] [ebp-7Ch]\n  int v18; // [esp-4h] [ebp-78h]\n  int v19; // [esp+10h] [ebp-64h] BYREF\n  int v20; // [esp+14h] [ebp-60h] BYREF\n  __int64 v21; // [esp+18h] [ebp-5Ch] BYREF\n  struct _EVENT_DATA_DESCRIPTOR UserData; // [esp+20h] [ebp-54h] BYREF\n  int *v23; // [esp+30h] [ebp-44h]\n  int v24; // [esp+34h] [ebp-40h]\n  int v25; // [esp+38h] [ebp-3Ch]\n  int v26; // [esp+3Ch] [ebp-38h]\n  int *v27; // [esp+40h] [ebp-34h]\n  int v28; // [esp+44h] [ebp-30h]\n  int v29; // [esp+48h] [ebp-2Ch]\n  int v30; // [esp+4Ch] [ebp-28h]\n  const wchar_t *v31; // [esp+50h] [ebp-24h]\n  int v32; // [esp+54h] [ebp-20h]\n  unsigned int v33; // [esp+58h] [ebp-1Ch]\n  int v34; // [esp+5Ch] [ebp-18h]\n  char *v35; // [esp+60h] [ebp-14h]\n  int v36; // [esp+64h] [ebp-10h]\n  int v37; // [esp+68h] [ebp-Ch]\n  int v38; // [esp+6Ch] [ebp-8h]\n\n  if ( !a2 || !_InterlockedCompareExchange((volatile signed __int32 *)(this + 264), 0, 0) ) /*0x45fdda*/\n    return 0; /*0x45ff67*/\n  if ( (dword_55C040 & 1) != 0 ) /*0x45fdf3*/\n  {\n    v3 = (unsigned __int8)sub_4C46A0(a2 + 60); /*0x45fe03*/\n    v4 = sub_4C4520(a2 + 60); /*0x45fe06*/\n    v5 = (const unsigned __int16 *)sub_471CF0(v4); /*0x45fe15*/\n    v19 = *(_DWORD *)(this + 48); /*0x45fe17*/\n    v6 = *(_DWORD *)(this + 44); /*0x45fe1d*/\n    v23 = &v20; /*0x45fe20*/\n    HIDWORD(v21) = v3; /*0x45fe26*/\n    v20 = v6; /*0x45fe29*/\n    v24 = 0; /*0x45fe2c*/\n    v25 = 4; /*0x45fe33*/\n    v26 = 0; /*0x45fe3a*/\n    v27 = &v19; /*0x45fe41*/\n    v28 = 0; /*0x45fe44*/\n    v29 = 4; /*0x45fe4b*/\n    v30 = 0; /*0x45fe52*/\n    if ( v5 ) /*0x45fe5b*/\n      v7 = 2 * wcslen(v5) + 2; /*0x45fe71*/\n    else\n      v7 = 10; /*0x45fe7a*/\n    v32 = 0; /*0x45fe81*/\n    v8 = L\"NULL\"; /*0x45fe88*/\n    v33 = v7; /*0x45fe8d*/\n    if ( v5 ) /*0x45fe90*/\n      v8 = v5; /*0x45fe90*/\n    v34 = 0; /*0x45fe93*/\n    v31 = v8; /*0x45fe9a*/\n    v35 = (char *)&v21 + 4; /*0x45fea0*/\n    v36 = 0; /*0x45feb5*/\n    v37 = 4; /*0x45febc*/\n    v38 = 0; /*0x45fec3*/\n    sub_4040D0((int)&unk_548078, &stru_518968, nullptr, 5u, &UserData); /*0x45feca*/\n  }\n  v9 = *(_DWORD *)(a2 + 28); /*0x45fecf*/\n  v10 = *(_DWORD *)(a2 + 24); /*0x45fed8*/\n  v11 = _InterlockedCompareExchange((volatile signed __int32 *)(this + 264), 0, 0); /*0x45fee6*/\n  v21 = 0; /*0x45feef*/\n  sub_4C43F0(&v21); /*0x45fef4*/\n  if ( sub_47A3B0(&v21) ) /*0x45fefc*/\n  {\n    v18 = sub_47A3A0(&v21); /*0x45ff2c*/\n    v17 = v21; /*0x45ff2d*/\n    v13 = sub_4306B0(v11, v10, v9); /*0x45ff34*/\n    v14 = ROLClient_JoinNetwork(v13, HIDWORD(v13), v15, v16, v17, v18) != 0; /*0x45ff48*/\n    sub_47A170(&v21); /*0x45ff4a*/\n    return v14; /*0x45ff4f*/\n  }\n  else\n  {\n    sub_47A170(&v21); /*0x45ff0a*/\n    return 0; /*0x45ff0f*/\n  }\n}",
+    "refs": [
+      {
+        "addr": "0x4c46a0",
+        "name": "sub_4C46A0"
+      },
+      {
+        "addr": "0x4c4520",
+        "name": "sub_4C4520"
+      },
+      {
+        "addr": "0x471cf0",
+        "name": "sub_471CF0"
+      },
+      {
+        "addr": "0x519ec4",
+        "name": "aNull_0",
+        "string": "啎䱌"
+      },
+      {
+        "addr": "0x4040d0",
+        "name": "sub_4040D0"
+      },
+      {
+        "addr": "0x548078",
+        "name": "unk_548078"
+      },
+      {
+        "addr": "0x518968",
+        "name": "stru_518968"
+      },
+      {
+        "addr": "0x55c040",
+        "name": "dword_55C040"
+      },
+      {
+        "addr": "0x4c43f0",
+        "name": "sub_4C43F0"
+      },
+      {
+        "addr": "0x47a3a0",
+        "name": "sub_47A3A0"
+      },
+      {
+        "addr": "0x4306b0",
+        "name": "sub_4306B0"
+      },
+      {
+        "addr": "0x517430",
+        "name": "ROLClient_JoinNetwork"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      },
+      {
+        "addr": "0x47a3b0",
+        "name": "sub_47A3B0"
+      }
+    ]
+  },
+  "0x4604c0": {
+    "addr": "0x4604c0",
+    "code": "int __userpurge sub_4604C0@<eax>(int a1@<ecx>, int a2@<ebx>, _DWORD *a3, int *a4)\n{\n  int v4; // eax\n  int v6; // eax\n  signed __int32 v7; // esi\n  int v8; // eax\n  __int64 v9; // rax\n  int v10; // [esp-Ch] [ebp-54h]\n  int v11; // [esp-8h] [ebp-50h]\n  volatile signed __int32 *v12; // [esp+8h] [ebp-40h]\n  int v14; // [esp+Ch] [ebp-3Ch]\n  _BYTE v15[44]; // [esp+10h] [ebp-38h] BYREF\n  __int64 v16; // [esp+3Ch] [ebp-Ch] BYREF\n\n  if ( !a4 ) /*0x4604df*/\n    return 0; /*0x4604df*/\n  *a4 = 1016; /*0x4604e5*/\n  if ( !a3 ) /*0x4604ed*/\n    return 0; /*0x4604ed*/\n  if ( !*(_DWORD *)(a1 + 268) ) /*0x4604f3*/\n    return 0; /*0x4604f3*/\n  v12 = (volatile signed __int32 *)(a1 + 264); /*0x460508*/\n  if ( !_InterlockedCompareExchange((volatile signed __int32 *)(a1 + 264), 0, 0) ) /*0x46050d*/\n    return 0; /*0x46069f*/\n  v4 = (*(int (__thiscall **)(_DWORD *))(a3[15] + 8))(a3 + 15); /*0x460520*/\n  if ( v4 ) /*0x460525*/\n  {\n    *a4 = v4; /*0x460528*/\n    return 0; /*0x46052a*/\n  }\n  else\n  {\n    v16 = 0; /*0x460544*/\n    sub_47A160(&v16); /*0x460549*/\n    v14 = *(_DWORD *)(a1 + 268); /*0x46055b*/\n    memset(v15, 0, sizeof(v15)); /*0x460562*/\n    sub_4726B0(4889, 0); /*0x460574*/\n    v6 = (*(int (__thiscall **)(_DWORD *))(a3[15] + 4))(a3 + 15); /*0x46057f*/\n    if ( sub_472EF0(16777996, v6, 0) /*0x4605f1*/\n      && sub_472F60(33555264, a3[6], 0, 0)\n      && sub_472EF0(16778058, a3[7], 0)\n      && (*(unsigned __int8 (__thiscall **)(_DWORD *, _BYTE *, int))(a3[15] + 12))(a3 + 15, v15, v14)\n      && sub_473600(&v16) )\n    {\n      sub_404710(a2); /*0x4605fd*/\n      v7 = _InterlockedCompareExchange(v12, 0, 0); /*0x460610*/\n      v8 = sub_47A3A0(&v16); /*0x460612*/\n      v9 = sub_4306B0(v7, v16, v8); /*0x46061d*/\n      if ( ROLClient_ManageNetwork2(v9, HIDWORD(v9), v10, v11) ) /*0x460624*/\n      {\n        sub_47A170(&v16); /*0x46065b*/\n        return 1; /*0x460662*/\n      }\n      else\n      {\n        *a4 = 1004; /*0x460631*/\n        sub_47A170(&v16); /*0x460639*/\n        return 0; /*0x460640*/\n      }\n    }\n    else\n    {\n      sub_404710(a2); /*0x460678*/\n      sub_47A170(&v16); /*0x460682*/\n      return 0; /*0x460689*/\n    }\n  }\n}",
+    "refs": [
+      {
+        "addr": "0x47a160",
+        "name": "sub_47A160"
+      },
+      {
+        "addr": "0x4e74f0",
+        "name": "_memset"
+      },
+      {
+        "addr": "0x4726b0",
+        "name": "sub_4726B0"
+      },
+      {
+        "addr": "0x404710",
+        "name": "sub_404710"
+      },
+      {
+        "addr": "0x47a3a0",
+        "name": "sub_47A3A0"
+      },
+      {
+        "addr": "0x4306b0",
+        "name": "sub_4306B0"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      },
+      {
+        "addr": "0x51742c",
+        "name": "ROLClient_ManageNetwork2"
+      },
+      {
+        "addr": "0x472ef0",
+        "name": "sub_472EF0"
+      },
+      {
+        "addr": "0x472f60",
+        "name": "sub_472F60"
+      },
+      {
+        "addr": "0x473600",
+        "name": "sub_473600"
+      }
+    ]
+  },
+  "0x4c43f0": {
+    "addr": "0x4c43f0",
+    "code": "int __userpurge sub_4C43F0@<eax>(int a1@<edi>, int a2)\n{\n  _BYTE v3[44]; // [esp+4h] [ebp-38h] BYREF\n  __int64 v4; // [esp+30h] [ebp-Ch] BYREF\n\n  v4 = 0; /*0x4c440d*/\n  sub_47A160(&v4); /*0x4c4412*/\n  memset(v3, 0, sizeof(v3)); /*0x4c441f*/\n  sub_4726B0(0, 0); /*0x4c442e*/\n  if ( (unsigned __int8)sub_4C4530(v3) && sub_473600(&v4) ) /*0x4c4449*/\n    sub_47A130(&v4); /*0x4c4458*/\n  else\n    sub_47A160(a2); /*0x4c4461*/\n  sub_404710(a1); /*0x4c4469*/\n  sub_47A170(&v4); /*0x4c4471*/\n  return a2; /*0x4c447c*/\n}",
+    "refs": [
+      {
+        "addr": "0x47a160",
+        "name": "sub_47A160"
+      },
+      {
+        "addr": "0x4e74f0",
+        "name": "_memset"
+      },
+      {
+        "addr": "0x4726b0",
+        "name": "sub_4726B0"
+      },
+      {
+        "addr": "0x47a130",
+        "name": "sub_47A130"
+      },
+      {
+        "addr": "0x4c4530",
+        "name": "sub_4C4530"
+      },
+      {
+        "addr": "0x473600",
+        "name": "sub_473600"
+      },
+      {
+        "addr": "0x404710",
+        "name": "sub_404710"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      }
+    ]
+  },
+  "0x4c4530": {
+    "addr": "0x4c4530",
+    "code": "bool __thiscall sub_4C4530(unsigned __int8 *this, int a2)\n{\n  int v3; // eax\n  bool result; // al\n\n  result = false; /*0x4c45a4*/\n  if ( a2 ) /*0x4c453c*/\n  {\n    if ( (unsigned __int8)sub_4C46B0() ) /*0x4c453e*/\n    {\n      sub_4739F0(4891, 0); /*0x4c4550*/\n      v3 = sub_4C45C0(0); /*0x4c4559*/\n      if ( sub_472770(184550207, *(this + 24), v3) ) /*0x4c456b*/\n      {\n        if ( sub_473050(50332422, this) && (!sub_47C530(this + 16) || sub_47C220(134218509, a2)) ) /*0x4c459a*/\n          return true; /*0x4c453c*/\n      }\n    }\n  }\n  return result; /*0x4c45a3*/\n}",
+    "refs": [
+      {
+        "addr": "0x4739f0",
+        "name": "sub_4739F0"
+      },
+      {
+        "addr": "0x4c45c0",
+        "name": "sub_4C45C0"
+      },
+      {
+        "addr": "0x473050",
+        "name": "sub_473050"
+      },
+      {
+        "addr": "0x47c530",
+        "name": "sub_47C530"
+      },
+      {
+        "addr": "0x47c220",
+        "name": "sub_47C220"
+      },
+      {
+        "addr": "0x472770",
+        "name": "sub_472770"
+      },
+      {
+        "addr": "0x4c46b0",
+        "name": "sub_4C46B0"
+      }
+    ]
+  },
+  "0x40ed20": {
+    "addr": "0x40ed20",
+    "code": "char __thiscall sub_40ED20(char *this, int a2, int a3)\n{\n  int v5; // [esp+0h] [ebp-34h]\n  __int128 v6; // [esp+Ch] [ebp-28h] BYREF\n  __int128 v7; // [esp+1Ch] [ebp-18h] BYREF\n  int v8; // [esp+2Ch] [ebp-8h]\n\n  if ( a2 && a3 ) /*0x40ed45*/\n  {\n    v8 = 0; /*0x40ed4e*/\n    v6 = 0; /*0x40ed58*/\n    v7 = 0; /*0x40ed5c*/\n    sub_478710(&v6); /*0x40ed60*/\n    LODWORD(v6) = &rvpn::CSrvNewNetwork::`vftable'; /*0x40ed68*/\n    sub_471BC0((char *)&v6 + 8); /*0x40ed6f*/\n    sub_47A160((char *)&v7 + 8); /*0x40ed77*/\n    LOBYTE(v8) = 0; /*0x40ed7f*/\n    if ( sub_4C4CB0(a3, this + 4) && sub_4C4F10(a2) ) /*0x40ed95*/\n    {\n      sub_47A170((char *)&v7 + 8); /*0x40eda1*/\n      sub_471BE0(v5); /*0x40eda9*/\n      sub_478720(&v6); /*0x40edb1*/\n      return 1; /*0x40edc8*/\n    }\n    sub_47A170((char *)&v7 + 8); /*0x40edce*/\n    sub_471BE0(v5); /*0x40edd6*/\n    sub_478720(&v6); /*0x40edde*/\n  }\n  return 0; /*0x40edb6*/\n}",
+    "refs": [
+      {
+        "addr": "0x478710",
+        "name": "sub_478710"
+      },
+      {
+        "addr": "0x519f2c",
+        "name": "??_7CSrvNewNetwork@rvpn@@6B@"
+      },
+      {
+        "addr": "0x471bc0",
+        "name": "sub_471BC0"
+      },
+      {
+        "addr": "0x47a160",
+        "name": "sub_47A160"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      },
+      {
+        "addr": "0x471be0",
+        "name": "sub_471BE0"
+      },
+      {
+        "addr": "0x478720",
+        "name": "sub_478720"
+      },
+      {
+        "addr": "0x4c4cb0",
+        "name": "sub_4C4CB0"
+      },
+      {
+        "addr": "0x4c4f10",
+        "name": "sub_4C4F10"
+      }
+    ]
+  },
+  "0x40ee80": {
+    "addr": "0x40ee80",
+    "code": "bool __thiscall sub_40EE80(_DWORD *this, int a2, int a3)\n{\n  return a2 && sub_472A30(218104585, this - 6, 0) && sub_472F60(33554913, *(this - 2), *(this - 1), 0); /*0x40eebc*/\n}",
+    "refs": [
+      {
+        "addr": "0x472a30",
+        "name": "sub_472A30"
+      },
+      {
+        "addr": "0x472f60",
+        "name": "sub_472F60"
+      }
+    ]
+  },
+  "0x40eed0": {
+    "addr": "0x40eed0",
+    "code": "bool __thiscall sub_40EED0(_DWORD *this, int a2, int a3)\n{\n  return a2 && sub_472A30(218104585, this - 6, 0) && sub_472F60(33554913, *(this - 2), *(this - 1), 0); /*0x40ef0c*/\n}",
+    "refs": [
+      {
+        "addr": "0x472a30",
+        "name": "sub_472A30"
+      },
+      {
+        "addr": "0x472f60",
+        "name": "sub_472F60"
+      }
+    ]
+  },
+  "0x40ef50": {
+    "addr": "0x40ef50",
+    "code": "bool __thiscall sub_40EF50(_DWORD *this, int a2, int a3)\n{\n  return a2 && sub_472A30(218104585, this - 6, 0) && sub_472F60(33554913, *(this - 2), *(this - 1), 0); /*0x40ef8c*/\n}",
+    "refs": [
+      {
+        "addr": "0x472a30",
+        "name": "sub_472A30"
+      },
+      {
+        "addr": "0x472f60",
+        "name": "sub_472F60"
+      }
+    ]
+  },
+  "0x40a240": {
+    "addr": "0x40a240",
+    "code": "int sub_40A240()\n{\n  return 1; /*0x40a245*/\n}"
+  },
+  "0x40a270": {
+    "addr": "0x40a270",
+    "code": "int sub_40A270()\n{\n  return 8; /*0x40a275*/\n}"
+  },
+  "0x40a280": {
+    "addr": "0x40a280",
+    "code": "int sub_40A280()\n{\n  return 4; /*0x40a285*/\n}"
+  },
+  "0x40a2a0": {
+    "addr": "0x40a2a0",
+    "code": "int sub_40A2A0()\n{\n  return 9; /*0x40a2a5*/\n}"
+  },
+  "0x4c4cb0": {
+    "addr": "0x4c4cb0",
+    "code": "BOOL __stdcall sub_4C4CB0(int a1, int a2)\n{\n  int v2; // eax\n  int v3; // eax\n  int v4; // eax\n  size_t v6; // eax\n  BOOL v7; // esi\n  void *v8; // [esp-8h] [ebp-20h]\n  char v9; // [esp-4h] [ebp-1Ch]\n  int v10[2]; // [esp+Ch] [ebp-Ch] BYREF\n\n  if ( !a1 ) /*0x4c4ccd*/\n    return 0; /*0x4c4ccd*/\n  v2 = sub_4C4350(a2); /*0x4c4cd1*/\n  if ( !sub_47C530(v2) ) /*0x4c4cd8*/\n    return 0; /*0x4c4cdf*/\n  *(_QWORD *)v10 = 0; /*0x4c4ce7*/\n  sub_47A160(v10); /*0x4c4cec*/\n  v3 = sub_4C4350(a2); /*0x4c4cf7*/\n  v8 = (void *)sub_47C420(v3); /*0x4c4d03*/\n  v4 = sub_4C4340(a2); /*0x4c4d06*/\n  if ( !sub_4CA0A0(a1, v4, v8, (int)v10) ) /*0x4c4d0d*/\n  {\n    sub_47A170(v10); /*0x4c4d1c*/\n    return 0; /*0x4c4d33*/\n  }\n  v9 = sub_4C42F0(a2); /*0x4c4d42*/\n  v6 = sub_4C4340(a2); /*0x4c4d47*/\n  v7 = sub_4C4D80(v6, (int)v10, v9) != 0; /*0x4c4d5b*/\n  sub_47A170(v10); /*0x4c4d5d*/\n  return v7; /*0x4c4d21*/\n}",
+    "refs": [
+      {
+        "addr": "0x4c4350",
+        "name": "sub_4C4350"
+      },
+      {
+        "addr": "0x47c530",
+        "name": "sub_47C530"
+      },
+      {
+        "addr": "0x47a160",
+        "name": "sub_47A160"
+      },
+      {
+        "addr": "0x47c420",
+        "name": "sub_47C420"
+      },
+      {
+        "addr": "0x4c4340",
+        "name": "sub_4C4340"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      },
+      {
+        "addr": "0x4ca0a0",
+        "name": "sub_4CA0A0"
+      },
+      {
+        "addr": "0x4c42f0",
+        "name": "sub_4C42F0"
+      },
+      {
+        "addr": "0x4c4d80",
+        "name": "sub_4C4D80"
+      }
+    ]
+  },
+  "0x4c4f10": {
+    "addr": "0x4c4f10",
+    "code": "int __stdcall sub_4C4F10(int a1)\n{\n  int v2; // [esp+0h] [ebp-38h]\n  _BYTE v3[44]; // [esp+8h] [ebp-30h] BYREF\n\n  if ( a1 ) /*0x4c4f29*/\n  {\n    memset(v3, 0, sizeof(v3)); /*0x4c4f33*/\n    sub_4726B0(4884, 0); /*0x4c4f45*/\n    if ( sub_4C4E90(v3) && sub_472CF0(v3) ) /*0x4c4f5f*/\n    {\n      sub_404710(v2); /*0x4c4f6b*/\n      return 1; /*0x4c4f84*/\n    }\n    sub_404710(v2); /*0x4c4f8a*/\n  }\n  return 0; /*0x4c4f70*/\n}",
+    "refs": [
+      {
+        "addr": "0x4e74f0",
+        "name": "_memset"
+      },
+      {
+        "addr": "0x4726b0",
+        "name": "sub_4726B0"
+      },
+      {
+        "addr": "0x404710",
+        "name": "sub_404710"
+      },
+      {
+        "addr": "0x4c4e90",
+        "name": "sub_4C4E90"
+      },
+      {
+        "addr": "0x472cf0",
+        "name": "sub_472CF0"
+      }
+    ]
+  },
+  "0x4c4e90": {
+    "addr": "0x4c4e90",
+    "code": "BOOL __thiscall sub_4C4E90(unsigned __int8 *this, int a2)\n{\n  int v3; // eax\n  const WCHAR *v4; // eax\n  BOOL result; // eax\n\n  result = false; /*0x4c4ef8*/\n  if ( a2 ) /*0x4c4e9d*/\n  {\n    if ( sub_47A3B0(this + 24) ) /*0x4c4ea4*/\n    {\n      v3 = sub_4C4FB0(0); /*0x4c4eb1*/\n      if ( sub_472770(184550152, *(this + 32), v3) ) /*0x4c4ec3*/\n      {\n        v4 = (const WCHAR *)sub_471CF0(this + 8); /*0x4c4ecf*/\n        if ( sub_473130(50332422, v4) ) /*0x4c4edc*/\n        {\n          if ( sub_472D40(167772935, this + 24) ) /*0x4c4eed*/\n            return true; /*0x4c4e9d*/\n        }\n      }\n    }\n  }\n  return result; /*0x4c4ef6*/\n}",
+    "refs": [
+      {
+        "addr": "0x4c4fb0",
+        "name": "sub_4C4FB0"
+      },
+      {
+        "addr": "0x471cf0",
+        "name": "sub_471CF0"
+      },
+      {
+        "addr": "0x472d40",
+        "name": "sub_472D40"
+      },
+      {
+        "addr": "0x473130",
+        "name": "sub_473130"
+      },
+      {
+        "addr": "0x472770",
+        "name": "sub_472770"
+      },
+      {
+        "addr": "0x47a3b0",
+        "name": "sub_47A3B0"
+      }
+    ]
+  },
+  "0x4ca0a0": {
+    "addr": "0x4ca0a0",
+    "code": "int __cdecl sub_4CA0A0(int a1, int a2, void *Src, int a4)\n{\n  int v5; // esi\n  __int64 v6; // [esp+10h] [ebp-Ch] BYREF\n\n  if ( !Src ) /*0x4ca0c4*/\n    return 0; /*0x4ca0c4*/\n  v6 = 0; /*0x4ca0cc*/\n  sub_47C210(&v6); /*0x4ca0d1*/\n  if ( !sub_47C680(Src) ) /*0x4ca0da*/\n  {\n    sub_47A170(&v6); /*0x4ca0e6*/\n    return 0; /*0x4ca0fd*/\n  }\n  v5 = sub_4CA130(a1, a2, &v6, a4); /*0x4ca112*/\n  sub_47A170(&v6); /*0x4ca114*/\n  return v5; /*0x4ca0eb*/\n}",
+    "refs": [
+      {
+        "addr": "0x47c210",
+        "name": "sub_47C210"
+      },
+      {
+        "addr": "0x47a170",
+        "name": "sub_47A170"
+      },
+      {
+        "addr": "0x47c680",
+        "name": "sub_47C680"
+      },
+      {
+        "addr": "0x4ca130",
+        "name": "sub_4CA130"
+      }
+    ]
+  },
+  "0x40acd0": {
+    "addr": "0x40acd0",
+    "code": "int __thiscall sub_40ACD0(char *this)\n{\n  char *v1; // edi\n\n  v1 = this + 4; /*0x4c4302*/\n  if ( sub_4723F0(this + 12) && (unsigned int)sub_4723F0(v1 + 8) <= 0xFF )\n    return (unsigned int)sub_47C540(v1 + 24) < 6 ? 0x3F7 : 0;\n  else\n    return 1017; /*0x4c4335*/\n}",
+    "refs": [
+      {
+        "addr": "0x47c540",
+        "name": "sub_47C540"
+      },
+      {
+        "addr": "0x4723f0",
+        "name": "sub_4723F0"
+      }
+    ]
+  },
+  "0x4169d0": {
+    "addr": "0x4169d0",
+    "code": "char __thiscall sub_4169D0(_DWORD *this, int a2)\n{\n  int v2; // esi\n  int v3; // eax\n  int v4; // edi\n  int v5; // eax\n  int v6; // eax\n  int v7; // eax\n  signed __int32 v8; // eax\n  char *v9; // edi\n  __int32 v10; // edi\n  DWORD LastError; // esi\n  signed __int32 v12; // ecx\n  __int32 v13; // edi\n  DWORD v14; // esi\n  _DWORD v16[2]; // [esp+Ch] [ebp-E8h] BYREF\n  _DWORD *v17; // [esp+14h] [ebp-E0h]\n  int v18; // [esp+18h] [ebp-DCh] BYREF\n  int v19; // [esp+1Ch] [ebp-D8h] BYREF\n  int v20; // [esp+20h] [ebp-D4h] BYREF\n  _DWORD v21[4]; // [esp+24h] [ebp-D0h] BYREF\n  void *v22; // [esp+34h] [ebp-C0h]\n  char v23; // [esp+3Bh] [ebp-B9h]\n  _OWORD v24[2]; // [esp+3Ch] [ebp-B8h] BYREF\n  __int64 v25; // [esp+5Ch] [ebp-98h]\n  __int64 v26; // [esp+64h] [ebp-90h] BYREF\n  signed __int32 v27; // [esp+6Ch] [ebp-88h] BYREF\n  signed __int32 v28; // [esp+70h] [ebp-84h] BYREF\n  signed __int32 v29[2]; // [esp+74h] [ebp-80h] BYREF\n  signed __int32 v30[2]; // [esp+7Ch] [ebp-78h] BYREF\n  signed __int32 v31; // [esp+84h] [ebp-70h] BYREF\n  signed __int32 v32; // [esp+88h] [ebp-6Ch] BYREF\n  signed __int32 v33; // [esp+8Ch] [ebp-68h] BYREF\n  signed __int32 v34; // [esp+90h] [ebp-64h] BYREF\n  signed __int32 v35[2]; // [esp+94h] [ebp-60h] BYREF\n  signed __int32 v36; // [esp+9Ch] [ebp-58h] BYREF\n  signed __int32 v37; // [esp+A0h] [ebp-54h] BYREF\n  signed __int32 v38; // [esp+A4h] [ebp-50h] BYREF\n  signed __int32 v39; // [esp+A8h] [ebp-4Ch] BYREF\n  signed __int32 v40; // [esp+ACh] [ebp-48h] BYREF\n  signed __int32 v41; // [esp+B0h] [ebp-44h] BYREF\n  signed __int32 v42; // [esp+B4h] [ebp-40h] BYREF\n  signed __int32 v43; // [esp+B8h] [ebp-3Ch] BYREF\n  signed __int32 v44; // [esp+BCh] [ebp-38h] BYREF\n  signed __int32 v45; // [esp+C0h] [ebp-34h] BYREF\n  signed __int32 v46[2]; // [esp+C4h] [ebp-30h] BYREF\n  signed __int32 v47[4]; // [esp+CCh] [ebp-28h] BYREF\n  signed __int32 v48; // [esp+DCh] [ebp-18h] BYREF\n  __int32 v49; // [esp+E0h] [ebp-14h] BYREF\n  int v50; // [esp+F0h] [ebp-4h]\n\n  v17 = this; /*0x4169ff*/\n  memset(v24, 0, sizeof(v24)); /*0x416a11*/\n  v25 = 0; /*0x416a1f*/\n  sub_473B00(v24); /*0x416a27*/\n  v50 = 0; /*0x416a32*/\n  if ( sub_4018D0(4890, v24) /*0x416adc*/\n    && (v20 = 0, sub_40F720(16777996, &v20))\n    && (v26 = 0, sub_408650(33555264, &v26))\n    && (v19 = 0, sub_408590(16778058, &v19))\n    && (v2 = v20, v3 = sub_415DC0(v20), (v4 = v3) != 0) )\n  {\n    v21[2] = v26; /*0x416ae8*/\n    v21[0] = &ControlSvc::CGuiRequest::`vftable'; /*0x416af4*/\n    v21[1] = v3; /*0x416afe*/\n    v21[3] = v19; /*0x416b04*/\n    LOBYTE(v50) = 1; /*0x416b10*/\n    v18 = 0; /*0x416b20*/\n    if ( sub_40F6C0(16777682, &v18) ) /*0x416b2a*/\n    {\n      v48 = 0; /*0x416b3e*/\n      v22 = operator new(0x38u, (const struct std::nothrow_t *)&unk_522C5C); /*0x416b4f*/\n      if ( v22 ) /*0x416b57*/\n      {\n        v5 = v18; /*0x416b5d*/\n        if ( v18 ) /*0x416b65*/\n        {\n          v27 = 0; /*0x416b6b*/\n          v28 = 0; /*0x416b76*/\n          v29[0] = 0; /*0x416b80*/\n          v29[1] = 0; /*0x416b87*/\n          v30[0] = 0; /*0x416b8e*/\n          v30[1] = 0; /*0x416b95*/\n          v31 = 0; /*0x416b9c*/\n          v32 = 0; /*0x416ba3*/\n          v33 = 0; /*0x416baa*/\n          v34 = 0; /*0x416bb1*/\n          v35[0] = 0; /*0x416bb8*/\n          v35[1] = 0; /*0x416bbf*/\n          v36 = 0; /*0x416bc6*/\n          v37 = 0; /*0x416bcd*/\n          v38 = 0; /*0x416bd4*/\n          v39 = 0; /*0x416bdb*/\n          v40 = 0; /*0x416be2*/\n          v41 = 0; /*0x416be9*/\n          v42 = 0; /*0x416bf0*/\n          v43 = 0; /*0x416bf7*/\n          v44 = 0; /*0x416bfe*/\n          v45 = 0; /*0x416c05*/\n          v46[0] = 0; /*0x416c0c*/\n          v46[1] = 0; /*0x416c13*/\n          memset(v47, 0, sizeof(v47)); /*0x416c1a*/\n          switch ( v18 ) /*0x416c3f*/\n          {\n            case 1: /*0x416c3f*/\n            case 3: /*0x416c3f*/\n              _InterlockedIncrement(&v27); /*0x416c4f*/\n              break; /*0x416c56*/\n            case 2: /*0x416c3f*/\n            case 6: /*0x416c3f*/\n              _InterlockedIncrement(&v28); /*0x416c46*/\n              break; /*0x416c4d*/\n            case 5: /*0x416c3f*/\n              _InterlockedIncrement(v47); /*0x416cbe*/\n              break; /*0x416cc2*/\n            case 10: /*0x416c3f*/\n              _InterlockedIncrement(&v36); /*0x416c7c*/\n              break; /*0x416c80*/\n            case 13: /*0x416c3f*/\n            case 15: /*0x416c3f*/\n            case 20: /*0x416c3f*/\n              _InterlockedIncrement(&v34); /*0x416c70*/\n              break; /*0x416c74*/\n            case 14: /*0x416c3f*/\n              _InterlockedIncrement(&v39); /*0x416c8e*/\n              break; /*0x416c92*/\n            case 16: /*0x416c3f*/\n              _InterlockedIncrement(v30); /*0x416c58*/\n              break; /*0x416c5c*/\n            case 17: /*0x416c3f*/\n              _InterlockedIncrement(&v31); /*0x416c5e*/\n              break; /*0x416c62*/\n            case 18: /*0x416c3f*/\n              _InterlockedIncrement(&v32); /*0x416c64*/\n              break; /*0x416c68*/\n            case 19: /*0x416c3f*/\n              _InterlockedIncrement(&v33); /*0x416c6a*/\n              break; /*0x416c6e*/\n            case 21: /*0x416c3f*/\n              _InterlockedIncrement(v35); /*0x416c76*/\n              break; /*0x416c7a*/\n            case 22: /*0x416c3f*/\n              _InterlockedIncrement(&v37); /*0x416c82*/\n              break; /*0x416c86*/\n            case 23: /*0x416c3f*/\n              _InterlockedIncrement(&v38); /*0x416c88*/\n              break; /*0x416c8c*/\n            case 24: /*0x416c3f*/\n              _InterlockedIncrement(&v40); /*0x416c94*/\n              break; /*0x416c98*/\n            case 25: /*0x416c3f*/\n              _InterlockedIncrement(&v41); /*0x416c9a*/\n              break; /*0x416c9e*/\n            case 26: /*0x416c3f*/\n              _InterlockedIncrement(&v42); /*0x416ca0*/\n              break; /*0x416ca4*/\n            case 27: /*0x416c3f*/\n              _InterlockedIncrement(&v43); /*0x416ca6*/\n              break; /*0x416caa*/\n            case 28: /*0x416c3f*/\n              _InterlockedIncrement(&v45); /*0x416cb2*/\n              break; /*0x416cb6*/\n            case 29: /*0x416c3f*/\n              _InterlockedIncrement(v46); /*0x416cb8*/\n              break; /*0x416cbc*/\n            case 30: /*0x416c3f*/\n              _InterlockedIncrement(&v44); /*0x416cac*/\n              break; /*0x416cb0*/\n            case 31: /*0x416c3f*/\n              _InterlockedIncrement(v29); /*0x416cc4*/\n              break; /*0x416cc4*/\n            default:\n              break;\n          }\n          v5 = sub_4117D0(&v27); /*0x416cc8*/\n        }\n        v16[0] = 7; /*0x416cd3*/\n        v16[1] = v5; /*0x416cdd*/\n        v6 = sub_415E70(v4); /*0x416ceb*/\n        v7 = sub_410070(v21, v6, v16); /*0x416cfd*/\n      }\n      else\n      {\n        v7 = 0; /*0x416d04*/\n      }\n      sub_40FD80(v7); /*0x416d0a*/\n      if ( _InterlockedCompareExchange(&v48, 0, 0) ) /*0x416d16*/\n      {\n        v8 = _InterlockedCompareExchange(&v48, 0, 0); /*0x416d37*/\n        (*(void (__thiscall **)(_DWORD *, signed __int32, int))(v17[2] + 12))(v17 + 2, v8, 1); /*0x416d49*/\n        v23 = 1; /*0x416d4f*/\n      }\n      else\n      {\n        v23 = 0; /*0x416d20*/\n      }\n      sub_4104B0(&v48); /*0x416d26*/\n    }\n    else\n    {\n      v49 = 0; /*0x416d60*/\n      LOBYTE(v50) = 2; /*0x416d6a*/\n      switch ( v2 ) /*0x416d7a*/\n      {\n        case 1: /*0x416d7a*/\n          v9 = (char *)operator new(0x44u, (const struct std::nothrow_t *)&unk_522C5C); /*0x416eb6*/\n          v22 = v9; /*0x416ebb*/\n          if ( !v9 ) /*0x416ec3*/\n            goto LABEL_63; /*0x416ec3*/\n          sub_4100C0(54, v21, 2); /*0x416ed6*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x416edb*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x416ee2*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_CreateNetwork::`vftable'; /*0x416ee9*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_CreateNetwork::`vftable'; /*0x416eef*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_CreateNetwork::`vftable'; /*0x416ef6*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_CreateNetwork::`vftable'; /*0x416efd*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_CreateNetwork::`vftable'; /*0x416f04*/\n          *((_DWORD *)v9 + 14) = 0; /*0x416f0b*/\n          *((_DWORD *)v9 + 15) = 0; /*0x416f12*/\n          *((_DWORD *)v9 + 16) = 0; /*0x416f19*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x416f20*/\n          goto LABEL_64; /*0x416f24*/\n        case 2: /*0x416d7a*/\n          v9 = (char *)operator new(0x50u, (const struct std::nothrow_t *)&unk_522C5C); /*0x4170a6*/\n          v22 = v9; /*0x4170ab*/\n          if ( !v9 ) /*0x4170b3*/\n            goto LABEL_63; /*0x4170b3*/\n          sub_4100C0(54, v21, 5); /*0x4170c6*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x4170cb*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x4170d5*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_JoinNetwork::`vftable'; /*0x4170dc*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_JoinNetwork::`vftable'; /*0x4170e2*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_JoinNetwork::`vftable'; /*0x4170e9*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_JoinNetwork::`vftable'; /*0x4170f0*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_JoinNetwork::`vftable'; /*0x4170f7*/\n          sub_47A160(v9 + 56); /*0x4170fe*/\n          *((_OWORD *)v9 + 4) = xmmword_521710; /*0x41710a*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x41710e*/\n          goto LABEL_64; /*0x417112*/\n        case 3: /*0x416d7a*/\n          v9 = (char *)operator new(0x48u, (const struct std::nothrow_t *)&unk_522C5C); /*0x417189*/\n          v22 = v9; /*0x41718e*/\n          if ( !v9 ) /*0x417196*/\n            goto LABEL_63; /*0x417196*/\n          sub_4100C0(54, v21, 7); /*0x4171a9*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x4171ae*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x4171b5*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_LeaveNetwork::`vftable'; /*0x4171bc*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_LeaveNetwork::`vftable'; /*0x4171c2*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_LeaveNetwork::`vftable'; /*0x4171c9*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_LeaveNetwork::`vftable'; /*0x4171d0*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_LeaveNetwork::`vftable'; /*0x4171d7*/\n          *(_OWORD *)(v9 + 56) = xmmword_521710; /*0x4171e5*/\n          goto LABEL_52; /*0x4171e9*/\n        case 4: /*0x416d7a*/\n          v9 = (char *)operator new(0x50u, (const struct std::nothrow_t *)&unk_522C5C); /*0x417123*/\n          v22 = v9; /*0x417128*/\n          if ( !v9 ) /*0x417130*/\n            goto LABEL_63; /*0x417130*/\n          sub_4100C0(54, v21, 6); /*0x417143*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x417148*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x41714f*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_KickNode::`vftable'; /*0x417156*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_KickNode::`vftable'; /*0x41715c*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_KickNode::`vftable'; /*0x417163*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_KickNode::`vftable'; /*0x41716a*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_KickNode::`vftable'; /*0x417171*/\n          goto LABEL_51; /*0x417178*/\n        case 5: /*0x416d7a*/\n          v9 = (char *)operator new(0x58u, (const struct std::nothrow_t *)&unk_522C5C); /*0x416d8d*/\n          v22 = v9; /*0x416d92*/\n          if ( !v9 ) /*0x416d9a*/\n            goto LABEL_63; /*0x416d9a*/\n          sub_4100C0(54, v21, 1); /*0x416dad*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x416db2*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dbc*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dc3*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dc9*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dd0*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dd7*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_AbstractManageNetwork::`vftable'; /*0x416dde*/\n          sub_4C6880(v9 + 56); /*0x416de5*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_ApproveJoin::`vftable'; /*0x416dea*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_ApproveJoin::`vftable'; /*0x416df0*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_ApproveJoin::`vftable'; /*0x416df7*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_ApproveJoin::`vftable'; /*0x416dfe*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_ApproveJoin::`vftable'; /*0x416e05*/\n          *((_OWORD *)v9 + 4) = xmmword_521710; /*0x416e13*/\n          *((_DWORD *)v9 + 20) = 0; /*0x416e17*/\n          *((_DWORD *)v9 + 21) = 0; /*0x416e1e*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x416e25*/\n          goto LABEL_64; /*0x416e29*/\n        case 6: /*0x416d7a*/\n          v9 = (char *)operator new(0x78u, (const struct std::nothrow_t *)&unk_522C5C); /*0x417260*/\n          v22 = v9; /*0x417265*/\n          if ( !v9 ) /*0x41726d*/\n            goto LABEL_63; /*0x41726d*/\n          sub_4100C0(54, v21, 13); /*0x41727c*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x417281*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x41728b*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_UpdateNetwork::`vftable'; /*0x417292*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_UpdateNetwork::`vftable'; /*0x417298*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_UpdateNetwork::`vftable'; /*0x41729f*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_UpdateNetwork::`vftable'; /*0x4172a6*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_UpdateNetwork::`vftable'; /*0x4172ad*/\n          sub_47A160(v9 + 56); /*0x4172b4*/\n          sub_4C46C0(v9 + 64); /*0x4172bc*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x4172c1*/\n          goto LABEL_64; /*0x4172c5*/\n        case 7: /*0x416d7a*/\n          v9 = (char *)operator new(0x48u, (const struct std::nothrow_t *)&unk_522C5C); /*0x416f35*/\n          v22 = v9; /*0x416f3a*/\n          if ( !v9 ) /*0x416f42*/\n            goto LABEL_63; /*0x416f42*/\n          sub_4100C0(54, v21, 3); /*0x416f55*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x416f5a*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x416f61*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_DeleteNetwork::`vftable'; /*0x416f68*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_DeleteNetwork::`vftable'; /*0x416f6e*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_DeleteNetwork::`vftable'; /*0x416f75*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_DeleteNetwork::`vftable'; /*0x416f7c*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_DeleteNetwork::`vftable'; /*0x416f83*/\n          *(_OWORD *)(v9 + 56) = xmmword_521710; /*0x416f91*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x416f95*/\n          goto LABEL_64; /*0x416f99*/\n        case 8: /*0x416d7a*/\n          v9 = (char *)operator new(0x50u, (const struct std::nothrow_t *)&unk_522C5C); /*0x417023*/\n          v22 = v9; /*0x417028*/\n          if ( !v9 ) /*0x417030*/\n            goto LABEL_63; /*0x417030*/\n          sub_4100C0(54, v21, 4); /*0x417043*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x417048*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x41704f*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_GrantAdmin::`vftable'; /*0x417056*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_GrantAdmin::`vftable'; /*0x41705c*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_GrantAdmin::`vftable'; /*0x417063*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_GrantAdmin::`vftable'; /*0x41706a*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_GrantAdmin::`vftable'; /*0x417071*/\n          goto LABEL_51; /*0x417071*/\n        case 9: /*0x416d7a*/\n          v9 = (char *)operator new(0x50u, (const struct std::nothrow_t *)&unk_522C5C); /*0x4171fa*/\n          v22 = v9; /*0x4171ff*/\n          if ( !v9 ) /*0x417207*/\n            goto LABEL_63; /*0x417207*/\n          sub_4100C0(54, v21, 10); /*0x41721a*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x41721f*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x417226*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_RevokeAdmin::`vftable'; /*0x41722d*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_RevokeAdmin::`vftable'; /*0x417233*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_RevokeAdmin::`vftable'; /*0x41723a*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_RevokeAdmin::`vftable'; /*0x417241*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_RevokeAdmin::`vftable'; /*0x417248*/\nLABEL_51:\n          *(_OWORD *)(v9 + 56) = xmmword_521710; /*0x417078*/\n          *((_DWORD *)v9 + 18) = 0; /*0x417083*/\n          *((_DWORD *)v9 + 19) = 0; /*0x41708a*/\nLABEL_52:\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x417091*/\n          goto LABEL_64; /*0x417095*/\n        case 10: /*0x416d7a*/\n          v9 = (char *)operator new(0x48u, (const struct std::nothrow_t *)&unk_522C5C); /*0x416e3a*/\n          v22 = v9; /*0x416e3f*/\n          if ( !v9 ) /*0x416e47*/\n            goto LABEL_63; /*0x416e47*/\n          sub_4100C0(54, v21, 16); /*0x416e5a*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x416e5f*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x416e69*/\n          *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_ChangeAlias::`vftable'; /*0x416e70*/\n          *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_ChangeAlias::`vftable'; /*0x416e76*/\n          *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_ChangeAlias::`vftable'; /*0x416e7d*/\n          *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_ChangeAlias::`vftable'; /*0x416e84*/\n          *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_ChangeAlias::`vftable'; /*0x416e8b*/\n          sub_471BC0(v9 + 56); /*0x416e92*/\n          *((_DWORD *)v9 + 14) = &FamRT::CUniversalString::`vftable'; /*0x416e97*/\n          _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x416e9e*/\n          goto LABEL_64; /*0x416ea5*/\n        case 11: /*0x416d7a*/\n          v9 = (char *)operator new(0x4Cu, (const struct std::nothrow_t *)&unk_522C5C); /*0x416faa*/\n          v22 = v9; /*0x416faf*/\n          if ( v9 ) /*0x416fb7*/\n          {\n            sub_4100C0(54, v21, 26); /*0x416fca*/\n            *((_DWORD *)v9 + 12) = &ControlSvc::msg::ITaskCompleted::`vftable'; /*0x416fcf*/\n            *((_DWORD *)v9 + 13) = &ControlSvc::msg::ITaskCompleted_AbstractManageNetwork::`vftable'; /*0x416fd6*/\n            *(_DWORD *)v9 = &ControlSvc::msg::CTaskCompleted_EnableNetwork::`vftable'; /*0x416fdd*/\n            *((_DWORD *)v9 + 4) = &ControlSvc::msg::CTaskCompleted_EnableNetwork::`vftable'; /*0x416fe3*/\n            *((_DWORD *)v9 + 8) = &ControlSvc::msg::CTaskCompleted_EnableNetwork::`vftable'; /*0x416fea*/\n            *((_DWORD *)v9 + 12) = &ControlSvc::msg::CTaskCompleted_EnableNetwork::`vftable'; /*0x416ff1*/\n            *((_DWORD *)v9 + 13) = &ControlSvc::msg::CTaskCompleted_EnableNetwork::`vftable'; /*0x416ff8*/\n            v9[72] = 0; /*0x417006*/\n            *(_OWORD *)(v9 + 56) = xmmword_521710; /*0x41700a*/\n            _InterlockedIncrement((volatile signed __int32 *)v9 + 1); /*0x41700e*/\n          }\n          else\n          {\nLABEL_63:\n            v9 = nullptr; /*0x4172c7*/\n          }\nLABEL_64:\n          v10 = _InterlockedExchange(&v49, (__int32)v9); /*0x4172c9*/\n          if ( v10 && _InterlockedDecrement((volatile signed __int32 *)(v10 + 4)) < 0 ) /*0x4172da*/\n          {\n            LastError = GetLastError(); /*0x4172e9*/\n            (**(void (__thiscall ***)(__int32, int))v10)(v10, 1); /*0x4172eb*/\n            SetLastError(LastError); /*0x4172f3*/\n          }\n          break; /*0x4172f3*/\n        default:\n          break;\n      }\n      if ( _InterlockedCompareExchange(&v49, 0, 0) /*0x41731b*/\n        && (v12 = _InterlockedCompareExchange(&v49, 0, 0) + 52,\n            (*(int (__thiscall **)(signed __int32, _OWORD *))(*(_DWORD *)v12 + 4))(v12, v24)) )\n      {\n        (*(void (__thiscall **)(_DWORD *, signed __int32, int))(v17[2] + 12))( /*0x41733a*/\n          v17 + 2,\n          _InterlockedCompareExchange(&v49, 0, 0),\n          1);\n        v23 = 1; /*0x41733d*/\n      }\n      else\n      {\n        v23 = 0; /*0x417346*/\n      }\n      v13 = _InterlockedExchange(&v49, 0); /*0x417352*/\n      if ( v13 && _InterlockedDecrement((volatile signed __int32 *)(v13 + 4)) < 0 ) /*0x417361*/\n      {\n        v14 = GetLastError(); /*0x41736f*/\n        (**(void (__thiscall ***)(__int32, int))v13)(v13, 1); /*0x417371*/\n        SetLastError(v14); /*0x417374*/\n      }\n    }\n  }\n  else\n  {\n    v23 = 0; /*0x41737c*/\n  }\n  nullsub_1(v24); /*0x417389*/\n  return v23; /*0x417394*/\n}",
+    "refs": [
+      {
+        "addr": "0x473b00",
+        "name": "sub_473B00"
+      },
+      {
+        "addr": "0x519d6c",
+        "name": "??_7CGuiRequest@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x4e5a66",
+        "name": "??2@YAPAXIABUnothrow_t@std@@@Z"
+      },
+      {
+        "addr": "0x522c5c",
+        "name": "unk_522C5C"
+      },
+      {
+        "addr": "0x4117d0",
+        "name": "sub_4117D0"
+      },
+      {
+        "addr": "0x415e70",
+        "name": "sub_415E70"
+      },
+      {
+        "addr": "0x410070",
+        "name": "sub_410070"
+      },
+      {
+        "addr": "0x40fd80",
+        "name": "sub_40FD80"
+      },
+      {
+        "addr": "0x4104b0",
+        "name": "sub_4104B0"
+      },
+      {
+        "addr": "0x4100c0",
+        "name": "sub_4100C0"
+      },
+      {
+        "addr": "0x51a648",
+        "name": "??_7ITaskCompleted@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a680",
+        "name": "??_7ITaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a734",
+        "name": "??_7CTaskCompleted_CreateNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a73c",
+        "name": "??_7CTaskCompleted_CreateNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a744",
+        "name": "??_7CTaskCompleted_CreateNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a754",
+        "name": "??_7CTaskCompleted_CreateNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a760",
+        "name": "??_7CTaskCompleted_CreateNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a814",
+        "name": "??_7CTaskCompleted_JoinNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a81c",
+        "name": "??_7CTaskCompleted_JoinNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a824",
+        "name": "??_7CTaskCompleted_JoinNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a834",
+        "name": "??_7CTaskCompleted_JoinNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a840",
+        "name": "??_7CTaskCompleted_JoinNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x47a160",
+        "name": "sub_47A160"
+      },
+      {
+        "addr": "0x521710",
+        "name": "xmmword_521710"
+      },
+      {
+        "addr": "0x51a884",
+        "name": "??_7CTaskCompleted_LeaveNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a88c",
+        "name": "??_7CTaskCompleted_LeaveNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a894",
+        "name": "??_7CTaskCompleted_LeaveNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a8a4",
+        "name": "??_7CTaskCompleted_LeaveNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a8b0",
+        "name": "??_7CTaskCompleted_LeaveNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a84c",
+        "name": "??_7CTaskCompleted_KickNode@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a854",
+        "name": "??_7CTaskCompleted_KickNode@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a85c",
+        "name": "??_7CTaskCompleted_KickNode@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a86c",
+        "name": "??_7CTaskCompleted_KickNode@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a878",
+        "name": "??_7CTaskCompleted_KickNode@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a68c",
+        "name": "??_7CTaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a694",
+        "name": "??_7CTaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a69c",
+        "name": "??_7CTaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a6ac",
+        "name": "??_7CTaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a6b8",
+        "name": "??_7CTaskCompleted_AbstractManageNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x4c6880",
+        "name": "sub_4C6880"
+      },
+      {
+        "addr": "0x51a6c4",
+        "name": "??_7CTaskCompleted_ApproveJoin@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a6cc",
+        "name": "??_7CTaskCompleted_ApproveJoin@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a6d4",
+        "name": "??_7CTaskCompleted_ApproveJoin@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a6e4",
+        "name": "??_7CTaskCompleted_ApproveJoin@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a6f0",
+        "name": "??_7CTaskCompleted_ApproveJoin@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a8f4",
+        "name": "??_7CTaskCompleted_UpdateNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a8fc",
+        "name": "??_7CTaskCompleted_UpdateNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a904",
+        "name": "??_7CTaskCompleted_UpdateNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a914",
+        "name": "??_7CTaskCompleted_UpdateNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a920",
+        "name": "??_7CTaskCompleted_UpdateNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x4c46c0",
+        "name": "sub_4C46C0"
+      },
+      {
+        "addr": "0x51a76c",
+        "name": "??_7CTaskCompleted_DeleteNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a774",
+        "name": "??_7CTaskCompleted_DeleteNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a77c",
+        "name": "??_7CTaskCompleted_DeleteNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a78c",
+        "name": "??_7CTaskCompleted_DeleteNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a798",
+        "name": "??_7CTaskCompleted_DeleteNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a7dc",
+        "name": "??_7CTaskCompleted_GrantAdmin@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a7e4",
+        "name": "??_7CTaskCompleted_GrantAdmin@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a7ec",
+        "name": "??_7CTaskCompleted_GrantAdmin@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a7fc",
+        "name": "??_7CTaskCompleted_GrantAdmin@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a808",
+        "name": "??_7CTaskCompleted_GrantAdmin@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a8bc",
+        "name": "??_7CTaskCompleted_RevokeAdmin@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a8c4",
+        "name": "??_7CTaskCompleted_RevokeAdmin@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a8cc",
+        "name": "??_7CTaskCompleted_RevokeAdmin@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a8dc",
+        "name": "??_7CTaskCompleted_RevokeAdmin@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a8e8",
+        "name": "??_7CTaskCompleted_RevokeAdmin@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a6fc",
+        "name": "??_7CTaskCompleted_ChangeAlias@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x51a704",
+        "name": "??_7CTaskCompleted_ChangeAlias@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a70c",
+        "name": "??_7CTaskCompleted_ChangeAlias@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a71c",
+        "name": "??_7CTaskCompleted_ChangeAlias@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a728",
+        "name": "??_7CTaskCompleted_ChangeAlias@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x471bc0",
+        "name": "sub_471BC0"
+      },
+      {
+        "addr": "0x519d74",
+        "name": "??_7CUniversalString@FamRT@@6B@"
+      },
+      {
+        "addr": "0x51a7a4",
+        "name": "??_7CTaskCompleted_EnableNetwork@msg@ControlSvc@@6B@_0"
+      },
+      {
+        "addr": "0x51a7ac",
+        "name": "??_7CTaskCompleted_EnableNetwork@msg@ControlSvc@@6B@_1"
+      },
+      {
+        "addr": "0x51a7b4",
+        "name": "??_7CTaskCompleted_EnableNetwork@msg@ControlSvc@@6B@_2"
+      },
+      {
+        "addr": "0x51a7c4",
+        "name": "??_7CTaskCompleted_EnableNetwork@msg@ControlSvc@@6B@_3"
+      },
+      {
+        "addr": "0x51a7d0",
+        "name": "??_7CTaskCompleted_EnableNetwork@msg@ControlSvc@@6B@"
+      },
+      {
+        "addr": "0x517280",
+        "name": "GetLastError"
+      },
+      {
+        "addr": "0x517260",
+        "name": "SetLastError"
+      },
+      {
+        "addr": "0x40f6c0",
+        "name": "sub_40F6C0"
+      },
+      {
+        "addr": "0x4018d0",
+        "name": "sub_4018D0"
+      },
+      {
+        "addr": "0x40f720",
+        "name": "sub_40F720"
+      },
+      {
+        "addr": "0x408650",
+        "name": "sub_408650"
+      },
+      {
+        "addr": "0x408590",
+        "name": "sub_408590"
+      },
+      {
+        "addr": "0x415dc0",
+        "name": "sub_415DC0"
+      },
+      {
+        "addr": "0x473b70",
+        "name": "nullsub_1"
+      }
+    ]
+  }
+}

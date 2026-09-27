@@ -1,0 +1,3354 @@
+{
+  "0x10017ae0": {
+    "code": "bool __stdcall sub_10017AE0(int a1, int a2, int a3, int a4, int a5)\n{\n  int v5; // eax\n  unsigned __int8 v6; // al\n  int v7; // eax\n  int v8; // eax\n  __int64 v9; // rax\n  bool v10; // zf\n  int v11; // eax\n  DWORD LastError; // esi\n  void (__thiscall ***v13)(_DWORD); // ecx\n  bool v15; // bl\n  void *Src; // [esp+10h] [ebp-64h] BYREF\n  _BYTE v17[44]; // [esp+14h] [ebp-60h] BYREF\n  int v18; // [esp+40h] [ebp-34h] BYREF\n  __int64 v19; // [esp+44h] [ebp-30h] BYREF\n  __int64 v20; // [esp+4Ch] [ebp-28h] BYREF\n  size_t Size; // [esp+54h] [ebp-20h] BYREF\n  int v22; // [esp+58h] [ebp-1Ch] BYREF\n  __int64 v23; // [esp+5Ch] [ebp-18h] BYREF\n  int v24; // [esp+70h] [ebp-4h]\n\n  if ( !a1 || !(unsigned __int8)sub_100ED690(a2) )\n    return 0;\n  memset(v17, 0, sizeof(v17));\n  sub_100A6340(4892, 0);\n  v5 = sub_100ED5E0(a2);\n  if ( !sub_100A6CD0(50332422, v5) )\n    goto LABEL_19;\n  v6 = sub_100ED680(a2);\n  if ( !sub_100A6440(184550207, v6, 0) )\n    goto LABEL_19;\n  if ( (unsigned __int8)sub_100ED670(a2) )\n  {\n    v19 = 0;\n    sub_100A9960(&v19);\n    sub_100ED5F0(a2);\n    if ( !sub_100DC300(&v19) )\n    {\nLABEL_18:\n      sub_100A9970(&v19);\nLABEL_19:\n      sub_100147B0();\n      return 0;\n    }\n    v23 = 0;\n    sub_100A9960(&v23);\n    v7 = sub_100ED5E0(a2);\n    v8 = sub_100A5AB0(v7);\n    v9 = sub_100ED6A0(v8);\n    if ( !sub_100DD160(v9, HIDWORD(v9), &v19) )\n    {\nLABEL_17:\n      sub_100A9970(&v23);\n      goto LABEL_18;\n    }\n    v20 = 0;\n    sub_100A9960(&v20);\n    v22 = 0;\n    v18 = 0;\n    v10 = *(_DWORD *)(a1 + 180) == 0;\n    v24 = 0;\n    if ( v10 || (sub_100A9C60(), sub_100DD5C0(a1)) )\n    {\nLABEL_16:\n      sub_100A9970(&v20);\n      goto LABEL_17;\n    }\n    Src = nullptr;\n    Size = 0;\n    v11 = sub_100A9CD0(&v20);\n    if ( !(*(int (__stdcall **)(_DWORD, _DWORD, int, void **, size_t *, int *, int *))(a1 + 56))(\n            *(_DWORD *)(a1 + 180),\n            v20,\n            v11,\n            &Src,\n            &Size,\n            &v22,\n            &v18) )\n    {\n      if ( !_InterlockedCompareExchange((volatile signed __int32 *)(a1 + 4), 999999, 0) )\n      {\n        _InterlockedExchange((volatile __int32 *)(a1 + 8), 2);\n        _InterlockedExchange((volatile __int32 *)(a1 + 4), 3);\n      }\n      if ( !_InterlockedCompareExchange((volatile signed __int32 *)(a1 + 16), 1, 0) )\n      {\n        LastError = GetLastError();\n        v13 = (void (__thiscall ***)(_DWORD))(a1 + *(_DWORD *)(*(_DWORD *)(a1 + 12) + 4) + 12);\n        (**v13)(v13);\n        SetLastError(LastError);\n      }\n      v22 = 0;\n      goto LABEL_16;\n    }\n    if ( Src )\n    {\n      if ( !sub_100A9A30(Src, Size) )\n      {\n        sub_10005C80(6);\n        (*(void (__stdcall **)(void *))(a1 + 80))(Src);\n        goto LABEL_16;\n      }\n      if ( Src )\n        (*(void (__stdcall **)(void *))(a1 + 80))(Src);\n    }\n    if ( !sub_100A69F0(167772942, &v23) )\n      goto LABEL_16;\n    sub_100A9970(&v20);\n    sub_100A9970(&v23);\n    sub_100A9970(&v19);\n  }\n  if ( a3 && !sub_100A6BE0(33555264, a3, 0, 0)\n    || a4 && !sub_100A6B70(16778058, a4, 0)\n    || a5 && !sub_100A6B70(16778174, a5, 0) )\n  {\n    goto LABEL_19;\n  }\n  v15 = sub_100A69A0(v17) != 0;\n  sub_100147B0();\n  return v15;\n}\n",
+    "asm": [
+      [
+        "0x10017ae0",
+        "push    ebp"
+      ],
+      [
+        "0x10017ae1",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x10017ae3",
+        "push    0FFFFFFFFh"
+      ],
+      [
+        "0x10017ae5",
+        "push    offset SEH_10017AE0"
+      ],
+      [
+        "0x10017aea",
+        "mov     eax, large fs:0"
+      ],
+      [
+        "0x10017af0",
+        "push    eax"
+      ],
+      [
+        "0x10017af1",
+        "sub     esp, 58h"
+      ],
+      [
+        "0x10017af4",
+        "mov     eax, ___security_cookie"
+      ],
+      [
+        "0x10017af9",
+        "xor     eax, ebp"
+      ],
+      [
+        "0x10017afb",
+        "mov     [ebp+var_10], eax"
+      ],
+      [
+        "0x10017afe",
+        "push    ebx"
+      ],
+      [
+        "0x10017aff",
+        "push    esi"
+      ],
+      [
+        "0x10017b00",
+        "push    edi"
+      ],
+      [
+        "0x10017b01",
+        "push    eax"
+      ],
+      [
+        "0x10017b02",
+        "lea     eax, [ebp+var_C]"
+      ],
+      [
+        "0x10017b05",
+        "mov     large fs:0, eax"
+      ],
+      [
+        "0x10017b0b",
+        "mov     ebx, ecx"
+      ],
+      [
+        "0x10017b0d",
+        "mov     edi, [ebp+arg_0]"
+      ],
+      [
+        "0x10017b10",
+        "mov     esi, [ebp+arg_4]"
+      ],
+      [
+        "0x10017b13",
+        "test    edi, edi"
+      ],
+      [
+        "0x10017b15",
+        "jz      loc_10017DDC"
+      ],
+      [
+        "0x10017b1b",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017b1d",
+        "call    sub_100ED690"
+      ],
+      [
+        "0x10017b22",
+        "test    al, al"
+      ],
+      [
+        "0x10017b24",
+        "jz      loc_10017DDC"
+      ],
+      [
+        "0x10017b2a",
+        "push    2Ch ; ','; Size"
+      ],
+      [
+        "0x10017b2c",
+        "lea     eax, [ebp+var_60]"
+      ],
+      [
+        "0x10017b2f",
+        "push    0; Val"
+      ],
+      [
+        "0x10017b31",
+        "push    eax; void *"
+      ],
+      [
+        "0x10017b32",
+        "call    _memset"
+      ],
+      [
+        "0x10017b37",
+        "add     esp, 0Ch"
+      ],
+      [
+        "0x10017b3a",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017b3d",
+        "push    0"
+      ],
+      [
+        "0x10017b3f",
+        "push    131Ch"
+      ],
+      [
+        "0x10017b44",
+        "call    sub_100A6340"
+      ],
+      [
+        "0x10017b49",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017b4b",
+        "call    sub_100ED5E0"
+      ],
+      [
+        "0x10017b50",
+        "push    eax"
+      ],
+      [
+        "0x10017b51",
+        "push    3000306h"
+      ],
+      [
+        "0x10017b56",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017b59",
+        "call    sub_100A6CD0"
+      ],
+      [
+        "0x10017b5e",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017b60",
+        "jz      loc_10017CEB"
+      ],
+      [
+        "0x10017b66",
+        "push    0"
+      ],
+      [
+        "0x10017b68",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017b6a",
+        "call    sub_100ED680"
+      ],
+      [
+        "0x10017b6f",
+        "movzx   eax, al"
+      ],
+      [
+        "0x10017b72",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017b75",
+        "push    eax"
+      ],
+      [
+        "0x10017b76",
+        "push    0B00033Fh"
+      ],
+      [
+        "0x10017b7b",
+        "call    sub_100A6440"
+      ],
+      [
+        "0x10017b80",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017b82",
+        "jz      loc_10017CEB"
+      ],
+      [
+        "0x10017b88",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017b8a",
+        "call    sub_100ED670"
+      ],
+      [
+        "0x10017b8f",
+        "test    al, al"
+      ],
+      [
+        "0x10017b91",
+        "jz      loc_10017D60"
+      ],
+      [
+        "0x10017b97",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x10017b9a",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017b9d",
+        "movlpd  [ebp+var_30], xmm0"
+      ],
+      [
+        "0x10017ba2",
+        "call    sub_100A9960"
+      ],
+      [
+        "0x10017ba7",
+        "lea     eax, [ebp+var_30]"
+      ],
+      [
+        "0x10017baa",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017bac",
+        "push    eax"
+      ],
+      [
+        "0x10017bad",
+        "call    sub_100ED5F0"
+      ],
+      [
+        "0x10017bb2",
+        "mov     ecx, eax"
+      ],
+      [
+        "0x10017bb4",
+        "call    sub_100DC300"
+      ],
+      [
+        "0x10017bb9",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017bbb",
+        "jz      loc_10017CE3"
+      ],
+      [
+        "0x10017bc1",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x10017bc4",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10017bc7",
+        "movlpd  [ebp+var_18], xmm0"
+      ],
+      [
+        "0x10017bcc",
+        "call    sub_100A9960"
+      ],
+      [
+        "0x10017bd1",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017bd3",
+        "call    sub_100ED5E0"
+      ],
+      [
+        "0x10017bd8",
+        "mov     ecx, eax"
+      ],
+      [
+        "0x10017bda",
+        "call    sub_100A5AB0"
+      ],
+      [
+        "0x10017bdf",
+        "push    eax"
+      ],
+      [
+        "0x10017be0",
+        "call    sub_100ED6A0"
+      ],
+      [
+        "0x10017be5",
+        "add     esp, 4"
+      ],
+      [
+        "0x10017be8",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017beb",
+        "push    ecx"
+      ],
+      [
+        "0x10017bec",
+        "push    edx"
+      ],
+      [
+        "0x10017bed",
+        "push    eax"
+      ],
+      [
+        "0x10017bee",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10017bf0",
+        "call    sub_100DD160"
+      ],
+      [
+        "0x10017bf5",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017bf7",
+        "jz      loc_10017CDB"
+      ],
+      [
+        "0x10017bfd",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x10017c00",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10017c03",
+        "movlpd  [ebp+var_28], xmm0"
+      ],
+      [
+        "0x10017c08",
+        "call    sub_100A9960"
+      ],
+      [
+        "0x10017c0d",
+        "mov     [ebp+var_1C], 0"
+      ],
+      [
+        "0x10017c14",
+        "mov     [ebp+var_34], 0"
+      ],
+      [
+        "0x10017c1b",
+        "cmp     dword ptr [edi+0B4h], 0"
+      ],
+      [
+        "0x10017c22",
+        "mov     [ebp+var_4], 0"
+      ],
+      [
+        "0x10017c29",
+        "jz      loc_10017CD3"
+      ],
+      [
+        "0x10017c2f",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10017c32",
+        "call    sub_100A9C60"
+      ],
+      [
+        "0x10017c37",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10017c39",
+        "call    sub_100DD5C0"
+      ],
+      [
+        "0x10017c3e",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017c40",
+        "jnz     loc_10017CD3"
+      ],
+      [
+        "0x10017c46",
+        "mov     [ebp+Src], eax"
+      ],
+      [
+        "0x10017c49",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10017c4c",
+        "mov     [ebp+Size], eax"
+      ],
+      [
+        "0x10017c4f",
+        "lea     eax, [ebp+var_34]"
+      ],
+      [
+        "0x10017c52",
+        "push    eax"
+      ],
+      [
+        "0x10017c53",
+        "lea     eax, [ebp+var_1C]"
+      ],
+      [
+        "0x10017c56",
+        "push    eax"
+      ],
+      [
+        "0x10017c57",
+        "lea     eax, [ebp+Size]"
+      ],
+      [
+        "0x10017c5a",
+        "push    eax"
+      ],
+      [
+        "0x10017c5b",
+        "lea     eax, [ebp+Src]"
+      ],
+      [
+        "0x10017c5e",
+        "push    eax"
+      ],
+      [
+        "0x10017c5f",
+        "call    sub_100A9CD0"
+      ],
+      [
+        "0x10017c64",
+        "push    eax"
+      ],
+      [
+        "0x10017c65",
+        "push    dword ptr [ebp+var_28]"
+      ],
+      [
+        "0x10017c68",
+        "mov     eax, [edi+38h]"
+      ],
+      [
+        "0x10017c6b",
+        "push    dword ptr [edi+0B4h]"
+      ],
+      [
+        "0x10017c71",
+        "call    eax"
+      ],
+      [
+        "0x10017c73",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017c75",
+        "jnz     loc_10017CFC"
+      ],
+      [
+        "0x10017c7b",
+        "lea     edx, [edi+4]"
+      ],
+      [
+        "0x10017c7e",
+        "mov     ecx, 0F423Fh"
+      ],
+      [
+        "0x10017c83",
+        "lock cmpxchg [edx], ecx"
+      ],
+      [
+        "0x10017c87",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017c89",
+        "jnz     short loc_10017C9C"
+      ],
+      [
+        "0x10017c8b",
+        "mov     ecx, 2"
+      ],
+      [
+        "0x10017c90",
+        "lea     eax, [edx+4]"
+      ],
+      [
+        "0x10017c93",
+        "xchg    ecx, [eax]"
+      ],
+      [
+        "0x10017c95",
+        "mov     eax, 3"
+      ],
+      [
+        "0x10017c9a",
+        "xchg    eax, [edx]"
+      ],
+      [
+        "0x10017c9c",
+        "mov     edx, 1"
+      ],
+      [
+        "0x10017ca1",
+        "lea     ecx, [edi+10h]"
+      ],
+      [
+        "0x10017ca4",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10017ca6",
+        "lock cmpxchg [ecx], edx"
+      ],
+      [
+        "0x10017caa",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017cac",
+        "jnz     short loc_10017CCC"
+      ],
+      [
+        "0x10017cae",
+        "call    ds:GetLastError"
+      ],
+      [
+        "0x10017cb4",
+        "mov     ecx, [edi+0Ch]"
+      ],
+      [
+        "0x10017cb7",
+        "mov     esi, eax"
+      ],
+      [
+        "0x10017cb9",
+        "mov     ecx, [ecx+4]"
+      ],
+      [
+        "0x10017cbc",
+        "add     ecx, 0Ch"
+      ],
+      [
+        "0x10017cbf",
+        "add     ecx, edi"
+      ],
+      [
+        "0x10017cc1",
+        "mov     edx, [ecx]"
+      ],
+      [
+        "0x10017cc3",
+        "call    dword ptr [edx]"
+      ],
+      [
+        "0x10017cc5",
+        "push    esi; dwErrCode"
+      ],
+      [
+        "0x10017cc6",
+        "call    ds:SetLastError"
+      ],
+      [
+        "0x10017ccc",
+        "mov     [ebp+var_1C], 0"
+      ],
+      [
+        "0x10017cd3",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10017cd6",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017cdb",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10017cde",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017ce3",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017ce6",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017ceb",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017cee",
+        "xor     bl, bl"
+      ],
+      [
+        "0x10017cf0",
+        "call    sub_100147B0"
+      ],
+      [
+        "0x10017cf5",
+        "mov     al, bl"
+      ],
+      [
+        "0x10017cf7",
+        "jmp     loc_10017DDE"
+      ],
+      [
+        "0x10017cfc",
+        "mov     eax, [ebp+Src]"
+      ],
+      [
+        "0x10017cff",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d01",
+        "jz      short loc_10017D33"
+      ],
+      [
+        "0x10017d03",
+        "push    [ebp+Size]; Size"
+      ],
+      [
+        "0x10017d06",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10017d09",
+        "push    eax; Src"
+      ],
+      [
+        "0x10017d0a",
+        "call    sub_100A9A30"
+      ],
+      [
+        "0x10017d0f",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d11",
+        "jnz     short loc_10017D26"
+      ],
+      [
+        "0x10017d13",
+        "push    6"
+      ],
+      [
+        "0x10017d15",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10017d17",
+        "call    sub_10005C80"
+      ],
+      [
+        "0x10017d1c",
+        "push    [ebp+Src]"
+      ],
+      [
+        "0x10017d1f",
+        "mov     eax, [edi+50h]"
+      ],
+      [
+        "0x10017d22",
+        "call    eax"
+      ],
+      [
+        "0x10017d24",
+        "jmp     short loc_10017CD3"
+      ],
+      [
+        "0x10017d26",
+        "mov     eax, [ebp+Src]"
+      ],
+      [
+        "0x10017d29",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d2b",
+        "jz      short loc_10017D33"
+      ],
+      [
+        "0x10017d2d",
+        "push    eax"
+      ],
+      [
+        "0x10017d2e",
+        "mov     eax, [edi+50h]"
+      ],
+      [
+        "0x10017d31",
+        "call    eax"
+      ],
+      [
+        "0x10017d33",
+        "lea     eax, [ebp+var_18]"
+      ],
+      [
+        "0x10017d36",
+        "push    eax"
+      ],
+      [
+        "0x10017d37",
+        "push    0A00030Eh"
+      ],
+      [
+        "0x10017d3c",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017d3f",
+        "call    sub_100A69F0"
+      ],
+      [
+        "0x10017d44",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d46",
+        "jz      short loc_10017CD3"
+      ],
+      [
+        "0x10017d48",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10017d4b",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017d50",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10017d53",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017d58",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017d5b",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10017d60",
+        "mov     eax, [ebp+arg_8]"
+      ],
+      [
+        "0x10017d63",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d65",
+        "jz      short loc_10017D81"
+      ],
+      [
+        "0x10017d67",
+        "push    0"
+      ],
+      [
+        "0x10017d69",
+        "push    0"
+      ],
+      [
+        "0x10017d6b",
+        "push    eax"
+      ],
+      [
+        "0x10017d6c",
+        "push    2000340h"
+      ],
+      [
+        "0x10017d71",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017d74",
+        "call    sub_100A6BE0"
+      ],
+      [
+        "0x10017d79",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d7b",
+        "jz      loc_10017CEB"
+      ],
+      [
+        "0x10017d81",
+        "mov     eax, [ebp+arg_C]"
+      ],
+      [
+        "0x10017d84",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d86",
+        "jz      short loc_10017DA0"
+      ],
+      [
+        "0x10017d88",
+        "push    0"
+      ],
+      [
+        "0x10017d8a",
+        "push    eax"
+      ],
+      [
+        "0x10017d8b",
+        "push    100034Ah"
+      ],
+      [
+        "0x10017d90",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017d93",
+        "call    sub_100A6B70"
+      ],
+      [
+        "0x10017d98",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017d9a",
+        "jz      loc_10017CEB"
+      ],
+      [
+        "0x10017da0",
+        "mov     eax, [ebp+arg_10]"
+      ],
+      [
+        "0x10017da3",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017da5",
+        "jz      short loc_10017DBF"
+      ],
+      [
+        "0x10017da7",
+        "push    0"
+      ],
+      [
+        "0x10017da9",
+        "push    eax"
+      ],
+      [
+        "0x10017daa",
+        "push    10003BEh"
+      ],
+      [
+        "0x10017daf",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017db2",
+        "call    sub_100A6B70"
+      ],
+      [
+        "0x10017db7",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017db9",
+        "jz      loc_10017CEB"
+      ],
+      [
+        "0x10017dbf",
+        "lea     eax, [ebp+var_60]"
+      ],
+      [
+        "0x10017dc2",
+        "push    eax"
+      ],
+      [
+        "0x10017dc3",
+        "lea     ecx, [ebx+14h]"
+      ],
+      [
+        "0x10017dc6",
+        "call    sub_100A69A0"
+      ],
+      [
+        "0x10017dcb",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017dcd",
+        "lea     ecx, [ebp+var_60]"
+      ],
+      [
+        "0x10017dd0",
+        "setnz   bl"
+      ],
+      [
+        "0x10017dd3",
+        "call    sub_100147B0"
+      ],
+      [
+        "0x10017dd8",
+        "mov     al, bl"
+      ],
+      [
+        "0x10017dda",
+        "jmp     short loc_10017DDE"
+      ],
+      [
+        "0x10017ddc",
+        "xor     al, al"
+      ],
+      [
+        "0x10017dde",
+        "mov     ecx, [ebp+var_C]"
+      ],
+      [
+        "0x10017de1",
+        "mov     large fs:0, ecx"
+      ],
+      [
+        "0x10017de8",
+        "pop     ecx"
+      ],
+      [
+        "0x10017de9",
+        "pop     edi"
+      ],
+      [
+        "0x10017dea",
+        "pop     esi"
+      ],
+      [
+        "0x10017deb",
+        "pop     ebx"
+      ],
+      [
+        "0x10017dec",
+        "mov     ecx, [ebp+var_10]"
+      ],
+      [
+        "0x10017def",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x10017df1",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x10017df6",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x10017df8",
+        "pop     ebp"
+      ],
+      [
+        "0x10017df9",
+        "retn    14h"
+      ],
+      [
+        "0x100f2983",
+        "jmp     _terminate"
+      ],
+      [
+        "0x10107880",
+        "nop"
+      ],
+      [
+        "0x10107881",
+        "nop"
+      ],
+      [
+        "0x10107882",
+        "mov     edx, [esp-4+arg_4]"
+      ],
+      [
+        "0x10107886",
+        "lea     eax, [edx+0Ch]"
+      ],
+      [
+        "0x10107889",
+        "mov     ecx, [edx-68h]"
+      ],
+      [
+        "0x1010788c",
+        "xor     ecx, eax; StackCookie"
+      ],
+      [
+        "0x1010788e",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x10107893",
+        "mov     ecx, [edx-4]"
+      ],
+      [
+        "0x10107896",
+        "xor     ecx, eax; StackCookie"
+      ],
+      [
+        "0x10107898",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1010789d",
+        "mov     eax, offset stru_1016AB60"
+      ],
+      [
+        "0x101078a2",
+        "jmp     ___CxxFrameHandler3"
+      ]
+    ]
+  },
+  "0x10017a20": {
+    "code": "bool __stdcall sub_10017A20(int a1, int a2)\n{\n  bool v2; // bl\n  _BYTE v4[44]; // [esp+8h] [ebp-30h] BYREF\n\n  if ( sub_100A9CE0(a1) )\n  {\n    memset(v4, 0, sizeof(v4));\n    sub_100A6340(4892, 0);\n    if ( sub_100A69F0(167772942, a1) && (!a2 || sub_100A6B70(16778174, a2, 0)) )\n    {\n      v2 = sub_100A69A0(v4) != 0;\n      sub_100147B0();\n      return v2;\n    }\n    sub_100147B0();\n  }\n  return 0;\n}\n",
+    "asm": [
+      [
+        "0x10017a20",
+        "push    ebp"
+      ],
+      [
+        "0x10017a21",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x10017a23",
+        "sub     esp, 30h"
+      ],
+      [
+        "0x10017a26",
+        "mov     eax, ___security_cookie"
+      ],
+      [
+        "0x10017a2b",
+        "xor     eax, ebp"
+      ],
+      [
+        "0x10017a2d",
+        "mov     [ebp+var_4], eax"
+      ],
+      [
+        "0x10017a30",
+        "push    esi"
+      ],
+      [
+        "0x10017a31",
+        "mov     esi, [ebp+arg_0]"
+      ],
+      [
+        "0x10017a34",
+        "push    edi"
+      ],
+      [
+        "0x10017a35",
+        "mov     edi, ecx"
+      ],
+      [
+        "0x10017a37",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10017a39",
+        "call    sub_100A9CE0"
+      ],
+      [
+        "0x10017a3e",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017a40",
+        "jz      loc_10017AC9"
+      ],
+      [
+        "0x10017a46",
+        "push    2Ch ; ','; Size"
+      ],
+      [
+        "0x10017a48",
+        "lea     eax, [ebp+var_30]"
+      ],
+      [
+        "0x10017a4b",
+        "push    0; Val"
+      ],
+      [
+        "0x10017a4d",
+        "push    eax; void *"
+      ],
+      [
+        "0x10017a4e",
+        "call    _memset"
+      ],
+      [
+        "0x10017a53",
+        "add     esp, 0Ch"
+      ],
+      [
+        "0x10017a56",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017a59",
+        "push    0"
+      ],
+      [
+        "0x10017a5b",
+        "push    131Ch"
+      ],
+      [
+        "0x10017a60",
+        "call    sub_100A6340"
+      ],
+      [
+        "0x10017a65",
+        "push    esi"
+      ],
+      [
+        "0x10017a66",
+        "push    0A00030Eh"
+      ],
+      [
+        "0x10017a6b",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017a6e",
+        "call    sub_100A69F0"
+      ],
+      [
+        "0x10017a73",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017a75",
+        "jz      short loc_10017AC1"
+      ],
+      [
+        "0x10017a77",
+        "mov     eax, [ebp+arg_4]"
+      ],
+      [
+        "0x10017a7a",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017a7c",
+        "jz      short loc_10017A92"
+      ],
+      [
+        "0x10017a7e",
+        "push    0"
+      ],
+      [
+        "0x10017a80",
+        "push    eax"
+      ],
+      [
+        "0x10017a81",
+        "push    10003BEh"
+      ],
+      [
+        "0x10017a86",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017a89",
+        "call    sub_100A6B70"
+      ],
+      [
+        "0x10017a8e",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017a90",
+        "jz      short loc_10017AC1"
+      ],
+      [
+        "0x10017a92",
+        "push    ebx"
+      ],
+      [
+        "0x10017a93",
+        "lea     eax, [ebp+var_30]"
+      ],
+      [
+        "0x10017a96",
+        "push    eax"
+      ],
+      [
+        "0x10017a97",
+        "lea     ecx, [edi+14h]"
+      ],
+      [
+        "0x10017a9a",
+        "call    sub_100A69A0"
+      ],
+      [
+        "0x10017a9f",
+        "test    eax, eax"
+      ],
+      [
+        "0x10017aa1",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017aa4",
+        "setnz   bl"
+      ],
+      [
+        "0x10017aa7",
+        "call    sub_100147B0"
+      ],
+      [
+        "0x10017aac",
+        "mov     al, bl"
+      ],
+      [
+        "0x10017aae",
+        "pop     ebx"
+      ],
+      [
+        "0x10017aaf",
+        "pop     edi"
+      ],
+      [
+        "0x10017ab0",
+        "pop     esi"
+      ],
+      [
+        "0x10017ab1",
+        "mov     ecx, [ebp+var_4]"
+      ],
+      [
+        "0x10017ab4",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x10017ab6",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x10017abb",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x10017abd",
+        "pop     ebp"
+      ],
+      [
+        "0x10017abe",
+        "retn    8"
+      ],
+      [
+        "0x10017ac1",
+        "lea     ecx, [ebp+var_30]"
+      ],
+      [
+        "0x10017ac4",
+        "call    sub_100147B0"
+      ],
+      [
+        "0x10017ac9",
+        "mov     ecx, [ebp+var_4]"
+      ],
+      [
+        "0x10017acc",
+        "xor     al, al"
+      ],
+      [
+        "0x10017ace",
+        "pop     edi"
+      ],
+      [
+        "0x10017acf",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x10017ad1",
+        "pop     esi"
+      ],
+      [
+        "0x10017ad2",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x10017ad7",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x10017ad9",
+        "pop     ebp"
+      ],
+      [
+        "0x10017ada",
+        "retn    8"
+      ]
+    ]
+  },
+  "0x1008c7f0": {
+    "code": "char __thiscall sub_1008C7F0(int this, int a2)\n{\n  signed __int32 v3; // ecx\n  signed __int32 v4; // ecx\n  int v5; // eax\n  _DWORD *v6; // esi\n  _OWORD v8[2]; // [esp+8h] [ebp-34h] BYREF\n  __int64 v9; // [esp+28h] [ebp-14h]\n  __int64 v10; // [esp+30h] [ebp-Ch] BYREF\n\n  if ( !a2 )\n    return 0;\n  memset(v8, 0, sizeof(v8));\n  v9 = 0;\n  sub_100A7610(v8);\n  if ( !sub_10001410(4892, v8)\n    || !sub_10084C40(33555203, this + 32)\n    || (v3 = _InterlockedExchangeAdd((volatile signed __int32 *)(this + 32), 0),\n        v3 == _InterlockedExchangeAdd(&dword_10186F84, 0))\n    && (v4 = _InterlockedExchangeAdd((volatile signed __int32 *)(this + 36), 0),\n        v4 == _InterlockedExchangeAdd(&dword_10186F88, 0))\n    && !sub_100A7950(167772942, this + 40, 0) )\n  {\n    nullsub_8(v8);\n    return 0;\n  }\n  v10 = 0;\n  v5 = sub_100171E0(33555264, &v10);\n  *(_DWORD *)(this + 48) = v5 != 0 ? v10 : 0;\n  if ( !sub_100190F0(16778058, this + 52) )\n    *(_DWORD *)(this + 52) = 0;\n  v6 = (_DWORD *)(this + 56);\n  if ( !sub_100190F0(16778174, v6) )\n    *v6 = 0;\n  nullsub_8(v8);\n  return 1;\n}\n",
+    "asm": [
+      [
+        "0x1008c7f0",
+        "push    ebp"
+      ],
+      [
+        "0x1008c7f1",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x1008c7f3",
+        "sub     esp, 34h"
+      ],
+      [
+        "0x1008c7f6",
+        "mov     eax, ___security_cookie"
+      ],
+      [
+        "0x1008c7fb",
+        "xor     eax, ebp"
+      ],
+      [
+        "0x1008c7fd",
+        "mov     [ebp+var_4], eax"
+      ],
+      [
+        "0x1008c800",
+        "push    esi"
+      ],
+      [
+        "0x1008c801",
+        "push    edi"
+      ],
+      [
+        "0x1008c802",
+        "mov     edi, [ebp+arg_0]"
+      ],
+      [
+        "0x1008c805",
+        "mov     esi, ecx"
+      ],
+      [
+        "0x1008c807",
+        "test    edi, edi"
+      ],
+      [
+        "0x1008c809",
+        "jz      loc_1008C911"
+      ],
+      [
+        "0x1008c80f",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x1008c812",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c815",
+        "movups  [ebp+var_34], xmm0"
+      ],
+      [
+        "0x1008c819",
+        "movups  [ebp+var_24], xmm0"
+      ],
+      [
+        "0x1008c81d",
+        "movq    [ebp+var_14], xmm0"
+      ],
+      [
+        "0x1008c822",
+        "call    sub_100A7610"
+      ],
+      [
+        "0x1008c827",
+        "lea     eax, [ebp+var_34]"
+      ],
+      [
+        "0x1008c82a",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x1008c82c",
+        "push    eax"
+      ],
+      [
+        "0x1008c82d",
+        "push    131Ch"
+      ],
+      [
+        "0x1008c832",
+        "call    sub_10001410"
+      ],
+      [
+        "0x1008c837",
+        "test    eax, eax"
+      ],
+      [
+        "0x1008c839",
+        "jz      loc_1008C909"
+      ],
+      [
+        "0x1008c83f",
+        "lea     edi, [esi+20h]"
+      ],
+      [
+        "0x1008c842",
+        "push    edi"
+      ],
+      [
+        "0x1008c843",
+        "push    2000303h"
+      ],
+      [
+        "0x1008c848",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c84b",
+        "call    sub_10084C40"
+      ],
+      [
+        "0x1008c850",
+        "test    eax, eax"
+      ],
+      [
+        "0x1008c852",
+        "jz      loc_1008C909"
+      ],
+      [
+        "0x1008c858",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x1008c85a",
+        "lock xadd [edi], ecx"
+      ],
+      [
+        "0x1008c85e",
+        "xor     eax, eax"
+      ],
+      [
+        "0x1008c860",
+        "mov     edx, offset dword_10186F84"
+      ],
+      [
+        "0x1008c865",
+        "lock xadd [edx], eax"
+      ],
+      [
+        "0x1008c869",
+        "cmp     ecx, eax"
+      ],
+      [
+        "0x1008c86b",
+        "jnz     short loc_1008C89C"
+      ],
+      [
+        "0x1008c86d",
+        "lea     eax, [edi+4]"
+      ],
+      [
+        "0x1008c870",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x1008c872",
+        "lock xadd [eax], ecx"
+      ],
+      [
+        "0x1008c876",
+        "xor     eax, eax"
+      ],
+      [
+        "0x1008c878",
+        "mov     edx, offset dword_10186F88"
+      ],
+      [
+        "0x1008c87d",
+        "lock xadd [edx], eax"
+      ],
+      [
+        "0x1008c881",
+        "cmp     ecx, eax"
+      ],
+      [
+        "0x1008c883",
+        "jnz     short loc_1008C89C"
+      ],
+      [
+        "0x1008c885",
+        "push    0"
+      ],
+      [
+        "0x1008c887",
+        "lea     eax, [esi+28h]"
+      ],
+      [
+        "0x1008c88a",
+        "push    eax"
+      ],
+      [
+        "0x1008c88b",
+        "push    0A00030Eh"
+      ],
+      [
+        "0x1008c890",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c893",
+        "call    sub_100A7950"
+      ],
+      [
+        "0x1008c898",
+        "test    eax, eax"
+      ],
+      [
+        "0x1008c89a",
+        "jz      short loc_1008C909"
+      ],
+      [
+        "0x1008c89c",
+        "lea     eax, [ebp+var_C]"
+      ],
+      [
+        "0x1008c89f",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x1008c8a2",
+        "push    eax"
+      ],
+      [
+        "0x1008c8a3",
+        "push    2000340h"
+      ],
+      [
+        "0x1008c8a8",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c8ab",
+        "movlpd  [ebp+var_C], xmm0"
+      ],
+      [
+        "0x1008c8b0",
+        "call    sub_100171E0"
+      ],
+      [
+        "0x1008c8b5",
+        "neg     eax"
+      ],
+      [
+        "0x1008c8b7",
+        "lea     edi, [esi+34h]"
+      ],
+      [
+        "0x1008c8ba",
+        "push    edi"
+      ],
+      [
+        "0x1008c8bb",
+        "sbb     eax, eax"
+      ],
+      [
+        "0x1008c8bd",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c8c0",
+        "and     eax, dword ptr [ebp+var_C]"
+      ],
+      [
+        "0x1008c8c3",
+        "push    100034Ah"
+      ],
+      [
+        "0x1008c8c8",
+        "mov     [esi+30h], eax"
+      ],
+      [
+        "0x1008c8cb",
+        "call    sub_100190F0"
+      ],
+      [
+        "0x1008c8d0",
+        "test    eax, eax"
+      ],
+      [
+        "0x1008c8d2",
+        "jnz     short loc_1008C8D6"
+      ],
+      [
+        "0x1008c8d4",
+        "mov     [edi], eax"
+      ],
+      [
+        "0x1008c8d6",
+        "add     esi, 38h ; '8'"
+      ],
+      [
+        "0x1008c8d9",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c8dc",
+        "push    esi"
+      ],
+      [
+        "0x1008c8dd",
+        "push    10003BEh"
+      ],
+      [
+        "0x1008c8e2",
+        "call    sub_100190F0"
+      ],
+      [
+        "0x1008c8e7",
+        "test    eax, eax"
+      ],
+      [
+        "0x1008c8e9",
+        "jnz     short loc_1008C8ED"
+      ],
+      [
+        "0x1008c8eb",
+        "mov     [esi], eax"
+      ],
+      [
+        "0x1008c8ed",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c8f0",
+        "call    nullsub_8"
+      ],
+      [
+        "0x1008c8f5",
+        "pop     edi"
+      ],
+      [
+        "0x1008c8f6",
+        "mov     al, 1"
+      ],
+      [
+        "0x1008c8f8",
+        "pop     esi"
+      ],
+      [
+        "0x1008c8f9",
+        "mov     ecx, [ebp+var_4]"
+      ],
+      [
+        "0x1008c8fc",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x1008c8fe",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1008c903",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x1008c905",
+        "pop     ebp"
+      ],
+      [
+        "0x1008c906",
+        "retn    4"
+      ],
+      [
+        "0x1008c909",
+        "lea     ecx, [ebp+var_34]"
+      ],
+      [
+        "0x1008c90c",
+        "call    nullsub_8"
+      ],
+      [
+        "0x1008c911",
+        "mov     ecx, [ebp+var_4]"
+      ],
+      [
+        "0x1008c914",
+        "xor     al, al"
+      ],
+      [
+        "0x1008c916",
+        "pop     edi"
+      ],
+      [
+        "0x1008c917",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x1008c919",
+        "pop     esi"
+      ],
+      [
+        "0x1008c91a",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1008c91f",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x1008c921",
+        "pop     ebp"
+      ],
+      [
+        "0x1008c922",
+        "retn    4"
+      ]
+    ]
+  },
+  "0x10090d30": {
+    "code": "char __thiscall sub_10090D30(int this, signed __int32 a2)\n{\n  signed __int32 v4; // ecx\n  signed __int32 v5; // ecx\n  int v6; // ecx\n  __int32 v7; // edi\n  signed __int32 v8; // eax\n  int v9; // ecx\n  __int32 v10; // edx\n  volatile __int32 *v11; // esi\n  int v12; // eax\n  DWORD LastError; // esi\n  void (__thiscall ***v14)(_DWORD); // ecx\n  char v15; // bl\n  int v16; // [esp+14h] [ebp-34h] BYREF\n  void *Src; // [esp+18h] [ebp-30h] BYREF\n  int v18; // [esp+1Ch] [ebp-2Ch] BYREF\n  __int64 v19; // [esp+20h] [ebp-28h] BYREF\n  size_t Size; // [esp+28h] [ebp-20h] BYREF\n  int v21; // [esp+2Ch] [ebp-1Ch] BYREF\n  signed __int32 v22; // [esp+30h] [ebp-18h] BYREF\n  signed __int32 v23[5]; // [esp+34h] [ebp-14h] BYREF\n\n  v23[0] = a2;\n  if ( !a2 )\n    return 0;\n  Size = a2 + 40;\n  v4 = _InterlockedExchangeAdd((volatile signed __int32 *)(a2 + 40), 0);\n  if ( v4 != _InterlockedExchangeAdd(&dword_10186F84, 0)\n    || (v5 = _InterlockedExchangeAdd((volatile signed __int32 *)(a2 + 44), 0),\n        v5 != _InterlockedExchangeAdd(&dword_10186F88, 0)) )\n  {\n    sub_1008DE30(a2 + 40);\n    return 1;\n  }\n  if ( *(_BYTE *)(this + 492) )\n  {\n    v22 = 6;\n    v23[0] = 40;\n    sub_1008DE30(&v22);\n    v6 = 0;\n    if ( _InterlockedExchangeAdd(&v22, 0) == 999999 )\n    {\n      while ( _InterlockedExchangeAdd(&v22, 0) == 999999 )\n      {\n        if ( (unsigned int)++v6 >= 0xA )\n        {\n          v7 = 8;\n          v16 = 1;\n          goto LABEL_11;\n        }\n      }\n    }\n    v7 = _InterlockedExchangeAdd(v23, 0);\nLABEL_11:\n    v8 = _InterlockedExchangeAdd(&v22, 0);\n    if ( v8 == 999999 )\n    {\n      v9 = 0;\n      while ( 1 )\n      {\n        v8 = _InterlockedExchangeAdd(&v22, 0);\n        if ( v8 != 999999 )\n          break;\n        if ( (unsigned int)++v9 >= 0xA )\n        {\n          v10 = 1;\n          goto LABEL_17;\n        }\n      }\n    }\n    _InterlockedExchangeAdd(v23, 0);\n    v10 = v8;\nLABEL_17:\n    v11 = (volatile __int32 *)Size;\n    if ( !_InterlockedCompareExchange((volatile signed __int32 *)Size, 999999, 0) )\n    {\n      _InterlockedExchange(v11 + 1, v7);\n      _InterlockedExchange(v11, v10);\n    }\n    sub_100DD2B0();\n    return 1;\n  }\n  v16 = *(_DWORD *)(a2 + 64);\n  if ( !(unsigned __int8)sub_1008FF80(&v16, this + 488) )\n  {\n    v19 = 0;\n    sub_100A9960(&v19);\n    v21 = 0;\n    v18 = 0;\n    v23[4] = 0;\n    if ( a2 == -48 )\n      goto LABEL_30;\n    if ( !*(_DWORD *)(this + 464) )\n      goto LABEL_30;\n    sub_100A9C60();\n    if ( sub_100DD5C0(this + 284) )\n      goto LABEL_30;\n    Src = nullptr;\n    Size = 0;\n    v12 = sub_100A9CD0(a2 + 48);\n    if ( !(*(int (__stdcall **)(_DWORD, _DWORD, int, void **, size_t *, int *, int *))(this + 340))(\n            *(_DWORD *)(this + 464),\n            *(_DWORD *)(a2 + 48),\n            v12,\n            &Src,\n            &Size,\n            &v21,\n            &v18) )\n    {\n      if ( !_InterlockedCompareExchange((volatile signed __int32 *)(this + 288), 999999, 0) )\n      {\n        _InterlockedExchange((volatile __int32 *)(this + 292), 2);\n        _InterlockedExchange((volatile __int32 *)(this + 288), 3);\n      }\n      if ( !_InterlockedCompareExchange((volatile signed __int32 *)(this + 300), 1, 0) )\n      {\n        LastError = GetLastError();\n        v14 = (void (__thiscall ***)(_DWORD))(this + 284 + *(_DWORD *)(*(_DWORD *)(this + 296) + 4) + 12);\n        (**v14)(v14);\n        SetLastError(LastError);\n      }\n      v21 = 0;\n      goto LABEL_30;\n    }\n    if ( Src )\n    {\n      if ( !sub_100A9A30(Src, Size) )\n      {\n        sub_10005C80(6);\n        (*(void (__stdcall **)(void *))(this + 364))(Src);\nLABEL_30:\n        v22 = 6;\n        v23[0] = 9;\n        sub_1008DE30(&v22);\n        sub_10090A50(&v22);\n        sub_100DD2B0();\nLABEL_31:\n        sub_100A9970(&v19);\n        return 1;\n      }\n      if ( Src )\n        (*(void (__stdcall **)(void *))(this + 364))(Src);\n    }\n    sub_1008DF10(v21);\n    if ( sub_100A9CE0(&v19) )\n    {\n      v15 = sub_10091080((volatile signed __int32 *)this, (int)&v19);\n      sub_100A9970(&v19);\n      return v15;\n    }\n    if ( v21 )\n    {\n      sub_100DD2B0();\n      sub_100A9970(&v19);\n      return 1;\n    }\n    goto LABEL_31;\n  }\n  return 1;\n}\n",
+    "asm": [
+      [
+        "0x10090d30",
+        "push    ebp"
+      ],
+      [
+        "0x10090d31",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x10090d33",
+        "push    0FFFFFFFFh"
+      ],
+      [
+        "0x10090d35",
+        "push    offset SEH_10090D30"
+      ],
+      [
+        "0x10090d3a",
+        "mov     eax, large fs:0"
+      ],
+      [
+        "0x10090d40",
+        "push    eax"
+      ],
+      [
+        "0x10090d41",
+        "sub     esp, 2Ch"
+      ],
+      [
+        "0x10090d44",
+        "mov     eax, ___security_cookie"
+      ],
+      [
+        "0x10090d49",
+        "xor     eax, ebp"
+      ],
+      [
+        "0x10090d4b",
+        "mov     [ebp+var_10], eax"
+      ],
+      [
+        "0x10090d4e",
+        "push    ebx"
+      ],
+      [
+        "0x10090d4f",
+        "push    esi"
+      ],
+      [
+        "0x10090d50",
+        "push    edi"
+      ],
+      [
+        "0x10090d51",
+        "push    eax"
+      ],
+      [
+        "0x10090d52",
+        "lea     eax, [ebp+var_C]"
+      ],
+      [
+        "0x10090d55",
+        "mov     large fs:0, eax"
+      ],
+      [
+        "0x10090d5b",
+        "mov     ebx, ecx"
+      ],
+      [
+        "0x10090d5d",
+        "mov     esi, [ebp+arg_0]"
+      ],
+      [
+        "0x10090d60",
+        "mov     [ebp+var_14], esi"
+      ],
+      [
+        "0x10090d63",
+        "test    esi, esi"
+      ],
+      [
+        "0x10090d65",
+        "jnz     short loc_10090D6E"
+      ],
+      [
+        "0x10090d67",
+        "xor     al, al"
+      ],
+      [
+        "0x10090d69",
+        "jmp     loc_10091052"
+      ],
+      [
+        "0x10090d6e",
+        "lea     edx, [esi+28h]"
+      ],
+      [
+        "0x10090d71",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090d73",
+        "mov     [ebp+Size], edx"
+      ],
+      [
+        "0x10090d76",
+        "lock xadd [edx], ecx"
+      ],
+      [
+        "0x10090d7a",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090d7c",
+        "mov     edi, offset dword_10186F84"
+      ],
+      [
+        "0x10090d81",
+        "lock xadd [edi], eax"
+      ],
+      [
+        "0x10090d85",
+        "cmp     ecx, eax"
+      ],
+      [
+        "0x10090d87",
+        "jnz     loc_10091047"
+      ],
+      [
+        "0x10090d8d",
+        "lea     eax, [edx+4]"
+      ],
+      [
+        "0x10090d90",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090d92",
+        "lock xadd [eax], ecx"
+      ],
+      [
+        "0x10090d96",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090d98",
+        "mov     edi, offset dword_10186F88"
+      ],
+      [
+        "0x10090d9d",
+        "lock xadd [edi], eax"
+      ],
+      [
+        "0x10090da1",
+        "cmp     ecx, eax"
+      ],
+      [
+        "0x10090da3",
+        "jnz     loc_10091047"
+      ],
+      [
+        "0x10090da9",
+        "cmp     byte ptr [ebx+1ECh], 0"
+      ],
+      [
+        "0x10090db0",
+        "jz      loc_10090E85"
+      ],
+      [
+        "0x10090db6",
+        "lea     eax, [ebp+var_18]"
+      ],
+      [
+        "0x10090db9",
+        "mov     [ebp+var_18], 6"
+      ],
+      [
+        "0x10090dc0",
+        "push    eax"
+      ],
+      [
+        "0x10090dc1",
+        "lea     ecx, [ebx+28h]"
+      ],
+      [
+        "0x10090dc4",
+        "mov     [ebp+var_14], 28h ; '('"
+      ],
+      [
+        "0x10090dcb",
+        "call    sub_1008DE30"
+      ],
+      [
+        "0x10090dd0",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090dd2",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10090dd5",
+        "lock xadd [ecx], eax"
+      ],
+      [
+        "0x10090dd9",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090ddb",
+        "cmp     eax, 0F423Fh"
+      ],
+      [
+        "0x10090de0",
+        "jnz     short loc_10090E08"
+      ],
+      [
+        "0x10090de2",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090de4",
+        "lea     edx, [ebp+var_18]"
+      ],
+      [
+        "0x10090de7",
+        "lock xadd [edx], eax"
+      ],
+      [
+        "0x10090deb",
+        "cmp     eax, 0F423Fh"
+      ],
+      [
+        "0x10090df0",
+        "jnz     short loc_10090E06"
+      ],
+      [
+        "0x10090df2",
+        "inc     ecx"
+      ],
+      [
+        "0x10090df3",
+        "cmp     ecx, 0Ah"
+      ],
+      [
+        "0x10090df6",
+        "jb      short loc_10090DE2"
+      ],
+      [
+        "0x10090df8",
+        "mov     edi, 8"
+      ],
+      [
+        "0x10090dfd",
+        "mov     [ebp+var_34], 1"
+      ],
+      [
+        "0x10090e04",
+        "jmp     short loc_10090E13"
+      ],
+      [
+        "0x10090e06",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090e08",
+        "lea     edx, [ebp+var_14]"
+      ],
+      [
+        "0x10090e0b",
+        "lock xadd [edx], ecx"
+      ],
+      [
+        "0x10090e0f",
+        "xor     edi, edi"
+      ],
+      [
+        "0x10090e11",
+        "mov     edi, ecx"
+      ],
+      [
+        "0x10090e13",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090e15",
+        "lea     ecx, [ebp+var_18]"
+      ],
+      [
+        "0x10090e18",
+        "lock xadd [ecx], eax"
+      ],
+      [
+        "0x10090e1c",
+        "cmp     eax, 0F423Fh"
+      ],
+      [
+        "0x10090e21",
+        "jnz     short loc_10090E49"
+      ],
+      [
+        "0x10090e23",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090e25",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090e27",
+        "lea     edx, [ebp+var_18]"
+      ],
+      [
+        "0x10090e2a",
+        "lock xadd [edx], eax"
+      ],
+      [
+        "0x10090e2e",
+        "cmp     eax, 0F423Fh"
+      ],
+      [
+        "0x10090e33",
+        "jnz     short loc_10090E49"
+      ],
+      [
+        "0x10090e35",
+        "inc     ecx"
+      ],
+      [
+        "0x10090e36",
+        "cmp     ecx, 0Ah"
+      ],
+      [
+        "0x10090e39",
+        "jb      short loc_10090E25"
+      ],
+      [
+        "0x10090e3b",
+        "mov     [ebp+var_38], 8"
+      ],
+      [
+        "0x10090e42",
+        "mov     edx, 1"
+      ],
+      [
+        "0x10090e47",
+        "jmp     short loc_10090E5C"
+      ],
+      [
+        "0x10090e49",
+        "lea     ecx, [ebp+var_14]"
+      ],
+      [
+        "0x10090e4c",
+        "xor     esi, esi"
+      ],
+      [
+        "0x10090e4e",
+        "lock xadd [ecx], esi"
+      ],
+      [
+        "0x10090e52",
+        "xor     ecx, ecx"
+      ],
+      [
+        "0x10090e54",
+        "cdq"
+      ],
+      [
+        "0x10090e55",
+        "add     ecx, esi"
+      ],
+      [
+        "0x10090e57",
+        "mov     edx, eax"
+      ],
+      [
+        "0x10090e59",
+        "adc     edx, 0"
+      ],
+      [
+        "0x10090e5c",
+        "mov     esi, [ebp+Size]"
+      ],
+      [
+        "0x10090e5f",
+        "mov     ecx, 0F423Fh"
+      ],
+      [
+        "0x10090e64",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090e66",
+        "lock cmpxchg [esi], ecx"
+      ],
+      [
+        "0x10090e6a",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090e6c",
+        "jnz     short loc_10090E75"
+      ],
+      [
+        "0x10090e6e",
+        "lea     eax, [esi+4]"
+      ],
+      [
+        "0x10090e71",
+        "xchg    edi, [eax]"
+      ],
+      [
+        "0x10090e73",
+        "xchg    edx, [esi]"
+      ],
+      [
+        "0x10090e75",
+        "lea     ecx, [ebx+11Ch]"
+      ],
+      [
+        "0x10090e7b",
+        "call    sub_100DD2B0"
+      ],
+      [
+        "0x10090e80",
+        "jmp     loc_10091050"
+      ],
+      [
+        "0x10090e85",
+        "mov     eax, [esi+40h]"
+      ],
+      [
+        "0x10090e88",
+        "mov     [ebp+var_34], eax"
+      ],
+      [
+        "0x10090e8b",
+        "lea     eax, [ebx+1E8h]"
+      ],
+      [
+        "0x10090e91",
+        "push    eax"
+      ],
+      [
+        "0x10090e92",
+        "lea     eax, [ebp+var_34]"
+      ],
+      [
+        "0x10090e95",
+        "push    eax"
+      ],
+      [
+        "0x10090e96",
+        "call    sub_1008FF80"
+      ],
+      [
+        "0x10090e9b",
+        "add     esp, 8"
+      ],
+      [
+        "0x10090e9e",
+        "test    al, al"
+      ],
+      [
+        "0x10090ea0",
+        "jnz     loc_10091050"
+      ],
+      [
+        "0x10090ea6",
+        "xorps   xmm0, xmm0"
+      ],
+      [
+        "0x10090ea9",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10090eac",
+        "movlpd  [ebp+var_28], xmm0"
+      ],
+      [
+        "0x10090eb1",
+        "call    sub_100A9960"
+      ],
+      [
+        "0x10090eb6",
+        "mov     [ebp+var_1C], 0"
+      ],
+      [
+        "0x10090ebd",
+        "lea     eax, [esi+30h]"
+      ],
+      [
+        "0x10090ec0",
+        "mov     [ebp+var_2C], 0"
+      ],
+      [
+        "0x10090ec7",
+        "lea     edi, [ebx+11Ch]"
+      ],
+      [
+        "0x10090ecd",
+        "mov     [ebp+var_4], 0"
+      ],
+      [
+        "0x10090ed4",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090ed6",
+        "jz      loc_10090F90"
+      ],
+      [
+        "0x10090edc",
+        "cmp     dword ptr [edi+0B4h], 0"
+      ],
+      [
+        "0x10090ee3",
+        "jz      loc_10090F90"
+      ],
+      [
+        "0x10090ee9",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10090eec",
+        "call    sub_100A9C60"
+      ],
+      [
+        "0x10090ef1",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10090ef3",
+        "call    sub_100DD5C0"
+      ],
+      [
+        "0x10090ef8",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090efa",
+        "jnz     loc_10090F90"
+      ],
+      [
+        "0x10090f00",
+        "mov     [ebp+Src], eax"
+      ],
+      [
+        "0x10090f03",
+        "lea     ecx, [esi+30h]"
+      ],
+      [
+        "0x10090f06",
+        "mov     [ebp+Size], eax"
+      ],
+      [
+        "0x10090f09",
+        "lea     eax, [ebp+var_2C]"
+      ],
+      [
+        "0x10090f0c",
+        "push    eax"
+      ],
+      [
+        "0x10090f0d",
+        "lea     eax, [ebp+var_1C]"
+      ],
+      [
+        "0x10090f10",
+        "push    eax"
+      ],
+      [
+        "0x10090f11",
+        "lea     eax, [ebp+Size]"
+      ],
+      [
+        "0x10090f14",
+        "push    eax"
+      ],
+      [
+        "0x10090f15",
+        "lea     eax, [ebp+Src]"
+      ],
+      [
+        "0x10090f18",
+        "push    eax"
+      ],
+      [
+        "0x10090f19",
+        "call    sub_100A9CD0"
+      ],
+      [
+        "0x10090f1e",
+        "push    eax"
+      ],
+      [
+        "0x10090f1f",
+        "push    dword ptr [esi+30h]"
+      ],
+      [
+        "0x10090f22",
+        "mov     eax, [edi+38h]"
+      ],
+      [
+        "0x10090f25",
+        "push    dword ptr [edi+0B4h]"
+      ],
+      [
+        "0x10090f2b",
+        "call    eax"
+      ],
+      [
+        "0x10090f2d",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090f2f",
+        "jnz     loc_10090FC9"
+      ],
+      [
+        "0x10090f35",
+        "lea     edx, [edi+4]"
+      ],
+      [
+        "0x10090f38",
+        "mov     ecx, 0F423Fh"
+      ],
+      [
+        "0x10090f3d",
+        "lock cmpxchg [edx], ecx"
+      ],
+      [
+        "0x10090f41",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090f43",
+        "jnz     short loc_10090F56"
+      ],
+      [
+        "0x10090f45",
+        "mov     ecx, 2"
+      ],
+      [
+        "0x10090f4a",
+        "lea     eax, [edx+4]"
+      ],
+      [
+        "0x10090f4d",
+        "xchg    ecx, [eax]"
+      ],
+      [
+        "0x10090f4f",
+        "mov     eax, 3"
+      ],
+      [
+        "0x10090f54",
+        "xchg    eax, [edx]"
+      ],
+      [
+        "0x10090f56",
+        "mov     edx, 1"
+      ],
+      [
+        "0x10090f5b",
+        "lea     ecx, [edi+10h]"
+      ],
+      [
+        "0x10090f5e",
+        "xor     eax, eax"
+      ],
+      [
+        "0x10090f60",
+        "lock cmpxchg [ecx], edx"
+      ],
+      [
+        "0x10090f64",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090f66",
+        "jnz     short loc_10090F89"
+      ],
+      [
+        "0x10090f68",
+        "call    ds:GetLastError"
+      ],
+      [
+        "0x10090f6e",
+        "mov     ecx, [edi+0Ch]"
+      ],
+      [
+        "0x10090f71",
+        "mov     esi, eax"
+      ],
+      [
+        "0x10090f73",
+        "mov     ecx, [ecx+4]"
+      ],
+      [
+        "0x10090f76",
+        "add     ecx, 0Ch"
+      ],
+      [
+        "0x10090f79",
+        "add     ecx, edi"
+      ],
+      [
+        "0x10090f7b",
+        "mov     edx, [ecx]"
+      ],
+      [
+        "0x10090f7d",
+        "call    dword ptr [edx]"
+      ],
+      [
+        "0x10090f7f",
+        "push    esi; dwErrCode"
+      ],
+      [
+        "0x10090f80",
+        "call    ds:SetLastError"
+      ],
+      [
+        "0x10090f86",
+        "mov     esi, [ebp+var_14]"
+      ],
+      [
+        "0x10090f89",
+        "mov     [ebp+var_1C], 0"
+      ],
+      [
+        "0x10090f90",
+        "lea     eax, [ebp+var_18]"
+      ],
+      [
+        "0x10090f93",
+        "mov     [ebp+var_18], 6"
+      ],
+      [
+        "0x10090f9a",
+        "push    eax"
+      ],
+      [
+        "0x10090f9b",
+        "lea     ecx, [ebx+28h]"
+      ],
+      [
+        "0x10090f9e",
+        "mov     [ebp+var_14], 9"
+      ],
+      [
+        "0x10090fa5",
+        "call    sub_1008DE30"
+      ],
+      [
+        "0x10090faa",
+        "lea     eax, [ebp+var_18]"
+      ],
+      [
+        "0x10090fad",
+        "mov     ecx, esi"
+      ],
+      [
+        "0x10090faf",
+        "push    eax"
+      ],
+      [
+        "0x10090fb0",
+        "call    sub_10090A50"
+      ],
+      [
+        "0x10090fb5",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10090fb7",
+        "call    sub_100DD2B0"
+      ],
+      [
+        "0x10090fbc",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10090fbf",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10090fc4",
+        "jmp     loc_10091050"
+      ],
+      [
+        "0x10090fc9",
+        "mov     eax, [ebp+Src]"
+      ],
+      [
+        "0x10090fcc",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090fce",
+        "jz      short loc_10091000"
+      ],
+      [
+        "0x10090fd0",
+        "push    [ebp+Size]; Size"
+      ],
+      [
+        "0x10090fd3",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10090fd6",
+        "push    eax; Src"
+      ],
+      [
+        "0x10090fd7",
+        "call    sub_100A9A30"
+      ],
+      [
+        "0x10090fdc",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090fde",
+        "jnz     short loc_10090FF3"
+      ],
+      [
+        "0x10090fe0",
+        "push    6"
+      ],
+      [
+        "0x10090fe2",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10090fe4",
+        "call    sub_10005C80"
+      ],
+      [
+        "0x10090fe9",
+        "push    [ebp+Src]"
+      ],
+      [
+        "0x10090fec",
+        "mov     eax, [edi+50h]"
+      ],
+      [
+        "0x10090fef",
+        "call    eax"
+      ],
+      [
+        "0x10090ff1",
+        "jmp     short loc_10090F90"
+      ],
+      [
+        "0x10090ff3",
+        "mov     eax, [ebp+Src]"
+      ],
+      [
+        "0x10090ff6",
+        "test    eax, eax"
+      ],
+      [
+        "0x10090ff8",
+        "jz      short loc_10091000"
+      ],
+      [
+        "0x10090ffa",
+        "push    eax"
+      ],
+      [
+        "0x10090ffb",
+        "mov     eax, [edi+50h]"
+      ],
+      [
+        "0x10090ffe",
+        "call    eax"
+      ],
+      [
+        "0x10091000",
+        "push    [ebp+var_1C]"
+      ],
+      [
+        "0x10091003",
+        "lea     ecx, [ebx+28h]"
+      ],
+      [
+        "0x10091006",
+        "call    sub_1008DF10"
+      ],
+      [
+        "0x1009100b",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x1009100e",
+        "call    sub_100A9CE0"
+      ],
+      [
+        "0x10091013",
+        "test    eax, eax"
+      ],
+      [
+        "0x10091015",
+        "jz      short loc_10091030"
+      ],
+      [
+        "0x10091017",
+        "lea     eax, [ebp+var_28]"
+      ],
+      [
+        "0x1009101a",
+        "mov     ecx, ebx"
+      ],
+      [
+        "0x1009101c",
+        "push    eax"
+      ],
+      [
+        "0x1009101d",
+        "call    sub_10091080"
+      ],
+      [
+        "0x10091022",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10091025",
+        "mov     bl, al"
+      ],
+      [
+        "0x10091027",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x1009102c",
+        "mov     al, bl"
+      ],
+      [
+        "0x1009102e",
+        "jmp     short loc_10091052"
+      ],
+      [
+        "0x10091030",
+        "cmp     [ebp+var_1C], 0"
+      ],
+      [
+        "0x10091034",
+        "jz      short loc_10090FBC"
+      ],
+      [
+        "0x10091036",
+        "mov     ecx, edi"
+      ],
+      [
+        "0x10091038",
+        "call    sub_100DD2B0"
+      ],
+      [
+        "0x1009103d",
+        "lea     ecx, [ebp+var_28]"
+      ],
+      [
+        "0x10091040",
+        "call    sub_100A9970"
+      ],
+      [
+        "0x10091045",
+        "jmp     short loc_10091050"
+      ],
+      [
+        "0x10091047",
+        "push    edx"
+      ],
+      [
+        "0x10091048",
+        "lea     ecx, [ebx+28h]"
+      ],
+      [
+        "0x1009104b",
+        "call    sub_1008DE30"
+      ],
+      [
+        "0x10091050",
+        "mov     al, 1"
+      ],
+      [
+        "0x10091052",
+        "mov     ecx, [ebp+var_C]"
+      ],
+      [
+        "0x10091055",
+        "mov     large fs:0, ecx"
+      ],
+      [
+        "0x1009105c",
+        "pop     ecx"
+      ],
+      [
+        "0x1009105d",
+        "pop     edi"
+      ],
+      [
+        "0x1009105e",
+        "pop     esi"
+      ],
+      [
+        "0x1009105f",
+        "pop     ebx"
+      ],
+      [
+        "0x10091060",
+        "mov     ecx, [ebp+var_10]"
+      ],
+      [
+        "0x10091063",
+        "xor     ecx, ebp; StackCookie"
+      ],
+      [
+        "0x10091065",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1009106a",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x1009106c",
+        "pop     ebp"
+      ],
+      [
+        "0x1009106d",
+        "retn    4"
+      ],
+      [
+        "0x100f2983",
+        "jmp     _terminate"
+      ],
+      [
+        "0x1010dcd0",
+        "nop"
+      ],
+      [
+        "0x1010dcd1",
+        "nop"
+      ],
+      [
+        "0x1010dcd2",
+        "mov     edx, [esp-4+arg_4]"
+      ],
+      [
+        "0x1010dcd6",
+        "lea     eax, [edx+0Ch]"
+      ],
+      [
+        "0x1010dcd9",
+        "mov     ecx, [edx-3Ch]"
+      ],
+      [
+        "0x1010dcdc",
+        "xor     ecx, eax; StackCookie"
+      ],
+      [
+        "0x1010dcde",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1010dce3",
+        "mov     ecx, [edx-4]"
+      ],
+      [
+        "0x1010dce6",
+        "xor     ecx, eax; StackCookie"
+      ],
+      [
+        "0x1010dce8",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x1010dced",
+        "mov     eax, offset stru_1016FB20"
+      ],
+      [
+        "0x1010dcf2",
+        "jmp     ___CxxFrameHandler3"
+      ]
+    ]
+  },
+  "0x100ed6a0": {
+    "code": "int __cdecl sub_100ED6A0(const unsigned __int16 *a1)\n{\n  if ( a1 )\n    return sub_10106860(a1, 2 * wcslen(a1));\n  else\n    return 0;\n}\n",
+    "asm": [
+      [
+        "0x100ed6a0",
+        "push    ebp"
+      ],
+      [
+        "0x100ed6a1",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x100ed6a3",
+        "mov     edx, [ebp+arg_0]"
+      ],
+      [
+        "0x100ed6a6",
+        "test    edx, edx"
+      ],
+      [
+        "0x100ed6a8",
+        "jnz     short loc_100ED6AE"
+      ],
+      [
+        "0x100ed6aa",
+        "xor     eax, eax"
+      ],
+      [
+        "0x100ed6ac",
+        "pop     ebp"
+      ],
+      [
+        "0x100ed6ad",
+        "retn"
+      ],
+      [
+        "0x100ed6ae",
+        "mov     eax, edx"
+      ],
+      [
+        "0x100ed6b0",
+        "push    esi"
+      ],
+      [
+        "0x100ed6b1",
+        "lea     esi, [eax+2]"
+      ],
+      [
+        "0x100ed6b4",
+        "mov     cx, [eax]"
+      ],
+      [
+        "0x100ed6b7",
+        "add     eax, 2"
+      ],
+      [
+        "0x100ed6ba",
+        "test    cx, cx"
+      ],
+      [
+        "0x100ed6bd",
+        "jnz     short loc_100ED6B4"
+      ],
+      [
+        "0x100ed6bf",
+        "sub     eax, esi"
+      ],
+      [
+        "0x100ed6c1",
+        "sar     eax, 1"
+      ],
+      [
+        "0x100ed6c3",
+        "add     eax, eax"
+      ],
+      [
+        "0x100ed6c5",
+        "push    eax"
+      ],
+      [
+        "0x100ed6c6",
+        "push    edx"
+      ],
+      [
+        "0x100ed6c7",
+        "call    sub_10106860"
+      ],
+      [
+        "0x100ed6cc",
+        "add     esp, 8"
+      ],
+      [
+        "0x100ed6cf",
+        "pop     esi"
+      ],
+      [
+        "0x100ed6d0",
+        "pop     ebp"
+      ],
+      [
+        "0x100ed6d1",
+        "retn"
+      ]
+    ]
+  },
+  "0x10106860": {
+    "code": "int __cdecl sub_10106860(unsigned int a1, int a2)\n{\n  unsigned __int8 *v2; // edi\n  int v3; // eax\n  unsigned int v4; // esi\n  int v5; // ecx\n  unsigned int v6; // edx\n  int v7; // esi\n  int v8; // edx\n\n  v2 = (unsigned __int8 *)a1;\n  if ( !a1 || !a2 )\n    return 0;\n  v3 = -1;\n  v4 = -1;\n  if ( a1 < a1 + a2 )\n  {\n    do\n    {\n      v5 = *v2;\n      v6 = HIBYTE(v4);\n      ++v2;\n      v7 = __PAIR64__(v4, v3) >> 24;\n      v8 = v5 ^ v6;\n      v3 = dword_1015BC50[2 * v8] ^ (v3 << 8);\n      v4 = dword_1015BC54[2 * v8] ^ v7;\n    }\n    while ( (unsigned int)v2 < a1 + a2 );\n  }\n  return ~v3;\n}\n",
+    "asm": [
+      [
+        "0x10106860",
+        "push    ebp"
+      ],
+      [
+        "0x10106861",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x10106863",
+        "push    edi"
+      ],
+      [
+        "0x10106864",
+        "mov     edi, [ebp+arg_0]"
+      ],
+      [
+        "0x10106867",
+        "test    edi, edi"
+      ],
+      [
+        "0x10106869",
+        "jz      short loc_101068B0"
+      ],
+      [
+        "0x1010686b",
+        "mov     ecx, [ebp+arg_4]"
+      ],
+      [
+        "0x1010686e",
+        "test    ecx, ecx"
+      ],
+      [
+        "0x10106870",
+        "jz      short loc_101068B0"
+      ],
+      [
+        "0x10106872",
+        "push    ebx"
+      ],
+      [
+        "0x10106873",
+        "push    esi"
+      ],
+      [
+        "0x10106874",
+        "lea     ebx, [edi+ecx]"
+      ],
+      [
+        "0x10106877",
+        "or      eax, 0FFFFFFFFh"
+      ],
+      [
+        "0x1010687a",
+        "or      esi, 0FFFFFFFFh"
+      ],
+      [
+        "0x1010687d",
+        "cmp     edi, ebx"
+      ],
+      [
+        "0x1010687f",
+        "jnb     short loc_101068A5"
+      ],
+      [
+        "0x10106881",
+        "movzx   ecx, byte ptr [edi]"
+      ],
+      [
+        "0x10106884",
+        "mov     edx, esi"
+      ],
+      [
+        "0x10106886",
+        "shr     edx, 18h"
+      ],
+      [
+        "0x10106889",
+        "inc     edi"
+      ],
+      [
+        "0x1010688a",
+        "shld    esi, eax, 8"
+      ],
+      [
+        "0x1010688e",
+        "xor     edx, ecx"
+      ],
+      [
+        "0x10106890",
+        "shl     eax, 8"
+      ],
+      [
+        "0x10106893",
+        "xor     eax, ds:dword_1015BC50[edx*8]"
+      ],
+      [
+        "0x1010689a",
+        "xor     esi, ds:dword_1015BC54[edx*8]"
+      ],
+      [
+        "0x101068a1",
+        "cmp     edi, ebx"
+      ],
+      [
+        "0x101068a3",
+        "jb      short loc_10106881"
+      ],
+      [
+        "0x101068a5",
+        "not     esi"
+      ],
+      [
+        "0x101068a7",
+        "not     eax"
+      ],
+      [
+        "0x101068a9",
+        "mov     edx, esi"
+      ],
+      [
+        "0x101068ab",
+        "pop     esi"
+      ],
+      [
+        "0x101068ac",
+        "pop     ebx"
+      ],
+      [
+        "0x101068ad",
+        "pop     edi"
+      ],
+      [
+        "0x101068ae",
+        "pop     ebp"
+      ],
+      [
+        "0x101068af",
+        "retn"
+      ],
+      [
+        "0x101068b0",
+        "xor     eax, eax"
+      ],
+      [
+        "0x101068b2",
+        "xor     edx, edx"
+      ],
+      [
+        "0x101068b4",
+        "pop     edi"
+      ],
+      [
+        "0x101068b5",
+        "pop     ebp"
+      ],
+      [
+        "0x101068b6",
+        "retn"
+      ]
+    ]
+  },
+  "0x100181f0": {
+    "code": "_DWORD *__thiscall sub_100181F0(_DWORD *this, int a2)\n{\n  sub_100165C0(this, 52, a2);\n  *this = &RolClient::CManageNetworkPacket::`vftable';\n  return this;\n}\n",
+    "asm": [
+      [
+        "0x100181f0",
+        "push    ebp"
+      ],
+      [
+        "0x100181f1",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x100181f3",
+        "push    0FFFFFFFFh"
+      ],
+      [
+        "0x100181f5",
+        "push    offset SEH_100181F0"
+      ],
+      [
+        "0x100181fa",
+        "mov     eax, large fs:0"
+      ],
+      [
+        "0x10018200",
+        "push    eax"
+      ],
+      [
+        "0x10018201",
+        "push    esi"
+      ],
+      [
+        "0x10018202",
+        "mov     eax, ___security_cookie"
+      ],
+      [
+        "0x10018207",
+        "xor     eax, ebp"
+      ],
+      [
+        "0x10018209",
+        "push    eax"
+      ],
+      [
+        "0x1001820a",
+        "lea     eax, [ebp+var_C]"
+      ],
+      [
+        "0x1001820d",
+        "mov     large fs:0, eax"
+      ],
+      [
+        "0x10018213",
+        "mov     esi, ecx"
+      ],
+      [
+        "0x10018215",
+        "push    [ebp+arg_0]"
+      ],
+      [
+        "0x10018218",
+        "push    34h ; '4'"
+      ],
+      [
+        "0x1001821a",
+        "call    sub_100165C0"
+      ],
+      [
+        "0x1001821f",
+        "mov     dword ptr [esi], offset ??_7CManageNetworkPacket@RolClient@@6B@; const RolClient::CManageNetworkPacket::`vftable'"
+      ],
+      [
+        "0x10018225",
+        "mov     eax, esi"
+      ],
+      [
+        "0x10018227",
+        "mov     ecx, [ebp+var_C]"
+      ],
+      [
+        "0x1001822a",
+        "mov     large fs:0, ecx"
+      ],
+      [
+        "0x10018231",
+        "pop     ecx"
+      ],
+      [
+        "0x10018232",
+        "pop     esi"
+      ],
+      [
+        "0x10018233",
+        "mov     esp, ebp"
+      ],
+      [
+        "0x10018235",
+        "pop     ebp"
+      ],
+      [
+        "0x10018236",
+        "retn    4"
+      ],
+      [
+        "0x101078b0",
+        "nop"
+      ],
+      [
+        "0x101078b1",
+        "nop"
+      ],
+      [
+        "0x101078b2",
+        "mov     edx, [esp-4+arg_4]"
+      ],
+      [
+        "0x101078b6",
+        "lea     eax, [edx+0Ch]"
+      ],
+      [
+        "0x101078b9",
+        "mov     ecx, [edx-8]"
+      ],
+      [
+        "0x101078bc",
+        "xor     ecx, eax; StackCookie"
+      ],
+      [
+        "0x101078be",
+        "call    @__security_check_cookie@4; __security_check_cookie(x)"
+      ],
+      [
+        "0x101078c3",
+        "mov     eax, offset stru_1016AB84"
+      ],
+      [
+        "0x101078c8",
+        "jmp     ___CxxFrameHandler3"
+      ]
+    ]
+  },
+  "0x10018280": {
+    "code": "bool __stdcall sub_10018280(void *a1, size_t a2)\n{\n  return a1 && a2 && sub_100A6950(4889, a1, a2, 0) != 0;\n}\n",
+    "asm": [
+      [
+        "0x10018280",
+        "push    ebp"
+      ],
+      [
+        "0x10018281",
+        "mov     ebp, esp"
+      ],
+      [
+        "0x10018283",
+        "mov     edx, [ebp+arg_0]"
+      ],
+      [
+        "0x10018286",
+        "test    edx, edx"
+      ],
+      [
+        "0x10018288",
+        "jz      short loc_100182AB"
+      ],
+      [
+        "0x1001828a",
+        "mov     eax, [ebp+arg_4]"
+      ],
+      [
+        "0x1001828d",
+        "test    eax, eax"
+      ],
+      [
+        "0x1001828f",
+        "jz      short loc_100182AB"
+      ],
+      [
+        "0x10018291",
+        "push    0; int"
+      ],
+      [
+        "0x10018293",
+        "push    eax; size_t"
+      ],
+      [
+        "0x10018294",
+        "push    edx; void *"
+      ],
+      [
+        "0x10018295",
+        "push    1319h; int"
+      ],
+      [
+        "0x1001829a",
+        "add     ecx, 14h"
+      ],
+      [
+        "0x1001829d",
+        "call    sub_100A6950"
+      ],
+      [
+        "0x100182a2",
+        "test    eax, eax"
+      ],
+      [
+        "0x100182a4",
+        "setnz   al"
+      ],
+      [
+        "0x100182a7",
+        "pop     ebp"
+      ],
+      [
+        "0x100182a8",
+        "retn    8"
+      ],
+      [
+        "0x100182ab",
+        "xor     al, al"
+      ],
+      [
+        "0x100182ad",
+        "pop     ebp"
+      ],
+      [
+        "0x100182ae",
+        "retn    8"
+      ]
+    ]
+  }
+}

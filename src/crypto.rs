@@ -10,6 +10,7 @@ use num_traits::Zero;
 use rand::{rngs::OsRng, RngCore};
 use sha1::Sha1;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 pub const PRIME: &str = concat!(
     "e634471e75f2d76a0a3f5e252c5a6efb48edad645d31d9ecbc400416e14f5c6c",
@@ -175,6 +176,13 @@ pub struct ShClient {
     pub private: BigUint,
     key: Vec<u8>,
     expected: Vec<u8>,
+}
+impl Drop for ShClient {
+    fn drop(&mut self) {
+        self.password.zeroize();
+        self.key.zeroize();
+        self.expected.zeroize();
+    }
 }
 impl ShClient {
     pub fn new(rid: u64, password: &[u8]) -> Result<Self> {

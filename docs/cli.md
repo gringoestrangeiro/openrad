@@ -38,6 +38,37 @@ Repeat `--network` for multiple joined networks. `run` connects eligible online 
 
 `--peer RID` restricts outgoing selection to particular peer IDs. `--passive` waits for incoming offers instead of initiating outgoing channels. Incoming offers must still match eligible members. `--incoming-transport all|tcp|udp|relay` restricts incoming transport attempts when diagnosing a controlled connection. Check command help for accepted values.
 
+## Private networks and administration
+
+The CLI reads private-network passwords from a UTF-8 file so they do not appear in process arguments. It removes one final LF or CRLF; all other characters are preserved. Use a 6–256 character password. For example, in Bash:
+
+```sh
+umask 077
+read -r -s -p 'Network password: ' network_password
+printf '\n'
+printf '%s\n' "$network_password" > profiles/network-password.txt
+unset network_password
+
+./target/release/openrad create-network --identity profiles/main/identity.json --network 'My Private Network' --password-file profiles/network-password.txt --output reports/create-1
+./target/release/openrad join --identity profiles/second/identity.json --network 'My Private Network' --password-file profiles/network-password.txt --output reports/private-join-1
+```
+
+Provision `profiles/second` separately for a second device. A password file is used with exactly one `--network`. Existing memberships are verified without rejoining. Network names and passwords are used exactly as entered; names are not trimmed or case-folded. Remove an unneeded password file after sharing it securely with the intended members.
+
+`peers` includes `roles`, indexed by network ID and member RID: `0` means pending approval, `1` means member, and `2` means administrator. Use the member's RID from this result for administration:
+
+```sh
+./target/release/openrad grant-admin --identity profiles/main/identity.json --network 'My Private Network' --member MEMBER_RID --output reports/grant-1
+./target/release/openrad revoke-admin --identity profiles/main/identity.json --network 'My Private Network' --member MEMBER_RID --output reports/revoke-1
+./target/release/openrad kick --identity profiles/main/identity.json --network 'My Private Network' --member MEMBER_RID --output reports/kick-1
+./target/release/openrad leave --identity profiles/second/identity.json --network 'My Private Network' --output reports/leave-1
+./target/release/openrad delete-network --identity profiles/main/identity.json --network 'My Private Network' --confirm --output reports/delete-1
+```
+
+For these management commands, `--network` accepts an exact name or network ID. The server enforces permissions; an ordinary member cannot administer the network. Kicking affects only that network and does not ban someone who knows the password from joining again. Revoking admin leaves the target as an ordinary member. The last administrator may need to transfer administration or delete the network instead of leaving. Deletion removes it for every member and requires `--confirm`.
+
+Successful commands return only after the correlated service acknowledgement. Private joins also check the server's password proof. A refusal exits nonzero; an approval request reports `approval_pending`, not `join_approved`. After a timeout, use a fresh `peers` connection to check the actual service state before retrying. Reports do not include network passwords or authentication proofs.
+
 ## Forward application traffic
 
 The bounded CLI requires an explicit allowlist for TAP traffic. Substitute the peer ID of a device you control or whose owner agreed to the test:

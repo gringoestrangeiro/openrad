@@ -7,10 +7,11 @@ The project is experimental. Linux is the supported data-plane platform; Windows
 ## Features
 
 - Native desktop interface for connection status, public-network discovery, membership management, and per-peer transport and traffic counters.
+- Create and join password-protected private networks; administrators can remove members, grant or revoke admin permissions, and delete networks from the desktop or CLI.
 - Incoming and outgoing authenticated peer channels, bounded concurrent connection setup, direct TCP and reliable UDP, and relay fallback.
 - Linux TAP interface with Ethernet, ARP, IPv4 unicast, broadcast, and multicast forwarding.
 - Desktop credentials stored in the operating system's credential store, with a confirmed identity-reset flow.
-- A headless CLI for provisioning, listing networks and peers, joining networks, and bounded connection sessions.
+- A headless CLI for provisioning, listing networks and peers, private-network administration, and bounded connection sessions.
 
 A successful service login does not establish a direct connection to every peer. Direct connectivity depends on both peers and their network conditions. The peer table reports the selected transport; data counters provide a separate indication of traffic.
 
@@ -39,6 +40,10 @@ An existing profile will not silently replace a different saved identity. Use an
 ```sh
 ./target/release/openrad-desktop --data-dir ./profiles/alternate --identity /path/to/identity.json
 ```
+
+## Prebuilt release
+
+The [OpenRad v0.2.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.2.0) includes the desktop app, CLI, setup guide, private-network instructions, and SHA-256 checksums. It supports creating and joining password-protected private networks, member removal, admin-role changes, and network deletion. See [the desktop guide](docs/desktop.md) and [CLI guide](docs/cli.md) for usage.
 
 [Desktop and identity guide](docs/desktop.md) · [CLI guide](docs/cli.md) · [Architecture](docs/architecture.md)
 
