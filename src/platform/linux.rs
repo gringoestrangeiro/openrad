@@ -77,6 +77,10 @@ impl Tap {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()?;
+        // The Command still owns our copy of the helper's socket end. Release it so
+        // a helper that exits without sending (e.g. sudo -n needs a password)
+        // yields EOF at once instead of the full read timeout.
+        drop(command);
         let received = receive_fd(parent.as_raw_fd());
         let status = child.wait()?;
         ensure!(
