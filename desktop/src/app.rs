@@ -934,7 +934,7 @@ impl App {
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new("Linux interface").size(18.).strong()); ui.add_space(10.);
-            ui.label("radminvpn0 · Ethernet TAP · MTU 1400");
+            ui.label("radminvpn0 · Ethernet TAP · MTU 1500");
             ui.label(RichText::new("A short-lived helper configures the interface and member host routes. OpenRad runs as your normal user. Closing the app removes its interface and routes.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new("If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new("Windows and macOS data planes are not implemented or tested. Each connected peer shows its authenticated transport. Direct candidates come from the server; relay remains available when direct connection fails.").size(12.).color(MUTED));

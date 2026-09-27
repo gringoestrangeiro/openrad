@@ -301,7 +301,10 @@ fn arp_forwarding_rejects_spoofed_peer_and_oversized_frame() {
     assert!(valid_inbound(&frame, vip, remote, mac));
     assert!(!valid_inbound(&frame, vip, Ipv4Addr::new(26, 0, 0, 3), mac));
     assert!(!valid_inbound(&frame, vip, remote, [0; 6]));
-    let mut large = frame;
-    large.resize(1415, 0);
+    let mut full = frame;
+    full.resize(tunnel::MAX_FRAME, 0);
+    assert!(valid_inbound(&full, vip, remote, mac));
+    let mut large = full;
+    large.push(0);
     assert!(!valid_inbound(&large, vip, remote, mac));
 }

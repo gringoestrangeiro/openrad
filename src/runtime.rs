@@ -348,9 +348,7 @@ fn peer_loop(
                 }
                 tunnel::Packet::Frames(frames) => {
                     for frame in frames {
-                        if frame.len() <= 1414 {
-                            let _ = events.try_send(Message::Frame(rid, frame.to_vec()));
-                        }
+                        let _ = events.try_send(Message::Frame(rid, frame.to_vec()));
                     }
                 }
                 _ => {}

@@ -382,7 +382,7 @@ pub fn run(
                             && workers
                                 .get(&rid)
                                 .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
-                            && frame.len() <= 1414
+                            && frame.len() <= tunnel::MAX_FRAME
                             && frame.len() >= 14
                             && source_mac.map(|m| frame[6..12] == *m).unwrap_or(false)
                             && tunnel::endpoints(&frame) == Some((peer.vip, vip))
