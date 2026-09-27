@@ -71,6 +71,10 @@ The desktop stores settings in the platform's application-data directory and cre
 
 The repository ignores local profiles, reports, credentials, logs, captures, and build products. Use the documented output locations, and review any files before sharing them. Test fixtures contain only synthetic credentials and key material.
 
+## Credits
+
+asimplestray contributed approximately 95% of the cryptography work behind OpenRad, including the work in `shelper.dll` and the RSA session setup, secure handshake, and encrypted-channel implementation. The MIT license also credits him as a copyright holder.
+
 ## License
 
 [MIT](LICENSE).
