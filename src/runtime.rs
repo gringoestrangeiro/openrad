@@ -5,6 +5,7 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
     protocol::*,
+    scheduling::HandshakeBudget,
     session::Session,
     tap::Tap,
     tunnel,
@@ -381,6 +382,53 @@ pub fn valid_inbound(frame: &[u8], vip: Ipv4Addr, peer: Ipv4Addr, mac: [u8; 6]) 
     tunnel::deliver_to(frame, peer, mac, vip, tunnel::mac(vip))
 }
 
+/// Membership only changes on control events. Rebuild owned UI data and the
+/// forwarding allowlist there, instead of cloning every member every 5 ms.
+fn refresh_membership(
+    snapshot: &mut Snapshot,
+    membership: &Membership,
+    own_rid: u64,
+    workers: &BTreeMap<u64, Worker>,
+) -> Result<BTreeSet<u64>> {
+    snapshot.networks = membership.networks.values().cloned().collect();
+    snapshot
+        .peers
+        .retain(|rid, _| membership.peers.contains_key(rid));
+    for p in membership.peers.values().filter(|p| {
+        p.rid != own_rid
+            && p.network_ids
+                .iter()
+                .any(|id| membership.networks.contains_key(id))
+    }) {
+        let view = snapshot.peers.entry(p.rid).or_insert_with(|| PeerView {
+            peer: p.clone(),
+            status: base_peer_state(p),
+            detail: String::new(),
+            transport: None,
+        });
+        if view.peer.state != p.state || view.peer.server != p.server || view.peer.vip != p.vip {
+            view.status = base_peer_state(p);
+            view.detail.clear();
+            view.transport = None;
+            if let Some(w) = workers.get(&p.rid) {
+                w.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        view.peer = p.clone();
+    }
+    let eligible: BTreeSet<_> = membership
+        .eligible(own_rid, &[])?
+        .into_iter()
+        .map(|p| p.rid)
+        .collect();
+    for (rid, w) in workers {
+        if !eligible.contains(rid) {
+            w.stop.store(true, Ordering::Relaxed);
+        }
+    }
+    Ok(eligible)
+}
+
 pub fn run(
     identity: Identity,
     modulus: Vec<u8>,
@@ -422,6 +470,8 @@ pub fn run(
     let mut attempted_interface = false;
     let started = Instant::now();
     let mut next_report = Instant::now();
+    let mut membership_changed = true;
+    let mut eligible = BTreeSet::new();
     let result = (|| -> Result<()> {
         loop {
             if stop.load(Ordering::Relaxed) {
@@ -453,6 +503,7 @@ pub fn run(
                 match message {
                     Message::Membership(m) => {
                         membership = m;
+                        membership_changed = true;
                     }
                     Message::Update(u) => report(u),
                     Message::ControlFailed(e) => bail!(e),
@@ -529,44 +580,9 @@ pub fn run(
                     }
                 }
             }
-            snapshot.networks = membership.networks.values().cloned().collect();
-            snapshot
-                .peers
-                .retain(|rid, _| membership.peers.contains_key(rid));
-            for p in membership.peers.values().filter(|p| {
-                p.rid != identity.rid
-                    && p.network_ids
-                        .iter()
-                        .any(|id| membership.networks.contains_key(id))
-            }) {
-                let view = snapshot.peers.entry(p.rid).or_insert_with(|| PeerView {
-                    peer: p.clone(),
-                    status: base_peer_state(p),
-                    detail: String::new(),
-                    transport: None,
-                });
-                if view.peer.state != p.state
-                    || view.peer.server != p.server
-                    || view.peer.vip != p.vip
-                {
-                    view.status = base_peer_state(p);
-                    view.detail.clear();
-                    view.transport = None;
-                    if let Some(w) = workers.get(&p.rid) {
-                        w.stop.store(true, Ordering::Relaxed);
-                    }
-                }
-                view.peer = p.clone();
-            }
-            let eligible: BTreeSet<_> = membership
-                .eligible(identity.rid, &[])?
-                .into_iter()
-                .map(|p| p.rid)
-                .collect();
-            for (rid, w) in &workers {
-                if !eligible.contains(rid) {
-                    w.stop.store(true, Ordering::Relaxed);
-                }
+            if membership_changed {
+                eligible = refresh_membership(&mut snapshot, &membership, identity.rid, &workers)?;
+                membership_changed = false;
             }
             incoming.expire();
             let pending = incoming.pending_rids();
@@ -579,10 +595,14 @@ pub fn run(
                     }
                 }
             }
-            // At most four handshakes run at once. Queue every eligible member;
-            // disconnected/refused members are retried only on explicit request.
-            let connecting = workers.values().filter(|w| w.mac.is_none()).count();
-            let available = 4usize.saturating_sub(connecting);
+            // Established channels do not occupy handshake slots. Reserve room
+            // for incoming offers while slow outgoing attempts are in flight.
+            let mut budget = HandshakeBudget::new(
+                workers
+                    .values()
+                    .filter(|w| w.mac.is_none())
+                    .map(|w| w.incoming),
+            );
             let mut queued: Vec<_> = snapshot
                 .peers
                 .values()
@@ -591,11 +611,14 @@ pub fn run(
                         && eligible.contains(&p.peer.rid)
                         && !workers.contains_key(&p.peer.rid)
                 })
-                .map(|p| p.peer.clone())
+                .map(|p| p.peer.rid)
                 .collect();
-            queued.sort_by_key(|p| (!pending.contains(&p.rid), !options.allows(p.rid), p.rid));
-            for peer in queued.into_iter().take(available) {
-                let rid = peer.rid;
+            queued.sort_by_key(|rid| (!pending.contains(rid), !options.allows(*rid), *rid));
+            for rid in queued {
+                if !budget.try_start(pending.contains(&rid)) {
+                    continue;
+                }
+                let peer = snapshot.peers[&rid].peer.clone();
                 let setup = incoming.take(rid, Policy::All);
                 let is_incoming = setup.is_some();
                 snapshot.peers.get_mut(&rid).unwrap().status = PeerState::Connecting;

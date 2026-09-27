@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Result};
 use std::{
-    io::{Read, Write},
+    io::{self, IoSlice, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -137,8 +137,7 @@ impl Framed {
                 && b.len() <= 4 * 1024 * 1024,
             "frame/deadline limit"
         );
-        self.socket.write_all(&(b.len() as u32).to_be_bytes())?;
-        self.socket.write_all(b)?;
+        write_frame(&mut self.socket, b)?;
         Ok(())
     }
     pub fn receive(&mut self, max: usize) -> Result<Vec<u8>> {
@@ -197,9 +196,35 @@ impl Framed {
     }
     pub fn ready(&self, timeout_ms: i32) -> Result<bool> {
         self.check_cancelled()?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let until = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
+            loop {
+                // A kernel wait avoids repeatedly toggling O_NONBLOCK and
+                // peeking every 5 ms on every idle peer. Slice long waits so
+                // cancellation remains responsive without touching the stream.
+                let remaining = until.saturating_duration_since(Instant::now());
+                let wait_ms = remaining.as_nanos().div_ceil(1_000_000).min(50) as i32;
+                let ready = readable(self.socket.as_raw_fd(), wait_ms)?;
+                self.check_cancelled()?;
+                if ready {
+                    return Ok(true);
+                }
+                if Instant::now() >= until {
+                    return Ok(false);
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        self.ready_peek(timeout_ms)
+    }
+    #[cfg(not(target_os = "linux"))]
+    fn ready_peek(&self, timeout_ms: i32) -> Result<bool> {
         // peek preserves framing; this also reports EOF as readable.
         let until = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
+            self.check_cancelled()?;
             self.socket.set_nonblocking(true)?;
             let result = self.socket.peek(&mut [0u8]);
             self.socket.set_nonblocking(false)?;
@@ -214,6 +239,23 @@ impl Framed {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+/// Submit header and payload together without a concatenation allocation. TCP
+/// may write only part of either slice; retry without duplicating any bytes.
+fn write_frame(writer: &mut impl Write, payload: &[u8]) -> io::Result<()> {
+    let header = (payload.len() as u32).to_be_bytes();
+    let mut buffers = [IoSlice::new(&header), IoSlice::new(payload)];
+    let mut remaining = &mut buffers[..];
+    while !remaining.is_empty() {
+        match writer.write_vectored(remaining) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => IoSlice::advance_slices(&mut remaining, n),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// The checksum feeds each byte into the low byte after shifting.
