@@ -1,0 +1,36 @@
+[package]
+name = "openrad-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+description = "Reusable VPN engine and native Linux TAP client"
+
+[workspace]
+members = ["desktop"]
+default-members = [".", "desktop"]
+resolver = "2"
+
+[lib]
+name = "openrad"
+
+[[bin]]
+name = "openrad"
+path = "src/main.rs"
+
+[dependencies]
+aes = "0.8.4"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ctrlc = { version = "3", features = ["termination"] }
+hex = "0.4"
+libc = "0.2"
+md4 = "0.10"
+num-bigint = "0.4"
+num-traits = "0.2"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"

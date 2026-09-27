@@ -1,0 +1,40 @@
+# Architecture
+
+OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openrad`), and a desktop executable (`openrad-desktop`). The engine has no GUI dependency.
+
+| Module | Responsibility |
+| --- | --- |
+| `config` | Shared public bootstrap endpoint and RSA modulus |
+| `crypto` | Registration/session cryptography and mutual peer authentication |
+| `protocol` | Bounded message parsing, memberships, and candidate validation |
+| `session` | Framed service connection and session lifecycle |
+| `peer` | Outgoing transport selection, authentication, and relay fallback |
+| `incoming` | Bounded incoming offers, candidate setup, and acceptor authentication |
+| `udp` | UDP endpoint discovery, rendezvous, and reliable datagrams |
+| `tunnel` | Ethernet envelopes, address checks, and forwarding rules |
+| `tap` / `platform` | Linux interface setup and descriptor lifecycle |
+| `runtime` | Long-lived desktop engine and snapshots |
+| `client` | Bounded headless sessions and operational results |
+| `output` | Private JSON reports and explicit CLI identity persistence |
+
+## Peer transport lifecycle
+
+The authenticated service connection supplies membership, peer identities, connection credentials, and direct candidates. Candidates are validated and correlated with the intended peer/connection before use. Incoming offers are restricted to eligible joined-network members, with pending-offer and worker limits.
+
+Direct TCP and UDP candidates are attempted within time budgets. UDP endpoint discovery uses service-provided hosts and requires consistent mapped addresses before advertising the mapping. There is no arbitrary host scanning or predicted-port search. When direct authentication does not succeed, the client can fall back to a service-issued relay ticket.
+
+Both incoming and outgoing channels perform mutual authentication and the tunnel service handshake. A socket that merely connects does not become an authenticated peer channel. Transport reports separate path, authentication, service-handshake completion, and transferred traffic. Simultaneous incoming/outgoing attempts are resolved deterministically while retaining a working channel.
+
+A path reported as Direct TCP or Direct UDP identifies the selected peer socket. Measuring useful direct connectivity also requires observing traffic on that channel; a login indicator or empty socket is insufficient. Local tests cannot predict direct success rates across live NATs and firewalls.
+
+## Privileges and persistence
+
+The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
+
+The desktop stores identities in the platform credential store and settings in its profile directory. Provisioning and reset logic are isolated from the GUI; tests use an in-memory vault. The CLI intentionally exports a provisioned identity into its private output directory for subsequent headless use.
+
+Operational reporting does not log session keys, authentication passwords, handshake secrets, or Ethernet payloads. Synthetic fixtures exercise protocol and cryptographic behavior without real accounts or live recordings.
+
+## Current scope
+
+Linux is the implemented TAP platform. Relay is a valid outcome for peers that cannot establish a direct channel. Broad interoperability, difficult NAT combinations, long-running recovery behavior, and other operating-system data planes need further work. Protocol compatibility is not a claim of a completed security audit.
