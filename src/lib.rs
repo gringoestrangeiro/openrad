@@ -7,6 +7,7 @@ pub mod output;
 pub mod peer;
 pub mod protocol;
 pub mod runtime;
+mod scheduling;
 pub mod session;
 pub mod tap;
 pub mod tunnel;

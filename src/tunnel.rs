@@ -74,12 +74,11 @@ pub fn encode(frame: &[u8]) -> Result<Vec<u8>> {
         (14..=65535).contains(&frame.len()),
         "invalid Ethernet length"
     );
-    Ok([
-        vec![0; 6],
-        (frame.len() as u32).to_le_bytes().to_vec(),
-        frame.to_vec(),
-    ]
-    .concat())
+    let mut packet = Vec::with_capacity(10 + frame.len());
+    packet.extend_from_slice(&[0; 6]);
+    packet.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+    packet.extend_from_slice(frame);
+    Ok(packet)
 }
 pub enum Packet<'a> {
     Frames(Vec<&'a [u8]>),

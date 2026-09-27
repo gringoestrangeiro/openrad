@@ -4,6 +4,7 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, TransportReport},
     protocol::*,
+    scheduling::HandshakeBudget,
     session::Session,
     tap::Tap,
     tunnel::{self, Packet},
@@ -267,17 +268,24 @@ pub fn run(
                     p.rid,
                 )
             });
+            let mut budget = HandshakeBudget::new(
+                workers
+                    .iter()
+                    .filter(|(rid, _)| !active.contains_key(*rid))
+                    .map(|(_, w)| w.incoming),
+            );
             for peer in eligible {
-                if workers.len().saturating_sub(active.len()) >= 4 {
-                    break;
-                }
                 if workers.contains_key(&peer.rid) {
                     continue;
                 }
-                let setup = incoming.take(peer.rid, options.incoming_transport);
-                if setup.is_none() && (options.passive || attempted.contains(&peer.rid)) {
+                let has_offer = pending.contains(&peer.rid);
+                if !has_offer && (options.passive || attempted.contains(&peer.rid)) {
                     continue;
                 }
+                if !budget.try_start(has_offer) {
+                    continue;
+                }
+                let setup = incoming.take(peer.rid, options.incoming_transport);
                 let is_incoming = setup.is_some();
                 attempted.insert(peer.rid);
                 ensure!(attempted.len() <= 128, "session peer budget exceeded");
