@@ -263,6 +263,17 @@ impl Session {
         host: &str,
         reports: &ReportDirectory,
     ) -> Result<Identity> {
+        Self::provision_with_commit(modulus, name, host, reports, &mut || Ok(()))
+    }
+    /// `commit` runs right before each registering login is sent, so a caller can
+    /// persist its intent only once a registration may actually happen.
+    pub fn provision_with_commit(
+        modulus: &[u8],
+        name: &str,
+        host: &str,
+        reports: &ReportDirectory,
+        commit: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Identity> {
         let mut bootstrap = Identity::bootstrap(name, host)?;
         let mut visited = std::collections::BTreeSet::new();
         for attempt in 0..3 {
@@ -279,6 +290,7 @@ impl Session {
                 &c,
                 Duration::from_secs(40),
             )?;
+            commit()?;
             session.send(&login(name, 0, 3, None)?)?;
             let data = session.receive()?;
             if op(&data)? == 12 {
