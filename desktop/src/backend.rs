@@ -143,6 +143,7 @@ fn manager(
     let mut session: Option<(Sender<runtime::Command>, thread::JoinHandle<Result<()>>)> = None;
     let mut closing = false;
     let mut retries = 0u32;
+    let mut session_started = Instant::now();
     let mut retry_at = Instant::now();
     let mut want_reset = false;
     let mut replacement = storage::Replacement::default();
@@ -204,12 +205,13 @@ fn manager(
                         Phase::Provisioning,
                         "Preparing your private device identity…".into(),
                     ));
-                    identity = Some(storage::provision_once(&vault, || {
-                        Session::provision(
+                    identity = Some(storage::provision_once(&vault, |commit| {
+                        Session::provision_with_commit(
                             MODULUS,
                             &settings.node_name,
                             openrad::DEFAULT_BOOTSTRAP_HOST,
                             &ReportDirectory::disabled(),
+                            commit,
                         )
                     })?);
                 }
@@ -238,6 +240,7 @@ fn manager(
                     })
                 });
                 session = Some((tx, handle));
+                session_started = Instant::now();
                 Ok(())
             })();
             if let Err(e) = result {
@@ -260,6 +263,11 @@ fn manager(
                     retries = 0;
                 }
                 Err(e) if !closing => {
+                    // The budget covers consecutive failures: a session that stayed
+                    // up for a while was a successful reconnection.
+                    if session_started.elapsed() >= Duration::from_secs(60) {
+                        retries = 0;
+                    }
                     let can_retry = !want_reset
                         && !replacement.is_pending()
                         && settings.auto_reconnect

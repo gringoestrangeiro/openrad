@@ -166,6 +166,10 @@ pub fn endpoints(frame: &[u8]) -> Option<(Ipv4Addr, Ipv4Addr)> {
     ipv4_endpoints(frame).or_else(|| arp_endpoints(frame))
 }
 
+/// Largest Ethernet frame (MTU 1500 + header), as accepted by the native Radmin
+/// adapter. Windows peers emit full-size frames, including every first IP fragment.
+pub const MAX_FRAME: usize = 1514;
+
 /// Whether an unchanged Ethernet frame belongs on this authenticated link.
 /// IPv4 group traffic fans out once per peer; directed ARP is sent only to its
 /// target. Received group frames are delivered to the kernel, never re-flooded.
@@ -176,7 +180,7 @@ pub fn deliver_to(
     target: Ipv4Addr,
     target_mac: [u8; 6],
 ) -> bool {
-    if !(14..=1414).contains(&frame.len()) || frame[6..12] != source_mac {
+    if !(14..=MAX_FRAME).contains(&frame.len()) || frame[6..12] != source_mac {
         return false;
     }
     if let Some((src, dst)) = ipv4_endpoints(frame) {

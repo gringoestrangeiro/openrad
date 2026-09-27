@@ -77,6 +77,10 @@ impl Tap {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()?;
+        // The Command still owns our copy of the helper's socket end. Release it so
+        // a helper that exits without sending (e.g. sudo -n needs a password)
+        // yields EOF at once instead of the full read timeout.
+        drop(command);
         let received = receive_fd(parent.as_raw_fd());
         let status = child.wait()?;
         ensure!(
@@ -97,7 +101,7 @@ impl Tap {
     }
     pub fn send(&mut self, b: &[u8]) -> Result<()> {
         ensure!(
-            (14..=1414).contains(&b.len()),
+            (14..=crate::tunnel::MAX_FRAME).contains(&b.len()),
             "TAP Ethernet frame exceeds configured MTU"
         );
         ensure!(self.file.write(b)? == b.len(), "short TAP packet write");
@@ -159,7 +163,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
         "address",
         &mac,
         "mtu",
-        "1400",
+        "1500",
         "addrgenmode",
         "none",
     ])?;

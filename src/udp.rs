@@ -214,6 +214,17 @@ pub fn local_candidates(route_ip: IpAddr, port: u16) -> Result<Vec<SocketAddr>> 
     Ok(candidates)
 }
 
+/// Sequence span a sender may keep unacknowledged. Counting the span from the
+/// oldest unacknowledged command (not the number of pending commands) keeps an
+/// openrad sender within the receiver's window even while one command is lost.
+const SEND_WINDOW: usize = 256;
+/// Receiver window: SEND_WINDOW plus one maximal fragmented message, since
+/// `incoming` only advances past a message once all of its fragments arrived.
+const RECEIVE_WINDOW: u16 = 512;
+/// Stop draining the socket while this many messages await the caller; the
+/// kernel buffer holds the rest instead of the channel failing.
+const READY_HIGH_WATER: usize = 128;
+
 struct Pending {
     command: Vec<u8>,
     last: Instant,
@@ -436,6 +447,19 @@ impl Enet {
         );
         Ok(())
     }
+    fn in_flight(&self) -> usize {
+        self.pending
+            .keys()
+            .filter(|(channel, _)| *channel == 0)
+            .map(|(_, seq)| self.outgoing.wrapping_sub(*seq) as usize + 1)
+            .max()
+            .unwrap_or(0)
+    }
+    /// Whether a message of `len` bytes fits the send window now. Callers drop
+    /// the message when it does not, like congestion loss; tunnelled TCP recovers.
+    pub fn has_room(&self, len: usize) -> bool {
+        self.in_flight() + len.div_ceil(self.mtu - 32) <= SEND_WINDOW
+    }
     pub fn send(&mut self, data: &[u8]) -> Result<()> {
         ensure!(
             self.connected && !data.is_empty() && data.len() <= 65536,
@@ -443,10 +467,7 @@ impl Enet {
         );
         let fragment_size = self.mtu - 32;
         let count = data.len().div_ceil(fragment_size);
-        ensure!(
-            self.pending.len() + count <= 256,
-            "UDP send window exhausted"
-        );
+        ensure!(self.has_room(data.len()), "UDP send window exhausted");
         let start = self.outgoing.wrapping_add(1);
         for (index, part) in data.chunks(fragment_size).enumerate() {
             self.outgoing = self.outgoing.wrapping_add(1);
@@ -528,6 +549,9 @@ impl Enet {
         }
         let mut b = [0; 4096];
         for _ in 0..64 {
+            if self.ready.len() >= READY_HIGH_WATER {
+                break;
+            }
             match self.socket.recv(&mut b) {
                 Ok(n) => self.ingest(&b[..n])?,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -639,12 +663,10 @@ impl Enet {
                     self.pending.remove(&(255, 1));
                     self.connected = true;
                 }
-                let mut ack = vec![1, channel, 0, 0];
-                ack.extend(seq.to_be_bytes());
-                ack.extend(time.to_be_bytes());
-                self.transmit(&ack)?;
             }
-            match kind {
+            // A reliable command outside the receive window is left unacknowledged
+            // so the sender retransmits it, instead of failing the channel.
+            let accepted = match kind {
                 1 => {
                     let acknowledged = self.pending.remove(&(channel, u16be(c, 4)));
                     if self.incoming_nonce.is_some()
@@ -654,42 +676,59 @@ impl Enet {
                     {
                         self.connected = true;
                     }
+                    true
                 }
-                2 | 3 | 5 | 10 | 11 => {}
+                2 | 3 | 5 | 10 | 11 => true,
                 4 => bail!("UDP peer disconnected"),
-                6 if channel == 0 => self.accept_ordered(seq, 1, payload.to_vec())?,
+                6 if channel == 0 => self.accept_ordered(seq, 1, payload.to_vec()),
                 8 if channel == 0 => self.fragment(c, payload)?,
                 _ => bail!("unsupported ENET channel/command"),
+            };
+            if c[0] & 128 != 0 && accepted {
+                let mut ack = vec![1, channel, 0, 0];
+                ack.extend(seq.to_be_bytes());
+                ack.extend(time.to_be_bytes());
+                self.transmit(&ack)?;
             }
             self.last_receive = Instant::now();
         }
         ensure!(at == b.len(), "ENET command budget");
         Ok(())
     }
-    fn accept_ordered(&mut self, start: u16, count: u16, data: Vec<u8>) -> Result<()> {
+    /// Returns whether the command may be acknowledged: true once it is buffered
+    /// or already delivered, false when it falls outside the receive window.
+    fn accept_ordered(&mut self, start: u16, count: u16, data: Vec<u8>) -> bool {
         let ahead = start.wrapping_sub(self.incoming);
         if ahead == 0 || ahead > 0x8000 {
-            return Ok(());
+            return true;
         }
-        ensure!(
-            ahead <= 256 && self.ordered.len() < 256 && self.ready.len() < 256,
-            "UDP receive window exhausted"
-        );
+        // The next expected message is always taken: refusing it once the
+        // reorder buffer is full would stall the channel for good.
+        let full = self.ordered.len() >= 256 || self.ready.len() >= 256;
+        if ahead > RECEIVE_WINDOW || (full && ahead != 1) {
+            return false;
+        }
         self.ordered.entry(start).or_insert((count, data));
         while let Some((n, data)) = self.ordered.remove(&self.incoming.wrapping_add(1)) {
             self.incoming = self.incoming.wrapping_add(n);
             self.ready.push_back(data);
         }
-        Ok(())
+        // Retransmitted fragments of already buffered or delivered messages can
+        // leave incomplete groups behind; forget those that can no longer complete.
+        let incoming = self.incoming;
+        self.fragments
+            .retain(|start, _| !matches!(start.wrapping_sub(incoming), 0 | 0x8001..));
+        true
     }
-    fn fragment(&mut self, c: &[u8], payload: &[u8]) -> Result<()> {
+    fn fragment(&mut self, c: &[u8], payload: &[u8]) -> Result<bool> {
         let start = u16be(c, 4);
         let count = u32be(c, 8);
         let index = u32be(c, 12);
         let total = u32be(c, 16) as usize;
         let offset = u32be(c, 20) as usize;
-        if start.wrapping_sub(self.incoming) == 0 || start.wrapping_sub(self.incoming) > 0x8000 {
-            return Ok(());
+        let ahead = start.wrapping_sub(self.incoming);
+        if ahead == 0 || ahead > 0x8000 || self.ordered.contains_key(&start) {
+            return Ok(true);
         }
         ensure!(
             (1..=128).contains(&count)
@@ -700,9 +739,13 @@ impl Enet {
             "UDP fragment bounds"
         );
         ensure!(
-            u16be(c, 2) == start.wrapping_add(index as u16) && self.fragments.len() < 16,
-            "UDP fragment sequence/window"
+            u16be(c, 2) == start.wrapping_add(index as u16),
+            "UDP fragment sequence"
         );
+        let full = !self.fragments.contains_key(&start) && self.fragments.len() >= 16;
+        if ahead > RECEIVE_WINDOW || (full && ahead != 1) {
+            return Ok(false);
+        }
         let f = self.fragments.entry(start).or_insert_with(|| Fragment {
             total,
             count: count as u16,
@@ -714,16 +757,21 @@ impl Enet {
         );
         f.parts.entry(index).or_insert((offset, payload.to_vec()));
         if f.parts.len() == count as usize {
-            let f = self.fragments.remove(&start).unwrap();
             let mut out = Vec::with_capacity(total);
-            for (_, (offset, data)) in f.parts {
-                ensure!(offset == out.len(), "overlapping/gapped UDP fragments");
-                out.extend(data);
+            for (offset, data) in f.parts.values() {
+                ensure!(*offset == out.len(), "overlapping/gapped UDP fragments");
+                out.extend_from_slice(data);
             }
             ensure!(out.len() == total, "UDP fragment total mismatch");
-            self.accept_ordered(start, count as u16, out)?;
+            // Earlier parts have already been acknowledged. Keep them if the
+            // reorder queue is full: the sender only retries the final part.
+            let accepted = self.accept_ordered(start, count as u16, out);
+            if accepted {
+                self.fragments.remove(&start);
+            }
+            return Ok(accepted);
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -802,14 +850,133 @@ mod tests {
     #[test]
     fn malformed_fragments_and_sequence_jumps_are_bounded() {
         let (mut e, _remote) = pair();
-        assert!(e
-            .ingest(&packet(&reliable(300, b"outside window")))
-            .is_err());
+        e.ingest(&packet(&reliable(600, b"outside window")))
+            .unwrap();
+        assert!(e.ordered.is_empty() && e.ready.is_empty());
         e.incoming = 2;
         e.ingest(&packet(&fragment(3, 0, 0, b"abc"))).unwrap();
         assert!(e.ingest(&packet(&fragment(4, 1, 2, b"cd"))).is_err());
         assert!(e.ingest(&packet(&[0x86, 0, 0, 5, 255, 255])).is_err());
         assert!(!valid_punch(&punch(1, 2, 3, b'P'), 2));
         assert!(!valid_punch(&[0; 7], 1));
+    }
+
+    fn fragment_of(start: u16, index: u32, data: &[u8]) -> Vec<u8> {
+        let mut b = vec![0x88, 0];
+        b.extend(start.wrapping_add(index as u16).to_be_bytes());
+        b.extend(start.to_be_bytes());
+        b.extend((data.len() as u16).to_be_bytes());
+        for n in [2u32, index, 4, index * 2] {
+            b.extend(n.to_be_bytes());
+        }
+        b.extend(data);
+        b
+    }
+    #[test]
+    fn full_send_window_refuses_room_instead_of_failing() {
+        let (mut e, _remote) = pair();
+        let message = vec![7; 1440];
+        let mut sent = 0;
+        while e.has_room(message.len()) {
+            e.send(&message).unwrap();
+            sent += 1;
+        }
+        assert_eq!(sent, 128);
+        // Acknowledging everything but the oldest command does not reopen the
+        // window: the receiver cannot advance past the lost command either.
+        for seq in 2..=256u16 {
+            let mut ack = vec![1, 0, 0, 0];
+            ack.extend(seq.to_be_bytes());
+            ack.extend([0, 42]);
+            e.ingest(&packet(&ack)).unwrap();
+        }
+        assert!(!e.has_room(message.len()));
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+        assert!(e.has_room(message.len()));
+    }
+    #[test]
+    fn burst_after_a_lost_command_is_buffered_or_left_unacknowledged() {
+        let (mut e, _remote) = pair();
+        for seq in 2..=400u16 {
+            e.ingest(&packet(&reliable(seq, &seq.to_be_bytes())))
+                .unwrap();
+        }
+        assert!(e.ready.is_empty());
+        e.ingest(&packet(&reliable(1, b"lost"))).unwrap();
+        assert_eq!(e.ready.len(), 257);
+        assert_eq!(e.ready.pop_front().unwrap(), b"lost");
+    }
+    #[test]
+    fn retransmitted_fragments_of_buffered_messages_do_not_accumulate() {
+        let (mut e, _remote) = pair();
+        for round in 0..20u16 {
+            let base = round * 3;
+            e.ingest(&packet(&fragment_of(base + 2, 0, b"ab"))).unwrap();
+            e.ingest(&packet(&fragment_of(base + 2, 1, b"cd"))).unwrap();
+            e.ingest(&packet(&fragment_of(base + 2, 1, b"cd"))).unwrap();
+            assert!(e.fragments.is_empty());
+            e.ingest(&packet(&reliable(base + 1, b"gap"))).unwrap();
+            assert_eq!(e.ready.pop_front().unwrap(), b"gap");
+            assert_eq!(e.ready.pop_front().unwrap(), b"abcd");
+        }
+    }
+
+    #[test]
+    fn completed_fragments_survive_a_full_reorder_buffer() {
+        let (mut e, _remote) = pair();
+        // The sender may forget this part as soon as it is acknowledged.
+        e.ingest(&packet(&fragment_of(300, 0, b"ab"))).unwrap();
+        for seq in 2..=257 {
+            e.ingest(&packet(&reliable(seq, b"queued"))).unwrap();
+        }
+        assert_eq!(e.ordered.len(), 256);
+        e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+
+        // Close the gap and drain the queue before the sender retries only the
+        // final, unacknowledged fragment. The earlier part must still exist.
+        e.ingest(&packet(&reliable(1, b"gap"))).unwrap();
+        e.ready.clear();
+        for seq in 258..300 {
+            e.ingest(&packet(&reliable(seq, b"queued"))).unwrap();
+        }
+        e.ready.clear();
+        e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+        assert_eq!(e.ready.pop_front().as_deref(), Some(b"abcd".as_slice()));
+        assert_eq!(e.incoming, 301);
+        assert!(e.fragments.is_empty());
+    }
+
+    #[test]
+    fn refused_commands_are_not_acknowledged_and_can_be_retried() {
+        let (mut e, remote) = pair();
+        remote.set_nonblocking(true).unwrap();
+        let mut received = [0; 64];
+        e.ingest(&packet(&reliable(RECEIVE_WINDOW + 1, b"later")))
+            .unwrap();
+        assert_eq!(
+            remote.recv(&mut received).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        e.incoming = RECEIVE_WINDOW;
+        e.ingest(&packet(&reliable(RECEIVE_WINDOW + 1, b"later")))
+            .unwrap();
+        assert_eq!(remote.recv(&mut received).unwrap(), 16);
+        assert_eq!(received[8], 1);
+        assert_eq!(u16be(&received, 12), RECEIVE_WINDOW + 1);
+        assert_eq!(e.ready.pop_front().unwrap(), b"later");
+    }
+
+    #[test]
+    fn send_window_tracks_a_lost_command_across_sequence_wraparound() {
+        let (mut e, _remote) = pair();
+        e.outgoing = u16::MAX - 1;
+        e.send(b"lost").unwrap();
+        e.send(b"received").unwrap();
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 0, 0, 42])).unwrap();
+        assert_eq!(e.in_flight(), 2);
+        assert!(e.has_room((SEND_WINDOW - 2) * (e.mtu - 32)));
+        assert!(!e.has_room((SEND_WINDOW - 1) * (e.mtu - 32)));
+        e.ingest(&packet(&[1, 0, 0, 0, 255, 255, 0, 42])).unwrap();
+        assert_eq!(e.in_flight(), 0);
     }
 }

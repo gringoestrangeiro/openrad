@@ -69,6 +69,12 @@ impl PeerStream {
             Self::Udp(s) => s.set_stop(stop),
         }
     }
+    pub fn has_room(&self, len: usize) -> bool {
+        match self {
+            Self::Tcp(_) => true,
+            Self::Udp(s) => s.has_room(len),
+        }
+    }
     pub fn sustain(&mut self) {
         match self {
             Self::Tcp(s) => s.sustain(),
@@ -589,14 +595,82 @@ impl PeerChannel {
         p.transport.service_connected = true;
         Ok(p)
     }
-    pub fn send(&mut self, plain: &[u8]) -> Result<()> {
+    /// Returns false when the transport window is full and the message was
+    /// dropped. The check precedes encryption: the CBC chain continues across
+    /// messages, so a ciphertext that is never sent would desynchronise the peer.
+    pub fn send(&mut self, plain: &[u8]) -> Result<bool> {
+        if !self.stream.has_room((plain.len() + 9).div_ceil(16) * 16) {
+            return Ok(false);
+        }
         let ct = self.channel.encrypt(plain)?;
         self.stream.send(&ct)?;
-        Ok(())
+        Ok(true)
     }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         let ct = self.stream.receive(65536)?;
         let pt = self.channel.decrypt(&ct)?;
         Ok(pt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::udp::Enet;
+    use std::net::UdpSocket;
+
+    #[test]
+    fn a_full_udp_window_drops_before_advancing_the_encryption_chain() {
+        let a = UdpSocket::bind("[::1]:0").unwrap();
+        let b = UdpSocket::bind("[::1]:0").unwrap();
+        let aa = a.local_addr().unwrap();
+        let ba = b.local_addr().unwrap();
+        let incoming = std::thread::spawn(move || {
+            Enet::accept(b, &[aa], 123, Duration::from_secs(5), None).unwrap()
+        });
+        let mut outgoing = Enet::connect(a, &[ba], 123, Duration::from_secs(5), None).unwrap();
+        let mut receiver = incoming.join().unwrap();
+        outgoing.sustain();
+        receiver.sustain();
+        let key = [7; 32];
+        let mut decrypt = Channel::new(&key).unwrap();
+        let mut sender = PeerChannel {
+            peer: Peer {
+                rid: 1,
+                name: "Synthetic peer".into(),
+                vip: Ipv4Addr::new(26, 0, 0, 1),
+                server: None,
+                state: 1,
+                network_ids: Default::default(),
+            },
+            mac: [0; 6],
+            version: 0,
+            stream: PeerStream::Udp(outgoing),
+            transport: TransportReport::default(),
+            channel: Channel::new(&key).unwrap(),
+            _coordinator: None,
+        };
+
+        // Deliver every message but leave ACKs unread on the sender, filling
+        // its window without losing packets to the local socket buffers.
+        for value in 0..=255u8 {
+            assert!(sender.send(&[value]).unwrap());
+            let ciphertext = receiver.receive(65536).unwrap();
+            assert_eq!(decrypt.decrypt(&ciphertext).unwrap(), [value]);
+        }
+        assert!(!sender.send(b"dropped").unwrap());
+        sender.stream.ready(0).unwrap();
+        assert!(sender.send(b"resumed").unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !receiver.ready(0).unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "resumed message was not delivered"
+            );
+            sender.stream.ready(0).unwrap();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let ciphertext = receiver.receive(65536).unwrap();
+        assert_eq!(decrypt.decrypt(&ciphertext).unwrap(), b"resumed");
     }
 }

@@ -52,21 +52,27 @@ pub fn int64(b: &[u8]) -> Result<u64> {
     ensure!(b.len() == 8, "invalid u64 width");
     Ok(u64::from_be_bytes(b.try_into()?))
 }
-pub fn text(b: &[u8]) -> Result<String> {
+fn utf16(b: &[u8]) -> Result<Vec<u16>> {
     ensure!(
         (2..=8192).contains(&b.len()) && b.len().is_multiple_of(2) && b.ends_with(&[0, 1]),
         "invalid UTF16 text"
     );
-    let s = String::from_utf16(
-        &b[..b.len() - 2]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|b| u16::from_be_bytes([b[0], b[1]]))
-            .collect::<Vec<_>>(),
-    )?;
+    Ok(b[..b.len() - 2]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        .collect())
+}
+pub fn text(b: &[u8]) -> Result<String> {
+    let s = String::from_utf16(&utf16(b)?)?;
     ensure!(!s.contains('\0'), "embedded NUL in text");
     Ok(s)
+}
+/// Names chosen by other users are decoded leniently: one member's truncated
+/// emoji must not make the whole membership message, and the session, fail.
+pub fn display_text(b: &[u8]) -> Result<String> {
+    Ok(String::from_utf16_lossy(&utf16(b)?).replace('\0', "\u{fffd}"))
 }
 pub fn tlv(tag: u32, b: &[u8]) -> Vec<u8> {
     [
@@ -583,7 +589,7 @@ pub fn listing(data: &[u8], id: u64) -> Result<(Vec<PublicNetwork>, u64)> {
     for r in f.iter().filter(|r| r.tag == 0x1333) {
         let n = records(r.value)?;
         out.push(PublicNetwork {
-            name: text(field(&n, 0x03000306)?)?,
+            name: display_text(field(&n, 0x03000306)?)?,
             reported_count: int32(field(&n, 0x01000341)?)?,
         });
     }
@@ -670,7 +676,7 @@ impl Membership {
                 self.networks.insert(
                     id.clone(),
                     Network {
-                        name: text(field(&f, 0x03000306)?)?,
+                        name: display_text(field(&f, 0x03000306)?)?,
                         network_id: id,
                     },
                 );
@@ -686,7 +692,7 @@ impl Membership {
                     rid,
                     Peer {
                         rid,
-                        name: text(field(&f, 0x03000304)?)?,
+                        name: display_text(field(&f, 0x03000304)?)?,
                         vip: Ipv4Addr::from(int32(field(&f, 0x01000305)?)?),
                         server: optional(&f, 0x030001c9)?.map(text).transpose()?,
                         state: optional(&f, 0x010003a0)?
@@ -729,7 +735,7 @@ impl Membership {
                     rid,
                     Peer {
                         rid,
-                        name: text(field(&f, 0x03000304)?)?,
+                        name: display_text(field(&f, 0x03000304)?)?,
                         vip: Ipv4Addr::from(int32(vip)?),
                         server: optional(&f, 0x030001c9)?.map(text).transpose()?,
                         state: old.map(|p| p.state).unwrap_or(0),
@@ -810,4 +816,38 @@ pub fn own_vip(data: &[u8]) -> Result<Option<Ipv4Addr>> {
         "invalid own VIP"
     );
     Ok(Some(ip))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(rid: u64, name_utf16: &[u8]) -> Vec<u8> {
+        let mut name = name_utf16.to_vec();
+        name.extend([0, 1]);
+        tlv(
+            0x1317,
+            &[
+                u64v(0x020001e1, rid),
+                tlv(0x03000304, &name),
+                u32v(0x01000305, 0x1a000002),
+            ]
+            .concat(),
+        )
+    }
+    #[test]
+    fn truncated_emoji_in_a_peer_name_does_not_reject_the_snapshot() {
+        let good = peer(1, &[0, b'o', 0, b'k']);
+        let half_emoji = peer(2, &[0, b'x', 0xd8, 0x3d]);
+        let data = [
+            u32v(SERVER_OP, 38),
+            tlv(0x1316, &[good, half_emoji].concat()),
+        ]
+        .concat();
+        let mut membership = Membership::default();
+        membership.snapshot(&data).unwrap();
+        assert_eq!(membership.peers[&1].name, "ok");
+        assert_eq!(membership.peers[&2].name, "x\u{fffd}");
+        assert!(text(&[0xd8, 0x3d, 0, 1]).is_err());
+    }
 }
