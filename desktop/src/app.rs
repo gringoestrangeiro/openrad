@@ -188,7 +188,12 @@ impl App {
                             .is_none_or(|old| old.status != peer.status)
                             && matches!(peer.status, PeerState::Refused | PeerState::Failed)
                         {
-                            self.log(format!("{}: {}", peer.peer.name, peer.status.label()));
+                            self.log(format!(
+                                "{}: {} · {}",
+                                peer.peer.name,
+                                peer.status.label(),
+                                peer.detail
+                            ));
                         }
                     }
                     if self
@@ -1089,6 +1094,11 @@ impl App {
             ui.add_space(10.); ui.label(RichText::new("If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new("Windows and macOS data planes are not implemented or tested. Each connected peer shows its authenticated transport. Direct candidates come from the server; relay remains available when direct connection fails.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new(format!("Settings: {}", self.paths.directory.display())).size(11.).color(MUTED));
+            ui.add_space(10.);
+            ui.label(RichText::new(format!("Connection logs: {}", self.paths.directory.join("diagnostics").display())).size(11.).color(MUTED));
+            if ui.button("Copy connection log path").clicked() {
+                ui.ctx().copy_text(self.paths.directory.join("diagnostics").display().to_string());
+            }
         });
         ui.add_space(16.);
         ui.label(RichText::new("Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate").size(11.).color(MUTED));

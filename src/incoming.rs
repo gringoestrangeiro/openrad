@@ -174,6 +174,17 @@ impl Setup {
         reports: &ReportDirectory,
         stop: Arc<AtomicBool>,
     ) -> Result<PeerChannel> {
+        self.accept_observed(own_rid, own_ip, peer, reports, stop, |_| {})
+    }
+    pub(crate) fn accept_observed(
+        self,
+        own_rid: u64,
+        own_ip: Ipv4Addr,
+        peer: Peer,
+        reports: &ReportDirectory,
+        stop: Arc<AtomicBool>,
+        observe: impl FnOnce(&crate::peer::TransportReport),
+    ) -> Result<PeerChannel> {
         let cancel = Arc::new(AtomicBool::new(false));
         let until = Instant::now() + Duration::from_secs(40);
         let mut attempts = vec![];
@@ -417,21 +428,21 @@ impl Setup {
             Ok(channel) => channel,
             Err(error) => {
                 attempts.push(json!({"phase":"incoming_setup","error":format!("{error:#}")}));
-                reports.json(
-                    "transport.json",
-                    &crate::peer::TransportReport {
-                        incoming: true,
-                        tcp_candidates,
-                        udp_candidates,
-                        mapped_udp_candidates: mapped_candidates,
-                        attempts,
-                        ..Default::default()
-                    },
-                )?;
+                let report = crate::peer::TransportReport {
+                    incoming: true,
+                    tcp_candidates,
+                    udp_candidates,
+                    mapped_udp_candidates: mapped_candidates,
+                    attempts,
+                    ..Default::default()
+                };
+                observe(&report);
+                reports.json("transport.json", &report)?;
                 return Err(error);
             }
         };
         channel.stream.set_stop(Some(stop));
+        observe(&channel.transport);
         reports.json("transport.json", &channel.transport)?;
         Ok(channel)
     }

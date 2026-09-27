@@ -2,6 +2,7 @@
 pub mod client;
 mod config;
 pub mod crypto;
+pub mod diagnostics;
 pub mod incoming;
 pub mod network;
 pub mod output;

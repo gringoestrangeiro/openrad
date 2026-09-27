@@ -529,6 +529,21 @@ impl Enet {
             self.deadline.is_none_or(|d| Instant::now() < d),
             "UDP handshake deadline"
         );
+        // A busy process can resume with ACKs already waiting in the socket.
+        // Consume them before expiring liveness or the final retry; otherwise a
+        // scheduling stall can disconnect many healthy UDP peers together.
+        let mut b = [0; 4096];
+        for _ in 0..64 {
+            if self.ready.len() >= READY_HIGH_WATER {
+                break;
+            }
+            match self.socket.recv(&mut b) {
+                Ok(n) => self.ingest(&b[..n])?,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
         ensure!(
             self.last_receive.elapsed() < Duration::from_secs(35),
             "UDP liveness timeout"
@@ -546,17 +561,6 @@ impl Enet {
             p.last = Instant::now();
             let c = p.command.clone();
             self.transmit(&c)?;
-        }
-        let mut b = [0; 4096];
-        for _ in 0..64 {
-            if self.ready.len() >= READY_HIGH_WATER {
-                break;
-            }
-            match self.socket.recv(&mut b) {
-                Ok(n) => self.ingest(&b[..n])?,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) => return Err(e.into()),
-            }
         }
         Ok(())
     }
@@ -846,6 +850,50 @@ mod tests {
         assert_eq!(e.pending.len(), 1);
         e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
         assert!(e.pending.is_empty());
+    }
+
+    #[test]
+    fn queued_ack_prevents_false_liveness_and_retry_timeouts_after_a_stall() {
+        let (mut e, remote) = pair();
+        e.sustain();
+        e.send(b"already acknowledged on the wire").unwrap();
+        e.last_receive = Instant::now() - Duration::from_secs(36);
+        for pending in e.pending.values_mut() {
+            pending.tries = 20;
+            pending.last = Instant::now() - Duration::from_secs(1);
+        }
+        remote
+            .send_to(
+                &packet(&[1, 0, 0, 0, 0, 1, 0, 42]),
+                e.socket.local_addr().unwrap(),
+            )
+            .unwrap();
+        e.pump().unwrap();
+        assert!(e.pending.is_empty());
+        assert!(e.last_receive.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn missing_ack_and_real_silence_still_expire() {
+        let (mut e, _remote) = pair();
+        e.sustain();
+        e.last_receive = Instant::now() - Duration::from_secs(36);
+        assert!(e
+            .pump()
+            .unwrap_err()
+            .to_string()
+            .contains("liveness timeout"));
+        e.last_receive = Instant::now();
+        e.send(b"unacknowledged").unwrap();
+        for pending in e.pending.values_mut() {
+            pending.tries = 20;
+            pending.last = Instant::now() - Duration::from_secs(1);
+        }
+        assert!(e
+            .pump()
+            .unwrap_err()
+            .to_string()
+            .contains("acknowledgement timeout"));
     }
     #[test]
     fn malformed_fragments_and_sequence_jumps_are_bounded() {

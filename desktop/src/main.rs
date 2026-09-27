@@ -44,6 +44,7 @@ fn execute() -> anyhow::Result<()> {
         } else {
             Some(BTreeSet::from_iter(args.traffic_peer))
         },
+        ..Default::default()
     };
     let native = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

@@ -16,7 +16,61 @@ Server refusals and password failures appear in the notification and Recent acti
 
 The peer table distinguishes Direct TCP, Direct UDP, and Relay. These labels represent authenticated peer channels. They are separate from the overall service connection status. Incoming channels and outgoing channels use the same authentication and Ethernet forwarding checks.
 
+Transient peer failures retry individually with an increasing delay, starting at
+2–2.5 seconds and capped at 60–75 seconds. The delay varies between peers so a
+large network does not retry every failed peer at the same instant. Refused peers
+can still be retried manually. Roster-only members without a server endpoint are
+not scheduled for connections. Both online presence states preserve established
+channels; offline, address/server changes, and revoked membership still cancel
+the affected connection.
+
+Public-network search timeouts and a full command queue report an operation
+error while keeping the connection running. A timed-out membership mutation
+still requires reconnection to resolve its uncertain outcome.
+
 The Linux desktop uses a `26.0.0.0/8` virtual LAN and group routes for broadcast and multicast. Disconnecting closes the TAP descriptor and removes the temporary interface and its routes.
+
+## Diagnosing connection drops
+
+The desktop automatically records connection diagnostics in the profile's
+`diagnostics` directory. **Settings → Copy connection log path** copies its exact
+location, including for profiles selected with `--data-dir`. On a standard Linux
+profile this is normally `~/.local/share/openrad/diagnostics`.
+
+The current log is `connection.jsonl`. Three older files, `connection.1.jsonl`
+through `connection.3.jsonl`, retain earlier events, with `.1` the most recent
+archive. Each file is limited to 4 MiB, for at most 16 MiB total. Logging uses a
+bounded background queue so disk writes cannot hold up network heartbeats. Log
+queue overflows and write failures are counted in subsequent records. A log-open
+failure is shown in Recent activity; a later write failure is also printed to
+the launch terminal.
+
+Each JSON line has a wall-clock timestamp in milliseconds, process uptime,
+process ID, session number, event name, and `details`. Session numbers distinguish
+automatic reconnects within one process. Events include:
+
+- `session_end` and `session_reconnect`: the full error chain, uptime, number of
+  connected peers at shutdown, and whether another session is scheduled.
+- `control_closed` and `server_disconnect`: the last service operation, last
+  receive age, heartbeat count, and any explicit disconnect reason code. Unknown
+  disconnect fields are described by tag and size without recording their data.
+- `peer_connecting`, `peer_transport_attempts`, `peer_connected`, and `peer_closed`:
+  peer/attempt IDs, candidate transport results, selected endpoint, channel
+  lifetime, last receive age, keepalive counts, and the error that closed it.
+- `peer_cancelled` and `membership_updated`: distinguish roster/binding changes
+  from transport failures. `peer_retry_scheduled` records individual retry delays.
+- `session_health` and `control_health`, every 30 seconds: roster, eligible and
+  connected counts, handshakes, traffic/drop counters, engine delays, and control
+  heartbeat timing. `peer_drop_burst` flags a fall of more than half the connected
+  peers between UI snapshots, starting from at least ten connected peers.
+- `control_event_backpressure`, `control_event_queue_recovered`, and
+  `control_heartbeat_delayed`: identify scheduling or queue pressure.
+
+After another mass disconnect, preserve all four available log files and note
+the approximate time and network. The logs include peer IDs and endpoint
+addresses, but exclude reusable identities, passwords, session keys, and packet
+contents. Files are created with owner-only permissions on Unix. Recent activity
+also includes the peer failure detail instead of only the status label.
 
 ## Reset identity
 

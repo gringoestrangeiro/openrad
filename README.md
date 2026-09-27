@@ -43,7 +43,7 @@ An existing profile will not silently replace a different saved identity. Use an
 
 ## Prebuilt release
 
-The [OpenRad v0.2.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.2.0) includes the desktop app, CLI, setup guide, private-network instructions, and SHA-256 checksums. It supports creating and joining password-protected private networks, member removal, admin-role changes, and network deletion. See [the desktop guide](docs/desktop.md) and [CLI guide](docs/cli.md) for usage.
+The [OpenRad v0.3.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.3.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. This stability release protects heartbeats under load, preserves peer connections across online roster updates, adds individual peer recovery, and records rotating connection diagnostics. It also includes private-network creation, joining, and administration. See [the desktop guide](docs/desktop.md) and [CLI guide](docs/cli.md) for usage.
 
 [Desktop and identity guide](docs/desktop.md) · [CLI guide](docs/cli.md) · [Architecture](docs/architecture.md)
 
@@ -72,7 +72,7 @@ The public service endpoint and public RSA modulus are bundled in `src/config.rs
 
 ## Local data
 
-The desktop stores settings in the platform's application-data directory and credentials in the OS credential store. CLI provisioning explicitly exports a reusable identity to a private output directory; keep that file private. Operational CLI reports can include peer addresses and network names, but do not record session keys, authentication passwords, or packet contents.
+The desktop stores settings and bounded, rotating connection diagnostics in the platform's application-data directory, and credentials in the OS credential store. Settings shows the connection log location; see [diagnosing connection drops](docs/desktop.md#diagnosing-connection-drops). CLI provisioning explicitly exports a reusable identity to a private output directory; keep that file private. Operational reports can include peer IDs, addresses, and network names, but do not record session keys, authentication passwords, or packet contents.
 
 The repository ignores local profiles, reports, credentials, logs, captures, and build products. Use the documented output locations, and review any files before sharing them. Test fixtures contain only synthetic credentials and key material.
 

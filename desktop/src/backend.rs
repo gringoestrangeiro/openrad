@@ -95,11 +95,18 @@ type Report = Arc<dyn Fn(Notice) + Send + Sync>;
 fn manager(
     paths: Paths,
     import: Option<PathBuf>,
-    options: runtime::Options,
+    mut options: runtime::Options,
     actions: Receiver<Action>,
     stop: Arc<AtomicBool>,
     report: Report,
 ) {
+    match openrad::diagnostics::Diagnostics::open(&paths.directory.join("diagnostics")) {
+        Ok(diagnostics) => options.diagnostics = diagnostics,
+        Err(error) => report(Notice::Engine(runtime::Update::Operation {
+            message: format!("Connection diagnostics unavailable: {error:#}"),
+            error: true,
+        })),
+    }
     let mut identity: Option<Identity> = None;
     let mut persisted = false;
     let mut settings = match paths.settings() {
@@ -281,7 +288,12 @@ fn manager(
                     } else {
                         ""
                     };
-                    report(Notice::Phase(Phase::Error, format!("{e}.{suffix}")));
+                    options.diagnostics.event("session_reconnect", serde_json::json!({
+                        "error": format!("{e:#}"), "retry_scheduled": can_retry,
+                        "consecutive_failures": retries,
+                        "delay_ms": if can_retry { Some(retry_at.saturating_duration_since(Instant::now()).as_millis()) } else { None },
+                    }));
+                    report(Notice::Phase(Phase::Error, format!("{e:#}.{suffix}")));
                 }
                 _ => {}
             }

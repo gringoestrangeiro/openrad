@@ -6,6 +6,15 @@
 const MAX_HANDSHAKES: usize = 32;
 const MAX_OUTGOING_HANDSHAKES: usize = 24;
 
+/// Spread recovery of a large roster over time, with a bounded exponential delay.
+pub(crate) fn peer_retry_delay(rid: u64, failures: u32) -> std::time::Duration {
+    let base_ms = (2_000u64 << failures.saturating_sub(1).min(5)).min(60_000);
+    let mixed = rid
+        .wrapping_mul(0x9e3779b97f4a7c15)
+        .rotate_left(failures % 64);
+    std::time::Duration::from_millis(base_ms + mixed % (base_ms / 4 + 1))
+}
+
 pub(crate) struct HandshakeBudget {
     total: usize,
     outgoing: usize,
@@ -39,6 +48,18 @@ impl HandshakeBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retries_back_off_are_bounded_and_spread_large_rosters() {
+        let delays: std::collections::BTreeSet<_> =
+            (1..=150).map(|rid| peer_retry_delay(rid, 1)).collect();
+        assert!(delays.len() > 100);
+        for rid in 1..=150 {
+            assert!(peer_retry_delay(rid, 1) >= std::time::Duration::from_secs(2));
+            assert!(peer_retry_delay(rid, 2) > peer_retry_delay(rid, 1));
+            assert!(peer_retry_delay(rid, u32::MAX) <= std::time::Duration::from_secs(75));
+        }
+    }
 
     #[test]
     fn a_hundred_outgoing_peers_are_scheduled_in_five_batches() {

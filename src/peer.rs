@@ -118,6 +118,28 @@ impl PeerChannel {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
+        Self::connect_observed(
+            identity,
+            modulus,
+            own_ip,
+            peer,
+            reports,
+            duration,
+            stop,
+            |_| {},
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn connect_observed(
+        identity: &Identity,
+        modulus: &[u8],
+        own_ip: Ipv4Addr,
+        peer: Peer,
+        reports: &ReportDirectory,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+        observe: impl FnOnce(&TransportReport),
+    ) -> Result<Self> {
         let mut report = TransportReport::default();
         let result = Self::connect_inner(
             identity,
@@ -129,6 +151,7 @@ impl PeerChannel {
             stop,
             &mut report,
         );
+        observe(&report);
         reports.json("transport.json", &report)?;
         result
     }

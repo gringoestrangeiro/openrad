@@ -578,6 +578,11 @@ pub struct PublicNetwork {
     pub name: String,
     pub reported_count: u32,
 }
+pub fn listing_id(data: &[u8]) -> Result<u64> {
+    let r = records(data)?;
+    let f = records(field(&r, 0x1334)?)?;
+    int64(field(&f, 0x02000340)?)
+}
 pub fn listing(data: &[u8], id: u64) -> Result<(Vec<PublicNetwork>, u64)> {
     let r = records(data)?;
     let f = records(field(&r, 0x1334)?)?;
