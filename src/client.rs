@@ -137,8 +137,11 @@ fn worker(
         let mut last_verified = 0;
         while !context.stop.load(Ordering::Relaxed) && !peer_stop.load(Ordering::Relaxed) {
             for frame in commands.try_iter().take(32) {
-                channel.send(&tunnel::encode(&frame)?)?;
-                events.send(Event::Sent(rid))?;
+                if channel.send(&tunnel::encode(&frame)?)? {
+                    events.send(Event::Sent(rid))?;
+                } else {
+                    events.send(Event::Dropped(rid))?;
+                }
             }
             if Instant::now() >= next_keepalive {
                 seq += 1;
@@ -153,7 +156,9 @@ fn worker(
                 Packet::Keepalive {
                     sequence,
                     reply: false,
-                } => channel.send(&tunnel::keepalive(sequence, true))?,
+                } => {
+                    channel.send(&tunnel::keepalive(sequence, true))?;
+                }
                 Packet::Keepalive {
                     sequence,
                     reply: true,
