@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod app;
 mod backend;
+mod network_ui;
 mod storage;
 use clap::Parser;
 use std::{collections::BTreeSet, path::PathBuf};

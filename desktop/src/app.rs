@@ -1,9 +1,13 @@
 use crate::{
     backend::{Action, Backend, Notice, Phase},
+    network_ui::{
+        role_label, DeleteConfirmation, FormEvent, MemberConfirmation, Mode, NetworkForm,
+    },
     storage::{Paths, Settings},
 };
 use eframe::egui::{self, Align, Color32, FontId, RichText, Stroke, Vec2};
 use openrad::{
+    network::MemberAction,
     protocol::PublicNetwork,
     runtime::{self, Command, PeerState, Snapshot, Update},
 };
@@ -62,6 +66,9 @@ pub struct App {
     stopped: bool,
     confirm_reset: bool,
     replacement_pending: bool,
+    network_form: Option<NetworkForm>,
+    member_confirmation: Option<MemberConfirmation>,
+    delete_confirmation: Option<DeleteConfirmation>,
 }
 impl App {
     pub fn new(
@@ -99,6 +106,9 @@ impl App {
             import_path: String::new(),
             confirm_reset: false,
             replacement_pending: false,
+            network_form: None,
+            member_confirmation: None,
+            delete_confirmation: None,
             download: VecDeque::new(),
             upload: VecDeque::new(),
             last_sample: Instant::now(),
@@ -181,6 +191,13 @@ impl App {
                             self.log(format!("{}: {}", peer.peer.name, peer.status.label()));
                         }
                     }
+                    if self
+                        .selected_network
+                        .as_ref()
+                        .is_some_and(|id| !state.networks.iter().any(|n| &n.network_id == id))
+                    {
+                        self.selected_network = None;
+                    }
                     self.snapshot = state;
                 }
                 Notice::Engine(Update::Catalog {
@@ -218,13 +235,52 @@ impl App {
             }
         }
     }
+    fn network_dialogs(&mut self, ctx: &egui::Context) {
+        let enabled = self.connected() && !self.busy;
+        let event = self
+            .network_form
+            .as_mut()
+            .and_then(|f| f.show(ctx, enabled));
+        if let Some(event) = event {
+            self.network_form = None;
+            if let FormEvent::Submit(request) = event {
+                self.command(Command::Network(request));
+            }
+        }
+        if let Some(confirm) = &self.member_confirmation {
+            let still_allowed = enabled
+                && self
+                    .identity
+                    .as_ref()
+                    .is_some_and(|(rid, _)| confirm.allowed(&self.snapshot, *rid));
+            if let Some(event) = confirm.show(ctx, still_allowed) {
+                self.member_confirmation = None;
+                if let FormEvent::Submit(request) = event {
+                    self.command(Command::Network(request));
+                }
+            }
+        }
+        if let Some(confirm) = &self.delete_confirmation {
+            let still_allowed = enabled
+                && self
+                    .identity
+                    .as_ref()
+                    .is_some_and(|(rid, _)| confirm.allowed(&self.snapshot, *rid));
+            if let Some(event) = confirm.show(ctx, still_allowed) {
+                self.delete_confirmation = None;
+                if let FormEvent::Submit(request) = event {
+                    self.command(Command::Network(request));
+                }
+            }
+        }
+    }
     fn connected(&self) -> bool {
         self.phase == Phase::Connected
     }
     fn command(&mut self, command: Command) {
         if matches!(
             command,
-            Command::Search { .. } | Command::Join(_) | Command::Leave(_)
+            Command::Search { .. } | Command::Join(_) | Command::Leave(_) | Command::Network(_)
         ) {
             self.busy = true;
         }
@@ -310,7 +366,7 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::bottom_up(Align::LEFT), |ui| {
                     ui.label(
-                        RichText::new("Native Linux · v0.1.0")
+                        RichText::new(format!("Native Linux · v{}", env!("CARGO_PKG_VERSION")))
                             .size(10.)
                             .color(MUTED),
                     );
@@ -568,21 +624,38 @@ impl App {
         self.hero(ui);
         self.traffic(ui);
         ui.add_space(25.);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Your networks").size(19.).strong());
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(primary("+ Join a network")).clicked() {
-                    self.page = Page::Discover;
-                    self.focus_search = true;
-                }
-            });
+        ui.label(RichText::new("Your networks").size(19.).strong());
+        ui.add_space(8.);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.connected() && !self.busy,
+                    primary("Create private network"),
+                )
+                .clicked()
+            {
+                self.network_form = Some(NetworkForm::new(Mode::Create));
+            }
+            if ui
+                .add_enabled(
+                    self.connected() && !self.busy,
+                    egui::Button::new("Join private network"),
+                )
+                .clicked()
+            {
+                self.network_form = Some(NetworkForm::new(Mode::Join));
+            }
+            if ui.button("Browse public").clicked() {
+                self.page = Page::Discover;
+                self.focus_search = true;
+            }
         });
         ui.add_space(12.);
         if self.snapshot.networks.is_empty() {
             card().inner_margin(28).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.label(RichText::new(if self.connected() { "Make your first connection" } else { "Your networks will appear here" }).size(19.).strong());
-                ui.add_space(8.); ui.label(RichText::new("Find a public network, join it, and OpenRad connects to available members.").color(MUTED));
+                ui.add_space(8.); ui.label(RichText::new("Create a private network, join one with a password, or explore public networks. OpenRad connects to available members.").color(MUTED));
                 ui.add_space(12.); if ui.add_enabled(self.connected(), primary("Explore public networks")).clicked() { self.page = Page::Discover; self.focus_search = true; }
             });
             return;
@@ -607,6 +680,14 @@ impl App {
             }
         });
         ui.add_space(12.);
+        if self.selected_network.is_none() {
+            ui.label(
+                RichText::new("Select a network to see roles and manage its members.")
+                    .size(11.)
+                    .color(MUTED),
+            );
+            ui.add_space(8.);
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.peer_filter)
@@ -629,20 +710,41 @@ impl App {
                 .cloned()
             {
                 ui.add_space(10.);
-                ui.horizontal(|ui| {
+                let role = self
+                    .identity
+                    .as_ref()
+                    .and_then(|(rid, _)| self.snapshot.roles.get(&n.network_id)?.get(rid).copied());
+                ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(&n.name).strong());
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui
+                    badge(
+                        ui,
+                        role_label(role),
+                        if role == Some(2) { MINT } else { MUTED },
+                    );
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.connected() && !self.busy,
+                            egui::Button::new("Leave network"),
+                        )
+                        .clicked()
+                    {
+                        self.command(Command::Leave(n.network_id.clone()));
+                    }
+                    if role == Some(2)
+                        && ui
                             .add_enabled(
                                 self.connected() && !self.busy,
-                                egui::Button::new(RichText::new("Leave network").color(RED)),
+                                egui::Button::new(RichText::new("Delete network").color(RED)),
                             )
                             .clicked()
-                        {
-                            self.command(Command::Leave(n.network_id));
-                            self.selected_network = None;
-                        }
-                    });
+                    {
+                        self.delete_confirmation = Some(DeleteConfirmation {
+                            network: n.network_id.clone(),
+                            name: n.name.clone(),
+                        });
+                    }
                 });
             }
         }
@@ -678,7 +780,7 @@ impl App {
                     ui.horizontal(|ui| {
                         let color = peer_color(&peer.status);
                         dot(ui, color);
-                        let width = (ui.available_width() - 180.).max(120.);
+                        let width = (ui.available_width() - 330.).max(100.);
                         ui.allocate_ui_with_layout(
                             Vec2::new(width, 43.),
                             egui::Layout::top_down(Align::LEFT),
@@ -699,6 +801,54 @@ impl App {
                             },
                         );
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if let Some(network) = self.selected_network.clone() {
+                                let role = self
+                                    .snapshot
+                                    .roles
+                                    .get(&network)
+                                    .and_then(|r| r.get(&peer.peer.rid))
+                                    .copied();
+                                let own_role = self.identity.as_ref().and_then(|(rid, _)| {
+                                    self.snapshot.roles.get(&network)?.get(rid).copied()
+                                });
+                                if own_role == Some(2) {
+                                    ui.add_enabled_ui(self.connected() && !self.busy, |ui| {
+                                        ui.menu_button("Manage", |ui| {
+                                            let role_action = match role {
+                                                Some(2) => Some(MemberAction::RevokeAdmin),
+                                                Some(1) => Some(MemberAction::GrantAdmin),
+                                                _ => None,
+                                            };
+                                            for action in
+                                                role_action.into_iter().chain([MemberAction::Kick])
+                                            {
+                                                if ui.button(action.label()).clicked() {
+                                                    self.member_confirmation =
+                                                        Some(MemberConfirmation {
+                                                            network: network.clone(),
+                                                            network_name: self
+                                                                .snapshot
+                                                                .networks
+                                                                .iter()
+                                                                .find(|n| n.network_id == network)
+                                                                .map(|n| n.name.clone())
+                                                                .unwrap_or_default(),
+                                                            member: peer.peer.rid,
+                                                            member_name: peer.peer.name.clone(),
+                                                            action,
+                                                        });
+                                                    ui.close();
+                                                }
+                                            }
+                                        });
+                                    });
+                                }
+                                badge(
+                                    ui,
+                                    role_label(role),
+                                    if role == Some(2) { MINT } else { MUTED },
+                                );
+                            }
                             badge(
                                 ui,
                                 peer.transport
@@ -1043,6 +1193,7 @@ impl eframe::App for App {
                 self.toast = None;
             }
         }
+        self.network_dialogs(&ctx);
         if self.confirm_reset && !self.closing {
             egui::Modal::new(egui::Id::new("reset-identity")).show(&ctx, |ui| {
                 ui.set_max_width(430.);

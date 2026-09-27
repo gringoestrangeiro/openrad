@@ -2,6 +2,7 @@ use anyhow::{ensure, Result};
 use clap::{Args, Parser, Subcommand};
 use openrad::{
     client::{self, RunOptions},
+    network::{MemberAction, NetworkPassword, NetworkRequest},
     output::ReportDirectory,
     protocol::Identity,
     session::Session,
@@ -22,7 +23,7 @@ use std::{
 #[derive(Parser)]
 #[command(
     version,
-    about = "Native headless public-network client with an Ethernet TAP data path"
+    about = "Native VPN client with private networks, administration and Ethernet TAP"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -67,12 +68,68 @@ enum Command {
         #[arg(long, default_value = "")]
         query: String,
     },
-    /// Join public networks, or verify already-established membership.
+    /// Join public or password-protected networks, or verify existing membership.
     Join {
         #[command(flatten)]
         session: SessionArgs,
         #[arg(long, required = true)]
         network: Vec<String>,
+        /// UTF-8 password file; use only with a single private network. One trailing newline is removed.
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+    },
+    /// Create a password-protected private network.
+    CreateNetwork {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+        #[arg(long)]
+        password_file: PathBuf,
+    },
+    /// Leave a network by ID or exact name.
+    Leave {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+    },
+    /// Permanently delete a network you administer, removing all members.
+    DeleteNetwork {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+        /// Explicitly confirm deletion for every member.
+        #[arg(long, required = true)]
+        confirm: bool,
+    },
+    /// Remove a member from a network you administer.
+    Kick {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+        #[arg(long)]
+        member: u64,
+    },
+    /// Give another member network administration permissions.
+    GrantAdmin {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+        #[arg(long)]
+        member: u64,
+    },
+    /// Remove another member's administration permissions.
+    RevokeAdmin {
+        #[command(flatten)]
+        session: SessionArgs,
+        #[arg(long)]
+        network: String,
+        #[arg(long)]
+        member: u64,
     },
     /// List authenticated memberships and peers without peer connections.
     Peers {
@@ -139,6 +196,49 @@ fn attach(args: &SessionArgs) -> Result<(client::AttachedClient, ReportDirectory
         reports,
     ))
 }
+fn password_file(path: &std::path::Path) -> Result<NetworkPassword> {
+    use std::io::Read;
+    use zeroize::Zeroizing;
+    let mut contents = Zeroizing::new(String::new());
+    std::fs::File::open(path)?
+        .take(4097)
+        .read_to_string(&mut contents)?;
+    ensure!(contents.len() <= 4096, "network password file too large");
+    if contents.ends_with('\n') {
+        contents.pop();
+        if contents.ends_with('\r') {
+            contents.pop();
+        }
+    }
+    NetworkPassword::new(std::mem::take(&mut *contents))
+}
+fn resolve_network(membership: &openrad::protocol::Membership, name: &str) -> Result<String> {
+    let matches: Vec<_> = membership
+        .networks
+        .values()
+        .filter(|n| n.network_id == name || n.name == name)
+        .collect();
+    ensure!(
+        matches.len() == 1,
+        "network not found or ambiguous; use the network ID from peers"
+    );
+    Ok(matches[0].network_id.clone())
+}
+fn manage(
+    args: &SessionArgs,
+    request: impl FnOnce(&client::AttachedClient) -> Result<NetworkRequest>,
+) -> Result<()> {
+    let (mut client, reports) = attach(args)?;
+    let request = request(&client)?;
+    let result = client
+        .session
+        .network_operation(request, 2, 1, &mut client.membership)?;
+    let output = json!({"result":if result.error {"refused"} else {"completed"},"message":result.message,"membership":client.membership});
+    reports.json("result.json", &output)?;
+    println!("{output}");
+    ensure!(!result.error, "{}", result.message);
+    Ok(())
+}
 fn execute() -> Result<()> {
     let cli = Cli::parse();
     if let Command::TapHelper {
@@ -197,7 +297,13 @@ fn execute() -> Result<()> {
         Command::Join {
             session: args,
             network,
+            password_file: password_path,
         } => {
+            ensure!(
+                password_path.is_none() || network.len() == 1,
+                "--password-file requires exactly one --network"
+            );
+            let password = password_path.as_deref().map(password_file).transpose()?;
             let (client, reports) = attach(&args)?;
             let client::AttachedClient {
                 mut session,
@@ -208,12 +314,97 @@ fn execute() -> Result<()> {
                 if membership.networks.values().any(|n| &n.name == name) {
                     println!("{}", json!({"event":"membership_verified","name":name}));
                 } else {
-                    let joined =
-                        session.join_public(name, i as u64 + 2, i as u32 + 1, &mut membership)?;
-                    println!("{}", json!({"event":"join_approved","network":joined}));
+                    let result = session.network_operation(
+                        NetworkRequest::Join {
+                            name: name.clone(),
+                            password: password.clone(),
+                        },
+                        i as u64 + 2,
+                        i as u32 + 1,
+                        &mut membership,
+                    )?;
+                    ensure!(!result.error, "{}", result.message);
+                    println!(
+                        "{}",
+                        json!({"event":if result.pending_approval {"approval_pending"} else {"join_approved"},"name":name,"message":result.message})
+                    );
                 }
             }
             reports.json("result.json", &membership)?;
+        }
+        Command::CreateNetwork {
+            session: args,
+            network,
+            password_file: path,
+        } => {
+            let password = password_file(&path)?;
+            manage(&args, |_| {
+                Ok(NetworkRequest::Create {
+                    name: network,
+                    password,
+                })
+            })?;
+        }
+        Command::Leave {
+            session: args,
+            network,
+        } => {
+            manage(&args, |c| {
+                Ok(NetworkRequest::Leave {
+                    network: resolve_network(&c.membership, &network)?,
+                })
+            })?;
+        }
+        Command::DeleteNetwork {
+            session: args,
+            network,
+            confirm,
+        } => {
+            ensure!(confirm, "network deletion requires --confirm");
+            manage(&args, |c| {
+                Ok(NetworkRequest::Delete {
+                    network: resolve_network(&c.membership, &network)?,
+                })
+            })?;
+        }
+        Command::Kick {
+            session: args,
+            network,
+            member,
+        } => {
+            manage(&args, |c| {
+                Ok(NetworkRequest::Member {
+                    network: resolve_network(&c.membership, &network)?,
+                    member,
+                    action: MemberAction::Kick,
+                })
+            })?;
+        }
+        Command::GrantAdmin {
+            session: args,
+            network,
+            member,
+        } => {
+            manage(&args, |c| {
+                Ok(NetworkRequest::Member {
+                    network: resolve_network(&c.membership, &network)?,
+                    member,
+                    action: MemberAction::GrantAdmin,
+                })
+            })?;
+        }
+        Command::RevokeAdmin {
+            session: args,
+            network,
+            member,
+        } => {
+            manage(&args, |c| {
+                Ok(NetworkRequest::Member {
+                    network: resolve_network(&c.membership, &network)?,
+                    member,
+                    action: MemberAction::RevokeAdmin,
+                })
+            })?;
         }
         Command::Run {
             session: args,
@@ -252,5 +443,52 @@ fn main() {
     if let Err(error) = execute() {
         eprintln!("openrad: {error:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    #[test]
+    fn deletion_requires_explicit_confirmation() {
+        let args = [
+            "openrad",
+            "delete-network",
+            "--identity",
+            "synthetic.json",
+            "--output",
+            "unused",
+            "--network",
+            "Example",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
+        let cli = Cli::try_parse_from(args.into_iter().chain(["--confirm"])).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::DeleteNetwork { confirm: true, .. }
+        ));
+    }
+    #[test]
+    fn private_join_accepts_password_file_but_not_plaintext_password_arguments() {
+        let args = [
+            "openrad",
+            "join",
+            "--identity",
+            "synthetic.json",
+            "--output",
+            "unused",
+            "--network",
+            "Example",
+        ];
+        assert!(Cli::try_parse_from(args.into_iter().chain(["--password", "secret"])).is_err());
+        let cli = Cli::try_parse_from(args.into_iter().chain(["--password-file", "private-file"]))
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Join {
+                password_file: Some(_),
+                ..
+            }
+        ));
     }
 }

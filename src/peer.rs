@@ -322,7 +322,7 @@ impl PeerChannel {
         let (cid, password) = pending.ok_or_else(|| anyhow::anyhow!("missing NewConnection"))?;
         // Native connectors race; serial transport attempts can outlive a
         // peer's rendezvous window. Bound this to three transport workers per
-        // peer (the caller bounds peer setups to four). Only a complete peer
+        // peer (the caller separately bounds concurrent peer setups). Only a complete peer
         // proof AND Ethernet service handshake may win.
         let mut tcp_candidates = report.tcp_candidates.clone();
         tcp_candidates.sort_by_key(|c| match c.endpoint.ip() {
