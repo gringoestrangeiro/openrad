@@ -118,6 +118,7 @@ enum Message {
     PeerRecord(Vec<u8>),
     Frame(u64, Vec<u8>),
     Sent(usize),
+    Dropped,
     Closed(u64, Option<String>),
 }
 struct Pending {
@@ -323,8 +324,11 @@ fn peer_loop(
         let mut sequence = 0;
         while !stop.load(Ordering::Relaxed) {
             for frame in frames.try_iter().take(32) {
-                channel.send(&tunnel::encode(&frame)?)?;
-                events.send(Message::Sent(frame.len()))?;
+                if channel.send(&tunnel::encode(&frame)?)? {
+                    events.send(Message::Sent(frame.len()))?;
+                } else {
+                    events.send(Message::Dropped)?;
+                }
             }
             if Instant::now() >= heartbeat {
                 sequence += 1;
@@ -339,7 +343,9 @@ fn peer_loop(
                 tunnel::Packet::Keepalive {
                     sequence,
                     reply: false,
-                } => channel.send(&tunnel::keepalive(sequence, true))?,
+                } => {
+                    channel.send(&tunnel::keepalive(sequence, true))?;
+                }
                 tunnel::Packet::Frames(frames) => {
                     for frame in frames {
                         if frame.len() <= 1414 {
@@ -504,6 +510,7 @@ pub fn run(
                         snapshot.traffic.sent_bytes += bytes as u64;
                         snapshot.traffic.sent_frames += 1;
                     }
+                    Message::Dropped => snapshot.traffic.dropped += 1,
                     Message::Frame(rid, frame) => {
                         let valid = options.allows(rid)
                             && membership.peers.get(&rid).is_some_and(|p| {

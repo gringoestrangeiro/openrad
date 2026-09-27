@@ -69,6 +69,12 @@ impl PeerStream {
             Self::Udp(s) => s.set_stop(stop),
         }
     }
+    pub fn has_room(&self, len: usize) -> bool {
+        match self {
+            Self::Tcp(_) => true,
+            Self::Udp(s) => s.has_room(len),
+        }
+    }
     pub fn sustain(&mut self) {
         match self {
             Self::Tcp(s) => s.sustain(),
@@ -589,10 +595,16 @@ impl PeerChannel {
         p.transport.service_connected = true;
         Ok(p)
     }
-    pub fn send(&mut self, plain: &[u8]) -> Result<()> {
+    /// Returns false when the transport window is full and the message was
+    /// dropped. The check precedes encryption: the CBC chain continues across
+    /// messages, so a ciphertext that is never sent would desynchronise the peer.
+    pub fn send(&mut self, plain: &[u8]) -> Result<bool> {
+        if !self.stream.has_room((plain.len() + 9).div_ceil(16) * 16) {
+            return Ok(false);
+        }
         let ct = self.channel.encrypt(plain)?;
         self.stream.send(&ct)?;
-        Ok(())
+        Ok(true)
     }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         let ct = self.stream.receive(65536)?;
