@@ -219,7 +219,12 @@ mod tests {
     #[test]
     fn identity_is_saved_and_reused_without_provisioning_again() {
         let vault = MemoryVault::default();
-        let id = provision_once(&vault, |_| Ok(identity())).unwrap();
+        let id = provision_once(&vault, |commit| {
+            commit()?;
+            Ok(identity())
+        })
+        .unwrap();
+        assert_eq!(vault.data.borrow().as_deref(), Some(PENDING));
         save(&vault, &id).unwrap();
         assert_eq!(
             provision_once(&vault, |_| panic!("must reuse"))
@@ -242,7 +247,14 @@ mod tests {
     fn failure_before_registration_is_sent_allows_a_later_attempt() {
         let vault = MemoryVault::default();
         assert!(provision_once(&vault, |_| bail!("network unreachable")).is_err());
-        assert_eq!(provision_once(&vault, |_| Ok(identity())).unwrap().rid, 123);
+        assert!(vault.data.borrow().is_none());
+        let id = provision_once(&vault, |commit| {
+            commit()?;
+            Ok(identity())
+        })
+        .unwrap();
+        assert_eq!(id.rid, 123);
+        assert_eq!(vault.data.borrow().as_deref(), Some(PENDING));
     }
     #[test]
     fn locked_store_prevents_registration_and_corruption_is_not_first_use() {

@@ -757,14 +757,19 @@ impl Enet {
         );
         f.parts.entry(index).or_insert((offset, payload.to_vec()));
         if f.parts.len() == count as usize {
-            let f = self.fragments.remove(&start).unwrap();
             let mut out = Vec::with_capacity(total);
-            for (_, (offset, data)) in f.parts {
-                ensure!(offset == out.len(), "overlapping/gapped UDP fragments");
-                out.extend(data);
+            for (offset, data) in f.parts.values() {
+                ensure!(*offset == out.len(), "overlapping/gapped UDP fragments");
+                out.extend_from_slice(data);
             }
             ensure!(out.len() == total, "UDP fragment total mismatch");
-            return Ok(self.accept_ordered(start, count as u16, out));
+            // Earlier parts have already been acknowledged. Keep them if the
+            // reorder queue is full: the sender only retries the final part.
+            let accepted = self.accept_ordered(start, count as u16, out);
+            if accepted {
+                self.fragments.remove(&start);
+            }
+            return Ok(accepted);
         }
         Ok(true)
     }
@@ -914,5 +919,64 @@ mod tests {
             assert_eq!(e.ready.pop_front().unwrap(), b"gap");
             assert_eq!(e.ready.pop_front().unwrap(), b"abcd");
         }
+    }
+
+    #[test]
+    fn completed_fragments_survive_a_full_reorder_buffer() {
+        let (mut e, _remote) = pair();
+        // The sender may forget this part as soon as it is acknowledged.
+        e.ingest(&packet(&fragment_of(300, 0, b"ab"))).unwrap();
+        for seq in 2..=257 {
+            e.ingest(&packet(&reliable(seq, b"queued"))).unwrap();
+        }
+        assert_eq!(e.ordered.len(), 256);
+        e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+
+        // Close the gap and drain the queue before the sender retries only the
+        // final, unacknowledged fragment. The earlier part must still exist.
+        e.ingest(&packet(&reliable(1, b"gap"))).unwrap();
+        e.ready.clear();
+        for seq in 258..300 {
+            e.ingest(&packet(&reliable(seq, b"queued"))).unwrap();
+        }
+        e.ready.clear();
+        e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+        assert_eq!(e.ready.pop_front().as_deref(), Some(b"abcd".as_slice()));
+        assert_eq!(e.incoming, 301);
+        assert!(e.fragments.is_empty());
+    }
+
+    #[test]
+    fn refused_commands_are_not_acknowledged_and_can_be_retried() {
+        let (mut e, remote) = pair();
+        remote.set_nonblocking(true).unwrap();
+        let mut received = [0; 64];
+        e.ingest(&packet(&reliable(RECEIVE_WINDOW + 1, b"later")))
+            .unwrap();
+        assert_eq!(
+            remote.recv(&mut received).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        e.incoming = RECEIVE_WINDOW;
+        e.ingest(&packet(&reliable(RECEIVE_WINDOW + 1, b"later")))
+            .unwrap();
+        assert_eq!(remote.recv(&mut received).unwrap(), 16);
+        assert_eq!(received[8], 1);
+        assert_eq!(u16be(&received, 12), RECEIVE_WINDOW + 1);
+        assert_eq!(e.ready.pop_front().unwrap(), b"later");
+    }
+
+    #[test]
+    fn send_window_tracks_a_lost_command_across_sequence_wraparound() {
+        let (mut e, _remote) = pair();
+        e.outgoing = u16::MAX - 1;
+        e.send(b"lost").unwrap();
+        e.send(b"received").unwrap();
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 0, 0, 42])).unwrap();
+        assert_eq!(e.in_flight(), 2);
+        assert!(e.has_room((SEND_WINDOW - 2) * (e.mtu - 32)));
+        assert!(!e.has_room((SEND_WINDOW - 1) * (e.mtu - 32)));
+        e.ingest(&packet(&[1, 0, 0, 0, 255, 255, 0, 42])).unwrap();
+        assert_eq!(e.in_flight(), 0);
     }
 }
