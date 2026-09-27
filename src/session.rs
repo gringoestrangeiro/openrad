@@ -426,7 +426,10 @@ impl Session {
             stop,
         )?;
         s.send(&login(&identity.node_name, s.latency, 4, None)?)?;
-        let mut membership = Membership::default();
+        let mut membership = Membership {
+            own_rid: identity.rid,
+            ..Membership::default()
+        };
         for i in 0..8 {
             let data = s.receive()?;
             let operation = op(&data)?;
@@ -459,6 +462,42 @@ impl Session {
         }
         bail!("public listing budget exhausted")
     }
+    pub fn network_operation(
+        &mut self,
+        request: crate::network::NetworkRequest,
+        id: u64,
+        sequence: u32,
+        membership: &mut Membership,
+    ) -> Result<crate::network::OperationResult> {
+        let (mut operation, packet) =
+            crate::network::NetworkOperation::start(request, id, sequence)?;
+        self.send(&packet)?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        for _ in 0..256 {
+            ensure!(
+                Instant::now() < deadline,
+                "network operation timed out; reconnect to check server membership"
+            );
+            if !self.stream.ready(100)? {
+                continue;
+            }
+            let data = self.receive()?;
+            match op(&data)? {
+                38 => membership.snapshot(&data)?,
+                41 | 42 => membership.changes(&data)?,
+                16 => bail!("server disconnected the session"),
+                _ => {}
+            }
+            let progress = operation.handle(&data, membership)?;
+            if let Some(packet) = progress.send {
+                self.send(&packet)?;
+            }
+            if let Some(result) = progress.complete {
+                return Ok(result);
+            }
+        }
+        bail!("network operation budget exhausted; reconnect to check server membership")
+    }
     pub fn join_public(
         &mut self,
         name: &str,
@@ -466,44 +505,80 @@ impl Session {
         seq: u32,
         membership: &mut Membership,
     ) -> Result<Network> {
-        self.send(&join(name, id, seq)?)?;
-        let mut joined = None;
-        for _ in 0..128 {
-            let data = self.receive()?;
-            let r = records(&data)?;
-            match op(&data)? {
-                37 => {
-                    let f = records(field(&r, 0x131a)?)?;
-                    if int64(field(&f, 0x02000340)?)? != id {
-                        continue;
-                    }
-                    let code = int32(field(&f, 0x0100030c)?)?;
-                    let root = optional(&f, 0x1316)?.ok_or_else(|| {
-                        anyhow::anyhow!("JOIN returned code {code} without snapshot")
-                    })?;
-                    membership.snapshot(&tlv(0x1316, root))?;
-                    joined = membership
-                        .networks
-                        .values()
-                        .find(|n| n.name == name)
-                        .cloned();
-                    ensure!(joined.is_some(), "JOIN network name mismatch");
-                }
-                41 => membership.changes(&data)?,
-                42 => {
-                    let f = records(field(&r, 0x131f)?)?;
-                    for e in f.iter().filter(|e| e.tag == 0x131e) {
-                        let f = records(e.value)?;
-                        if let Some(ref n) = joined {
-                            if hex::encode(field(&f, 0x0d000309)?) == n.network_id {
-                                return Ok(n.clone());
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+        let result = self.network_operation(
+            crate::network::NetworkRequest::public_join(name.into()),
+            id,
+            seq,
+            membership,
+        )?;
+        ensure!(!result.error, "{}", result.message);
+        membership
+            .networks
+            .values()
+            .find(|n| n.name == name)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("joined network missing from membership"))
+    }
+}
+
+#[cfg(test)]
+mod frame_write_tests {
+    use super::*;
+
+    struct PartialWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+        calls: usize,
+        interrupt: bool,
+    }
+    impl Write for PartialWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            panic!("frame should use vectored writes")
         }
-        bail!("JOIN approval budget exhausted")
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn write_vectored(&mut self, buffers: &[IoSlice<'_>]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.interrupt {
+                self.interrupt = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let before = self.bytes.len();
+            self.bytes
+                .extend(buffers.iter().flat_map(|b| b.iter()).take(self.limit));
+            Ok(self.bytes.len() - before)
+        }
+    }
+
+    #[test]
+    fn partial_and_interrupted_writes_never_repeat_or_drop_bytes() {
+        let expected = [0, 0, 0, 5, 1, 2, 3, 4, 5];
+        for limit in 1..=expected.len() {
+            let mut writer = PartialWriter {
+                bytes: vec![],
+                limit,
+                calls: 0,
+                interrupt: true,
+            };
+            write_frame(&mut writer, &[1, 2, 3, 4, 5]).unwrap();
+            assert_eq!(writer.bytes, expected);
+            assert_eq!(writer.calls, 1 + expected.len().div_ceil(limit));
+        }
+    }
+
+    #[test]
+    fn zero_write_fails_instead_of_spinning() {
+        let mut writer = PartialWriter {
+            bytes: vec![],
+            limit: 0,
+            calls: 0,
+            interrupt: false,
+        };
+        assert_eq!(
+            write_frame(&mut writer, &[1]).unwrap_err().kind(),
+            io::ErrorKind::WriteZero
+        );
+        assert_eq!(writer.calls, 1);
     }
 }

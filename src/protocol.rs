@@ -1,4 +1,4 @@
-//! Bounded TLVs and the exercised public-network/peer-control subset.
+//! Bounded TLVs, network memberships and peer control.
 use anyhow::{anyhow, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -605,6 +605,8 @@ pub struct Peer {
 }
 #[derive(Clone, Default, Serialize)]
 pub struct Membership {
+    pub own_rid: u64,
+    pub roles: BTreeMap<String, BTreeMap<u64, u32>>,
     pub networks: BTreeMap<String, Network>,
     pub peers: BTreeMap<u64, Peer>,
 }
@@ -615,10 +617,37 @@ fn network_id(b: &[u8]) -> Result<String> {
 impl Membership {
     pub fn remove_network(&mut self, id: &str) {
         self.networks.remove(id);
+        self.roles.remove(id);
         self.peers.retain(|_, peer| {
             peer.network_ids.remove(id);
             !peer.network_ids.is_empty()
         });
+    }
+    pub fn role(&self, network: &str, rid: u64) -> Option<u32> {
+        self.roles.get(network)?.get(&rid).copied()
+    }
+    pub fn remove_member(&mut self, network: &str, rid: u64) {
+        if rid == self.own_rid && rid != 0 {
+            self.remove_network(network);
+            return;
+        }
+        if let Some(roles) = self.roles.get_mut(network) {
+            roles.remove(&rid);
+        }
+        if let Some(peer) = self.peers.get_mut(&rid) {
+            peer.network_ids.remove(network);
+            if peer.network_ids.is_empty() {
+                self.peers.remove(&rid);
+            }
+        }
+    }
+    fn read_role(&mut self, fields: &[Record<'_>]) -> Result<()> {
+        if let Some(value) = optional(fields, 0x0100030a)? {
+            let id = network_id(field(fields, 0x0d000309)?)?;
+            let rid = int64(field(fields, 0x020001e1)?)?;
+            self.roles.entry(id).or_default().insert(rid, int32(value)?);
+        }
+        Ok(())
     }
     pub fn snapshot(&mut self, data: &[u8]) -> Result<()> {
         let r = records(data)?;
@@ -630,6 +659,14 @@ impl Membership {
             if r.tag == 0x1315 {
                 let f = records(r.value)?;
                 let id = network_id(field(&f, 0x0d000309)?)?;
+                if self.own_rid != 0 {
+                    if let Some(role) = optional(&f, 0x0100030a)? {
+                        self.roles
+                            .entry(id.clone())
+                            .or_default()
+                            .insert(self.own_rid, int32(role)?);
+                    }
+                }
                 self.networks.insert(
                     id.clone(),
                     Network {
@@ -663,6 +700,7 @@ impl Membership {
         }
         for r in entries.iter().filter(|r| r.tag == 0x1318) {
             let f = records(r.value)?;
+            self.read_role(&f)?;
             if let Some(p) = self.peers.get_mut(&int64(field(&f, 0x020001e1)?)?) {
                 p.network_ids.insert(network_id(field(&f, 0x0d000309)?)?);
             }
@@ -677,6 +715,7 @@ impl Membership {
         let entries = records(root)?;
         for r in entries.iter().filter(|r| r.tag == 0x131e) {
             let f = records(r.value)?;
+            self.read_role(&f)?;
             let rid = int64(field(&f, 0x020001e1)?)?;
             let id = network_id(field(&f, 0x0d000309)?)?;
             if let Some(vip) = optional(&f, 0x01000305)? {
@@ -698,6 +737,23 @@ impl Membership {
                     },
                 );
             }
+        }
+        for r in entries.iter().filter(|r| r.tag == 0x1323) {
+            self.snapshot(&tlv(0x1316, &tlv(0x1315, r.value)))?;
+        }
+        for r in entries.iter().filter(|r| r.tag == 0x1318) {
+            self.read_role(&records(r.value)?)?;
+        }
+        for r in entries.iter().filter(|r| r.tag == 0x131d) {
+            let f = records(r.value)?;
+            self.remove_member(
+                &network_id(field(&f, 0x0d000309)?)?,
+                int64(field(&f, 0x020001e1)?)?,
+            );
+        }
+        for r in entries.iter().filter(|r| r.tag == 0x132e) {
+            let f = records(r.value)?;
+            self.remove_network(&network_id(field(&f, 0x0d000309)?)?);
         }
         for r in entries.iter().filter(|r| r.tag == 0x1366) {
             let f = records(r.value)?;
@@ -727,7 +783,9 @@ impl Membership {
                 p.rid != own
                     && p.server.is_some()
                     && [1, 5].contains(&p.state)
-                    && !p.network_ids.is_disjoint(&ids)
+                    && p.network_ids
+                        .intersection(&ids)
+                        .any(|id| self.role(id, own) != Some(0) && self.role(id, p.rid) != Some(0))
             })
             .cloned()
             .collect())
