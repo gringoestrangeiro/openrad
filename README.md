@@ -1,8 +1,8 @@
 # OpenRad
 
-OpenRad is an independent Rust VPN client with a native Linux desktop application and a headless CLI. It provides a virtual Ethernet interface for applications on joined networks and shows each peer's transport as **Direct TCP**, **Direct UDP**, or **Relay**.
+OpenRad is an open-source Rust reimplementation of Radmin VPN, with a native Linux desktop application and a headless CLI. It provides a virtual Ethernet interface for applications on joined networks and shows each peer's transport as **Direct TCP**, **Direct UDP**, or **Relay**.
 
-The project is experimental. Linux is the supported data-plane platform; Windows and macOS interface backends are not implemented. This is an unofficial client and is not affiliated with Radmin or Famatech.
+The project is experimental. Linux is the supported data-plane platform; Windows and macOS interface backends are not implemented. This is an unofficial community reimplementation and is not affiliated with Radmin or Famatech.
 
 ## Features
 

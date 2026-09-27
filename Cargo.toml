@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
-description = "Reusable VPN engine and native Linux TAP client"
+description = "Open-source Rust reimplementation of Radmin VPN"
 
 [workspace]
 members = ["desktop"]
