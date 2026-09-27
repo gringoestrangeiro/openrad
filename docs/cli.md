@@ -80,4 +80,10 @@ sudo -v
 
 Repeat `--traffic-peer` as needed. TAP becomes available when the selected traffic peers have connected. The CLI installs host routes for those peers, forwards approved application traffic, and removes the interface on shutdown. The desktop instead provides ordinary joined-network LAN forwarding.
 
+The CLI uses the same Ethernet validation as the desktop, including IPv4 group
+traffic and gratuitous ARP requests/replies. Group frames fan out only to the
+explicit traffic allowlist. It announces the local TAP IP/MAC with a gratuitous
+ARP reply when the TAP or an allowed channel becomes ready. The CLI's host-only
+routes remain unchanged; applications must select the TAP for group traffic.
+
 Reports include per-peer `DirectTcp`, `DirectUdp`, or `Relay` paths, authentication status, connection attempts, errors, and counters. They may contain peer IDs, endpoint addresses, and network names. They do not contain session keys or packet payloads. The identity export from `provision` is intentionally separate and confidential.

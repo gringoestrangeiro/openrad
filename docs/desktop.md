@@ -16,10 +16,13 @@ Server refusals and password failures appear in the notification and Recent acti
 
 The peer table distinguishes Direct TCP, Direct UDP, and Relay. These labels represent authenticated peer channels. They are separate from the overall service connection status. Incoming channels and outgoing channels use the same authentication and Ethernet forwarding checks.
 
-Transient peer failures retry individually with an increasing delay, starting at
-2–2.5 seconds and capped at 60–75 seconds. The delay varies between peers so a
-large network does not retry every failed peer at the same instant. Refused peers
-can still be retried manually. Roster-only members without a server endpoint are
+Transient peer failures and refused connections retry automatically: 7.5–22.5 seconds
+after the first failure, 15–45 after the second, then 30–90 seconds. Recovery
+waits five seconds after initial setup settles, with 2–4 seconds between retry
+starts and at most four outgoing retries in progress. **Retry** uses the same
+paced queue, retaining failure history and already queued earlier deadlines.
+Incoming offers can bypass the wait to preserve their rendezvous window.
+Roster-only members without a server endpoint are
 not scheduled for connections. Both online presence states preserve established
 channels; offline, address/server changes, and revoked membership still cancel
 the affected connection.
@@ -29,6 +32,14 @@ error while keeping the connection running. A timed-out membership mutation
 still requires reconnection to resolve its uncertain outcome.
 
 The Linux desktop uses a `26.0.0.0/8` virtual LAN and group routes for broadcast and multicast. Disconnecting closes the TAP descriptor and removes the temporary interface and its routes.
+
+IPv4 broadcast, multicast, and gratuitous ARP requests/replies are forwarded to
+eligible authenticated peers. The TAP can be ready before peer handshakes finish,
+so OpenRad sends a broadcast gratuitous ARP reply announcing its TAP IP/MAC to each
+newly authenticated channel. Recreating the TAP announces it to existing channels
+as well. These 42-byte frames use the TAP's current MAC, which can differ from the
+old Wine adapter's MAC. Forwarded frames retain their original bytes; source
+IP/MAC validation and membership restrictions still apply.
 
 ## Diagnosing connection drops
 
@@ -59,6 +70,8 @@ automatic reconnects within one process. Events include:
   lifetime, last receive age, keepalive counts, and the error that closed it.
 - `peer_cancelled` and `membership_updated`: distinguish roster/binding changes
   from transport failures. `peer_retry_scheduled` records individual retry delays.
+- `peer_address_announcement`: records whether the local gratuitous ARP was queued
+  for an authenticated peer; the frame itself is not logged.
 - `session_health` and `control_health`, every 30 seconds: roster, eligible and
   connected counts, handshakes, traffic/drop counters, engine delays, and control
   heartbeat timing. `peer_drop_burst` flags a fall of more than half the connected

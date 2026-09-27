@@ -97,11 +97,31 @@ pub struct PeerChannel {
     channel: Channel,
     _coordinator: Option<Session>,
 }
-struct RelayOffer {
-    host: String,
-    port: u16,
-    ticket: Vec<u8>,
-    start_at: Instant,
+pub(crate) struct RelayOffer {
+    pub host: String,
+    pub port: u16,
+    pub ticket: Vec<u8>,
+    pub received_at: Instant,
+}
+const DIRECT_HEAD_START: Duration = Duration::from_secs(4);
+const MAX_RELAY_WAIT: Duration = Duration::from_secs(8);
+
+impl RelayOffer {
+    pub(crate) fn ready(
+        &self,
+        now: Instant,
+        last_direct_start: Option<Instant>,
+        direct_exhausted: bool,
+    ) -> bool {
+        // Late mapped UDP candidates deserve their own head start. Bound the
+        // extension so a silent direct path cannot suppress the relay forever.
+        let start_at = (last_direct_start
+            .unwrap_or(self.received_at)
+            .max(self.received_at)
+            + DIRECT_HEAD_START)
+            .min(self.received_at + MAX_RELAY_WAIT);
+        direct_exhausted || now >= start_at
+    }
 }
 
 #[derive(Clone)]
@@ -259,6 +279,7 @@ impl PeerChannel {
         let mut mapped_received = true;
         let mut relay = None;
         let mut relay_started = false;
+        let mut last_direct_start = None;
         let mut records_received = 0;
         let mut channel = std::thread::scope(|scope| -> Result<Self> {
             // This guard cancels every losing transport before scope joins it,
@@ -316,6 +337,7 @@ impl PeerChannel {
                     if !tcp_started && !report.tcp_candidates.is_empty() {
                         if let Some(server_id) = server_id {
                             tcp_started = true;
+                            last_direct_start = Some(Instant::now());
                             let mut candidates = report.tcp_candidates.clone();
                             candidates.sort_by_key(|c| match c.endpoint.ip() {
                                 std::net::IpAddr::V4(v) => {
@@ -397,6 +419,7 @@ impl PeerChannel {
                     ] {
                         if let Some(nonce) = nonce.filter(|_| !candidates.is_empty()) {
                             if let Some(socket) = socket.take() {
+                                last_direct_start = Some(Instant::now());
                                 let endpoints: Vec<_> =
                                     candidates.iter().map(|c| c.endpoint).collect();
                                 let dial = dial();
@@ -419,10 +442,15 @@ impl PeerChannel {
                             }
                         }
                     }
+                    let direct_exhausted = tasks.is_idle()
+                        && mapping.is_none()
+                        && tcp_received
+                        && udp_received
+                        && mapped_received;
                     if !relay_started
-                        && relay
-                            .as_ref()
-                            .is_some_and(|r: &RelayOffer| Instant::now() >= r.start_at)
+                        && relay.as_ref().is_some_and(|r: &RelayOffer| {
+                            r.ready(Instant::now(), last_direct_start, direct_exhausted)
+                        })
                     {
                         relay_started = true;
                         let offer = relay.take().unwrap();
@@ -509,10 +537,6 @@ impl PeerChannel {
                         mapping = Some(crate::udp::MappingDiscovery::start(ues.clone())?);
                     }
                     operation @ (6 | 29) => {
-                        if relay.is_some() || relay_started {
-                            discovery_until =
-                                discovery_until.min(Instant::now() + Duration::from_secs(3));
-                        }
                         let cid = pending
                             .as_ref()
                             .ok_or_else(|| anyhow::anyhow!("candidates before NewConnection"))?
@@ -585,14 +609,15 @@ impl PeerChannel {
                             "invalid relay ticket"
                         );
                         if !relay_started && relay.is_none() {
-                            let grace = if tcp_received || udp_received { 3 } else { 12 };
+                            // Keep accepting delayed direct candidates while the
+                            // relay waits or pairs; early TCP must not cut off UDP.
                             discovery_until =
-                                discovery_until.min(Instant::now() + Duration::from_secs(grace));
+                                discovery_until.min(Instant::now() + Duration::from_secs(12));
                             relay = Some(RelayOffer {
                                 host,
                                 port: port as u16,
                                 ticket,
-                                start_at: Instant::now() + Duration::from_millis(750),
+                                received_at: Instant::now(),
                             });
                         }
                     }
@@ -876,37 +901,63 @@ mod connection_tests {
             )
             .unwrap();
     }
+    fn respond(socket: TcpStream, path: TransportPath) {
+        let mut stream = Framed::from_socket(socket, Duration::from_secs(5), None).unwrap();
+        if path == TransportPath::Relay {
+            let ticket = stream.receive(65536).unwrap();
+            assert_eq!(
+                field(&records(&ticket).unwrap(), 0x090001ca).unwrap(),
+                &[23; 256]
+            );
+            stream.send(&u32v(0x010001df, 2)).unwrap();
+        } else {
+            stream.accept_rendezvous(11, CID).unwrap();
+        }
+        let mut channel = PeerChannel::accept_authenticated(
+            PeerStream::Tcp(stream),
+            path,
+            PASSWORD,
+            42,
+            peer(42).vip,
+            peer(11),
+            &ReportDirectory::disabled(),
+        )
+        .unwrap();
+        let packet = channel.receive().unwrap();
+        let tunnel::Packet::Frames(frames) = tunnel::decode(&packet).unwrap() else {
+            panic!("expected Ethernet announcement");
+        };
+        assert_eq!(frames, [tunnel::gratuitous_arp(peer(11).vip).as_slice()]);
+        assert!(crate::runtime::valid_inbound(
+            frames[0],
+            peer(42).vip,
+            peer(11).vip,
+            channel.mac,
+        ));
+        channel.send(b"confirmed").unwrap();
+    }
     fn responder(listener: TcpListener, path: TransportPath) -> thread::JoinHandle<()> {
-        thread::spawn(move || {
-            let mut stream =
-                Framed::from_socket(listener.accept().unwrap().0, Duration::from_secs(5), None)
-                    .unwrap();
-            if path == TransportPath::Relay {
-                let ticket = stream.receive(65536).unwrap();
-                assert_eq!(
-                    field(&records(&ticket).unwrap(), 0x090001ca).unwrap(),
-                    &[23; 256]
-                );
-                stream.send(&u32v(0x010001df, 2)).unwrap();
-            } else {
-                stream.accept_rendezvous(11, CID).unwrap();
-            }
-            let mut channel = PeerChannel::accept_authenticated(
-                PeerStream::Tcp(stream),
-                path,
-                PASSWORD,
-                42,
-                peer(42).vip,
-                peer(11),
-                &ReportDirectory::disabled(),
+        thread::spawn(move || respond(listener.accept().unwrap().0, path))
+    }
+    fn relay_offer(remote: &mut Session, port: u16) {
+        remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 23),
+                    u64v(0x020001c1, CID),
+                    tlv(
+                        0x123f,
+                        &[
+                            textv(0x030001cb, "127.0.0.1").unwrap(),
+                            u32v(0x010001cc, port as u32),
+                            tlv(0x090001ca, &[23; 256]),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
             )
             .unwrap();
-            assert_eq!(
-                channel.receive().unwrap(),
-                b"still usable after cancelling losers"
-            );
-            channel.send(b"confirmed").unwrap();
-        })
     }
     fn stalled_listener() -> (SocketAddr, mpsc::Receiver<()>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -931,7 +982,7 @@ mod connection_tests {
     }
     fn exchange(mut channel: PeerChannel) {
         channel
-            .send(b"still usable after cancelling losers")
+            .send(&tunnel::encode(&tunnel::gratuitous_arp(peer(11).vip)).unwrap())
             .unwrap();
         assert_eq!(channel.receive().unwrap(), b"confirmed");
     }
@@ -973,24 +1024,7 @@ mod connection_tests {
         let (stalled, entered, loser) = stalled_listener();
         candidates(&mut remote, &[stalled]);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        remote
-            .send(
-                &[
-                    u32v(SERVER_OP, 23),
-                    u64v(0x020001c1, CID),
-                    tlv(
-                        0x123f,
-                        &[
-                            textv(0x030001cb, "127.0.0.1").unwrap(),
-                            u32v(0x010001cc, listener.local_addr().unwrap().port() as u32),
-                            tlv(0x090001ca, &[23; 256]),
-                        ]
-                        .concat(),
-                    ),
-                ]
-                .concat(),
-            )
-            .unwrap();
+        relay_offer(&mut remote, listener.local_addr().unwrap().port());
         let server = responder(listener, TransportPath::Relay);
         let mut report = TransportReport::default();
         let started = Instant::now();
@@ -999,21 +1033,100 @@ mod connection_tests {
             peer(11).vip,
             peer(42),
             &ReportDirectory::disabled(),
-            Duration::from_secs(5),
+            Duration::from_secs(10),
             None,
             coord,
             &mut report,
         )
         .unwrap();
         assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "relay waited for direct timeout"
+            started.elapsed() >= DIRECT_HEAD_START && started.elapsed() < Duration::from_secs(6),
+            "relay must respect the direct head start but remain a bounded fallback"
         );
         assert_eq!(channel.transport.path, Some(TransportPath::Relay));
         entered.recv_timeout(Duration::from_secs(1)).unwrap();
         exchange(channel);
         loser.join().unwrap();
         server.join().unwrap();
+    }
+
+    #[test]
+    fn relay_waits_for_late_direct_candidates_but_has_a_finite_deadline() {
+        let now = Instant::now();
+        let offer = RelayOffer {
+            host: String::new(),
+            port: 1,
+            ticket: vec![],
+            received_at: now,
+        };
+        assert!(!offer.ready(now + Duration::from_secs(3), None, false));
+        assert!(offer.ready(now + Duration::from_secs(4), None, false));
+        let late_udp = now + Duration::from_secs(3);
+        assert!(!offer.ready(now + Duration::from_secs(6), Some(late_udp), false));
+        assert!(offer.ready(now + Duration::from_secs(7), Some(late_udp), false));
+        assert!(offer.ready(
+            now + Duration::from_secs(8),
+            Some(now + Duration::from_secs(7)),
+            false
+        ));
+        assert!(
+            offer.ready(now, None, true),
+            "exhausted direct paths need no extra wait"
+        );
+    }
+
+    #[test]
+    fn slow_direct_authentication_wins_over_a_ready_relay() {
+        let (coord, mut remote) = coordinator();
+        let direct = TcpListener::bind("127.0.0.1:0").unwrap();
+        candidates(&mut remote, &[direct.local_addr().unwrap()]);
+        let direct_server = thread::spawn(move || {
+            let socket = direct.accept().unwrap().0;
+            thread::sleep(Duration::from_millis(1200));
+            respond(socket, TransportPath::DirectTcp);
+        });
+        let relay = TcpListener::bind("127.0.0.1:0").unwrap();
+        relay_offer(&mut remote, relay.local_addr().unwrap().port());
+        relay.set_nonblocking(true).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let signal = done.clone();
+        let relay_server = thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(10);
+            while !signal.load(Ordering::Relaxed) && Instant::now() < until {
+                match relay.accept() {
+                    Ok((socket, _)) => {
+                        respond(socket, TransportPath::Relay);
+                        return true;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            false
+        });
+        let channel = PeerChannel::negotiate(
+            &identity(),
+            peer(11).vip,
+            peer(42),
+            &ReportDirectory::disabled(),
+            Duration::from_secs(10),
+            None,
+            coord,
+            &mut TransportReport::default(),
+        )
+        .unwrap();
+        let path = channel.transport.path;
+        exchange(channel);
+        done.store(true, Ordering::Relaxed);
+        let relay_contacted = relay_server.join().unwrap();
+        direct_server.join().unwrap();
+        assert_eq!(path, Some(TransportPath::DirectTcp));
+        assert!(
+            !relay_contacted,
+            "direct setup should have an exclusive head start"
+        );
     }
 
     #[test]

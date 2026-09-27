@@ -298,6 +298,8 @@ impl Setup {
                 });
             };
             let mut relay_started = false;
+            let mut relay: Option<crate::peer::RelayOffer> = None;
+            let mut last_direct_start = None;
             loop {
                 ensure!(!stop.load(Ordering::Relaxed), "cancelled");
                 ensure!(Instant::now() < until, "incoming peer setup timeout");
@@ -333,8 +335,56 @@ impl Setup {
                 // and start as soon as both halves are available.
                 if !mapped_candidates.is_empty() {
                     if let Some(socket) = mapped_socket.take() {
+                        last_direct_start = Some(Instant::now());
                         spawn_udp(socket, mapped_candidates.clone(), "mapped-udp");
                     }
+                }
+                if relay.as_ref().is_some_and(|offer| {
+                    offer.ready(
+                        Instant::now(),
+                        last_direct_start,
+                        self.policy == Policy::Relay,
+                    )
+                }) {
+                    let offer = relay.take().unwrap();
+                    relay_started = true;
+                    let tx = tx.clone();
+                    let cancel = cancel.clone();
+                    let start = &start;
+                    scope.spawn(move || {
+                        let r = (|| -> Result<PeerChannel> {
+                            let mut s = Framed::connect_with_stop(
+                                &offer.host,
+                                offer.port,
+                                Duration::from_secs(30),
+                                Some(cancel),
+                            )?;
+                            s.send(
+                                &[
+                                    u32v(0x010001df, 1),
+                                    u32v(0x0100032b, 2),
+                                    tlv(0x090001ca, &offer.ticket),
+                                ]
+                                .concat(),
+                            )?;
+                            // TRS acknowledges the ticket only once both
+                            // sides have arrived. The initiator may still
+                            // be waiting for late direct candidates.
+                            let ack_until = Instant::now() + Duration::from_secs(25);
+                            while !s.ready(100)? {
+                                ensure!(
+                                    Instant::now() < ack_until,
+                                    "incoming relay pairing timeout"
+                                );
+                            }
+                            ensure!(
+                                int32(field(&records(&s.receive(65536)?)?, 0x010001df)?)? == 2,
+                                "incoming relay ticket rejected"
+                            );
+                            start("relay", PeerStream::Tcp(s), TransportPath::Relay)
+                        })();
+                        let _ = tx.send(("relay", r));
+                    });
                 }
                 let data = match self.records.recv_timeout(Duration::from_millis(10)) {
                     Ok(d) => d,
@@ -367,6 +417,7 @@ impl Setup {
                             mapped_socket.take()
                         };
                         if let Some(socket) = socket {
+                            last_direct_start = Some(Instant::now());
                             spawn_udp(
                                 socket,
                                 c,
@@ -374,7 +425,7 @@ impl Setup {
                             );
                         }
                     }
-                    23 if !relay_started => {
+                    23 if !relay_started && relay.is_none() => {
                         let f = records(&data)?;
                         ensure!(
                             int64(field(&f, 0x020001c1)?)? == self.cid,
@@ -391,43 +442,11 @@ impl Setup {
                         if !matches!(self.policy, Policy::All | Policy::Relay) {
                             continue;
                         }
-                        relay_started = true;
-                        let tx = tx.clone();
-                        let cancel = cancel.clone();
-                        let start = &start;
-                        scope.spawn(move || {
-                            let r = (|| -> Result<PeerChannel> {
-                                let mut s = Framed::connect_with_stop(
-                                    &host,
-                                    port as u16,
-                                    Duration::from_secs(30),
-                                    Some(cancel),
-                                )?;
-                                s.send(
-                                    &[
-                                        u32v(0x010001df, 1),
-                                        u32v(0x0100032b, 2),
-                                        tlv(0x090001ca, &ticket),
-                                    ]
-                                    .concat(),
-                                )?;
-                                // TRS acknowledges the ticket only once both
-                                // sides have arrived. The initiator may still
-                                // be waiting for late direct candidates.
-                                let ack_until = Instant::now() + Duration::from_secs(25);
-                                while !s.ready(100)? {
-                                    ensure!(
-                                        Instant::now() < ack_until,
-                                        "incoming relay pairing timeout"
-                                    );
-                                }
-                                ensure!(
-                                    int32(field(&records(&s.receive(65536)?)?, 0x010001df)?)? == 2,
-                                    "incoming relay ticket rejected"
-                                );
-                                start("relay", PeerStream::Tcp(s), TransportPath::Relay)
-                            })();
-                            let _ = tx.send(("relay", r));
+                        relay = Some(crate::peer::RelayOffer {
+                            host,
+                            port: port as u16,
+                            ticket,
+                            received_at: Instant::now(),
                         });
                     }
                     _ => {}

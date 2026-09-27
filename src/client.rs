@@ -340,6 +340,13 @@ pub fn run(
                         incoming.reject(rid);
                         incoming.finish(rid);
                         active.insert(rid, mac);
+                        if tap.is_some()
+                            && options.traffic_peers.contains(&rid)
+                            && eligible_rids.contains(&rid)
+                            && senders[&rid].try_send(tunnel::gratuitous_arp(vip)).is_err()
+                        {
+                            stats.tap_dropped += 1;
+                        }
                         stats.peers.entry(rid).or_default().connected = true;
                         // Only traffic from this channel can attest its path.
                         let peer_stats = stats.peers.entry(rid).or_default();
@@ -390,13 +397,10 @@ pub fn run(
                             && workers
                                 .get(&rid)
                                 .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
-                            && frame.len() <= tunnel::MAX_FRAME
-                            && frame.len() >= 14
-                            && source_mac.map(|m| frame[6..12] == *m).unwrap_or(false)
-                            && tunnel::endpoints(&frame) == Some((peer.vip, vip))
-                            && (frame[..6] == tunnel::mac(vip)
-                                || frame[..6] == [255; 6]
-                                    && tunnel::arp_endpoints(&frame).is_some());
+                            && options.traffic_peers.contains(&rid)
+                            && source_mac.is_some_and(|mac| {
+                                tunnel::deliver_to(&frame, peer.vip, *mac, vip, tunnel::mac(vip))
+                            });
                         if valid {
                             if let Some(t) = tap.as_mut() {
                                 Tap::send(t, &frame)?;
@@ -422,6 +426,18 @@ pub fn run(
                 ensure!(unique.len() == peers.len(), "ambiguous peer VIP");
                 tap = Some(Tap::create(vip, &peers)?);
                 stats.tap_created = true;
+                for rid in &options.traffic_peers {
+                    if eligible_rids.contains(rid)
+                        && workers
+                            .get(rid)
+                            .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
+                        && senders.get(rid).is_some_and(|sender| {
+                            sender.try_send(tunnel::gratuitous_arp(vip)).is_err()
+                        })
+                    {
+                        stats.tap_dropped += 1;
+                    }
+                }
                 report(
                     json!({"event":"tap_ready","interface":"radminvpn0","vip":vip,"routes":peers,"uid":crate::tap::user_id()}),
                 );
@@ -433,31 +449,27 @@ pub fn run(
                     }
                     let frame = t.receive()?;
                     stats.tap_read += 1;
-                    let target = tunnel::endpoints(&frame)
-                        .filter(|(src, _)| *src == vip && frame[6..12] == tunnel::mac(vip));
-                    let peer = target.and_then(|(_, dst)| {
-                        options
-                            .traffic_peers
-                            .iter()
-                            .filter_map(|r| membership.peers.get(r))
-                            .find(|p| p.vip == dst)
-                    });
-                    if let Some(p) = peer {
+                    let mut forwarded = false;
+                    for p in options
+                        .traffic_peers
+                        .iter()
+                        .filter_map(|rid| membership.peers.get(rid))
+                    {
                         if let Some(mac) = active.get(&p.rid) {
                             if eligible_rids.contains(&p.rid)
                                 && workers
                                     .get(&p.rid)
                                     .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
-                                && (frame[..6] == *mac
-                                    || frame[..6] == [255; 6]
-                                        && tunnel::arp_endpoints(&frame).is_some())
+                                && tunnel::deliver_to(&frame, vip, tunnel::mac(vip), p.vip, *mac)
                                 && senders[&p.rid].try_send(frame.clone()).is_ok()
                             {
-                                continue;
+                                forwarded = true;
                             }
                         }
                     }
-                    stats.tap_dropped += 1;
+                    if !forwarded {
+                        stats.tap_dropped += 1;
+                    }
                 }
             }
             if Instant::now() >= heartbeat {

@@ -7,7 +7,9 @@ use crate::{
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
     protocol::*,
-    scheduling::{peer_priority, peer_retry_delay, HandshakeBudget, ADVERTISEMENT_QUEUE},
+    scheduling::{
+        peer_priority, peer_retry_delay, HandshakeBudget, RetryPacer, ADVERTISEMENT_QUEUE,
+    },
     session::Session,
     tap::Tap,
     tunnel,
@@ -440,6 +442,113 @@ struct PeerRetry {
     failures: u32,
     at: Instant,
 }
+
+fn announce_address<'a>(
+    vip: Ipv4Addr,
+    workers: impl Iterator<Item = (&'a u64, &'a Worker)>,
+    eligible: &BTreeSet<u64>,
+    options: &Options,
+) -> u64 {
+    let frame = tunnel::gratuitous_arp(vip);
+    let mut dropped = 0;
+    for (&rid, worker) in workers {
+        if worker.mac.is_some()
+            && !worker.stop.load(Ordering::Relaxed)
+            && eligible.contains(&rid)
+            && options.allows(rid)
+        {
+            let queued = worker.sender.try_send(frame.clone()).is_ok();
+            dropped += u64::from(!queued);
+            options.diagnostics.event(
+                "peer_address_announcement",
+                json!({
+                    "rid": rid, "attempt": worker.attempt, "queued": queued,
+                }),
+            );
+        }
+    }
+    dropped
+}
+
+fn schedule_peer_retry(
+    retries: &mut BTreeMap<u64, PeerRetry>,
+    rid: u64,
+    error: Option<&str>,
+    stable_connection: bool,
+    now: Instant,
+) -> Option<Duration> {
+    if error.is_none() {
+        retries.remove(&rid);
+        return None;
+    }
+    // A refusal during the initial rush is not necessarily permanent. Retry it
+    // through the same slow queue; eligibility and full authentication still apply.
+    let retry = retries.entry(rid).or_insert(PeerRetry {
+        failures: 0,
+        at: now,
+    });
+    if stable_connection {
+        retry.failures = 0;
+    }
+    retry.failures = retry.failures.saturating_add(1);
+    let delay = peer_retry_delay(rid, retry.failures);
+    retry.at = now + delay;
+    Some(delay)
+}
+
+fn retry_detail(detail: &str, wait: Duration) -> String {
+    format!(
+        "{} · Retry queued (at least {}s; spaced after initial setup)",
+        detail.split(" · Retry").next().unwrap_or(detail),
+        wait.as_secs()
+            .saturating_add(u64::from(wait.subsec_nanos() != 0))
+    )
+}
+
+fn request_peer_retries(
+    snapshot: &mut Snapshot,
+    workers: &BTreeMap<u64, Worker>,
+    retries: &mut BTreeMap<u64, PeerRetry>,
+    eligible: &BTreeSet<u64>,
+    now: Instant,
+) -> usize {
+    let mut scheduled = 0;
+    for (&rid, peer) in &mut snapshot.peers {
+        if matches!(peer.status, PeerState::Failed | PeerState::Refused)
+            && eligible.contains(&rid)
+            && !workers.contains_key(&rid)
+        {
+            let requested = now + peer_retry_delay(rid, 1);
+            let retry = retries.entry(rid).or_insert(PeerRetry {
+                failures: 1,
+                at: requested,
+            });
+            // Repeated clicks neither postpone queued work nor erase backoff
+            // history. Manual recovery still obeys the global retry pacer.
+            retry.at = retry.at.min(requested);
+            peer.detail = retry_detail(&peer.detail, retry.at.saturating_duration_since(now));
+            scheduled += 1;
+        }
+    }
+    scheduled
+}
+
+fn initial_peer_work(
+    snapshot: &Snapshot,
+    workers: &BTreeMap<u64, Worker>,
+    retries: &BTreeMap<u64, PeerRetry>,
+    eligible: &BTreeSet<u64>,
+) -> bool {
+    workers
+        .iter()
+        .any(|(rid, worker)| worker.mac.is_none() && !retries.contains_key(rid))
+        || snapshot.peers.iter().any(|(rid, peer)| {
+            peer.status == PeerState::Online
+                && eligible.contains(rid)
+                && !workers.contains_key(rid)
+                && !retries.contains_key(rid)
+        })
+}
 struct PeerEvents {
     lifecycle: SyncSender<Message>,
     packets: SyncSender<(u64, Vec<u8>)>,
@@ -745,6 +854,7 @@ pub fn run(
     let mut membership_changed = true;
     let mut eligible = BTreeSet::new();
     let mut retries: BTreeMap<u64, PeerRetry> = BTreeMap::new();
+    let mut retry_pacer = RetryPacer::new(Instant::now());
     let mut attempt = 0u64;
     let mut next_health = Instant::now();
     let mut previous_loop = Instant::now();
@@ -763,15 +873,19 @@ pub fn run(
                     attempted_interface = false;
                 }
                 Ok(Command::RetryPeers) => {
-                    retries.clear();
-                    for p in snapshot.peers.values_mut() {
-                        if matches!(p.status, PeerState::Failed | PeerState::Refused)
-                            && !workers.contains_key(&p.peer.rid)
-                        {
-                            p.status = base_peer_state(&p.peer);
-                            p.detail.clear();
-                        }
-                    }
+                    let count = request_peer_retries(
+                        &mut snapshot,
+                        &workers,
+                        &mut retries,
+                        &eligible,
+                        Instant::now(),
+                    );
+                    report(Update::Operation {
+                        message: format!(
+                            "{count} peer retries queued gradually after initial setup settles."
+                        ),
+                        error: false,
+                    });
                 }
                 Ok(c) => {
                     if let Some(update) = forward_command(&control_tx, c)? {
@@ -782,6 +896,7 @@ pub fn run(
                 Err(mpsc::TryRecvError::Disconnected) => break,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
+            let mut new_channels = BTreeSet::new();
             for message in rx.try_iter().take(512) {
                 match message {
                     Message::Membership(m) => {
@@ -821,6 +936,7 @@ pub fn run(
                                 if is_incoming { "Incoming" } else { "Outgoing" }
                             );
                         }
+                        new_channels.insert(rid);
                     }
                     Message::Closed(rid, error) => {
                         incoming.finish(rid);
@@ -829,27 +945,18 @@ pub fn run(
                             .as_ref()
                             .is_some_and(|w| w.stop.load(Ordering::Relaxed));
                         let error = if cancelled { None } else { error };
-                        if error
+                        let stable_connection = worker
                             .as_ref()
-                            .is_some_and(|e| failure_state(e) == PeerState::Failed)
-                        {
-                            let retry = retries.entry(rid).or_insert(PeerRetry {
-                                failures: 0,
-                                at: Instant::now(),
-                            });
-                            if worker
-                                .as_ref()
-                                .and_then(|w| w.connected_at)
-                                .is_some_and(|t| t.elapsed() >= Duration::from_secs(60))
-                            {
-                                retry.failures = 0;
-                            }
-                            retry.failures = retry.failures.saturating_add(1);
-                            let delay = peer_retry_delay(rid, retry.failures);
-                            retry.at = Instant::now() + delay;
-                            diagnostics.event("peer_retry_scheduled", json!({"rid": rid, "failures": retry.failures, "delay_ms": delay.as_millis(), "error": error}));
-                        } else {
-                            retries.remove(&rid);
+                            .and_then(|w| w.connected_at)
+                            .is_some_and(|t| t.elapsed() >= Duration::from_secs(60));
+                        if let Some(delay) = schedule_peer_retry(
+                            &mut retries,
+                            rid,
+                            error.as_deref(),
+                            stable_connection,
+                            Instant::now(),
+                        ) {
+                            diagnostics.event("peer_retry_scheduled", json!({"rid": rid, "failures": retries[&rid].failures, "delay_ms": delay.as_millis(), "error": error}));
                         }
                         if let Some(p) = snapshot.peers.get_mut(&rid) {
                             p.status = error
@@ -858,11 +965,10 @@ pub fn run(
                                 .unwrap_or_else(|| base_peer_state(&p.peer));
                             p.detail = error.unwrap_or_else(|| "Channel closed".into());
                             if let Some(retry) = retries.get(&rid) {
-                                p.detail.push_str(&format!(
-                                    " · Retrying in {}s",
-                                    retry.at.saturating_duration_since(Instant::now()).as_secs()
-                                        + 1
-                                ));
+                                p.detail = retry_detail(
+                                    &p.detail,
+                                    retry.at.saturating_duration_since(Instant::now()),
+                                );
                             }
                             p.transport = None;
                         }
@@ -934,15 +1040,23 @@ pub fn run(
                     .filter(|w| w.mac.is_none())
                     .map(|w| w.incoming),
             );
+            let now = Instant::now();
+            retry_pacer.observe_initial_work(
+                now,
+                initial_peer_work(&snapshot, &workers, &retries, &eligible),
+            );
+            let mut retrying = workers
+                .iter()
+                .filter(|(rid, w)| w.mac.is_none() && !w.incoming && retries.contains_key(rid))
+                .count();
             let mut queued: Vec<_> = snapshot
                 .peers
                 .values()
                 .filter(|p| {
-                    (p.status == PeerState::Online
-                        || pending.contains(&p.peer.rid)
+                    (pending.contains(&p.peer.rid)
                         || retries
                             .get(&p.peer.rid)
-                            .is_some_and(|retry| Instant::now() >= retry.at))
+                            .map_or(p.status == PeerState::Online, |retry| now >= retry.at))
                         && eligible.contains(&p.peer.rid)
                         && !workers.contains_key(&p.peer.rid)
                 })
@@ -957,8 +1071,16 @@ pub fn run(
                 )
             });
             for rid in queued {
+                let is_retry = !pending.contains(&rid) && retries.contains_key(&rid);
+                if is_retry && !retry_pacer.ready(now, retrying) {
+                    continue;
+                }
                 if !budget.try_start(pending.contains(&rid)) {
                     continue;
+                }
+                if is_retry {
+                    retry_pacer.started(now, rid, retries[&rid].failures);
+                    retrying += 1;
                 }
                 let peer = snapshot.peers[&rid].peer.clone();
                 let setup = incoming.take(rid, Policy::All);
@@ -1009,6 +1131,9 @@ pub fn run(
                         tap = Some(t);
                         snapshot.interface_ready = true;
                         diagnostics.event("interface_ready", json!({}));
+                        snapshot.traffic.dropped +=
+                            announce_address(vip, workers.iter(), &eligible, &options);
+                        new_channels.clear();
                     }
                     Err(e) => {
                         snapshot.interface_error = Some(e.to_string());
@@ -1018,6 +1143,14 @@ pub fn run(
                 attempted_interface = true;
             }
             if let Some(t) = tap.as_mut() {
+                if !new_channels.is_empty() {
+                    snapshot.traffic.dropped += announce_address(
+                        vip,
+                        workers.iter().filter(|(rid, _)| new_channels.contains(rid)),
+                        &eligible,
+                        &options,
+                    );
+                }
                 let forwarding = (|| -> Result<()> {
                     for _ in 0..64 {
                         if !t.ready(0)? {
@@ -1462,6 +1595,175 @@ mod membership_tests {
             incoming: false,
             attempt: 1,
             connected_at: Some(Instant::now()),
+        }
+    }
+
+    #[test]
+    fn refused_peers_retry_automatically_without_retrying_cancellation() {
+        let now = Instant::now();
+        let mut retries = BTreeMap::new();
+        for (index, error) in [
+            "coordinator refused connection",
+            "peer service refused",
+            "frame receive timeout",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let delay = schedule_peer_retry(&mut retries, 2, Some(error), false, now).unwrap();
+            assert_eq!(retries[&2].failures, index as u32 + 1);
+            assert_eq!(retries[&2].at, now + delay);
+            assert!(delay >= Duration::from_millis(7_500));
+        }
+        schedule_peer_retry(&mut retries, 2, Some("disconnected"), true, now);
+        assert_eq!(
+            retries[&2].failures, 1,
+            "a stable connection resets backoff"
+        );
+        assert!(schedule_peer_retry(&mut retries, 2, None, false, now).is_none());
+        assert!(retries.is_empty());
+    }
+
+    #[test]
+    fn manual_retry_keeps_deadlines_failure_history_and_status() {
+        let now = Instant::now();
+        let mut snapshot = Snapshot::default();
+        let mut workers = BTreeMap::new();
+        let mut members = membership();
+        let template = members.peers[&2].clone();
+        for rid in 3..=7 {
+            let mut peer = template.clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, rid as u8);
+            members.peers.insert(rid, peer);
+        }
+        let mut eligible = refresh_membership(
+            &mut snapshot,
+            &members,
+            1,
+            &workers,
+            &Diagnostics::default(),
+        )
+        .unwrap();
+        for peer in snapshot.peers.values_mut() {
+            peer.status = PeerState::Refused;
+            peer.detail = "refused".into();
+        }
+        snapshot.peers.get_mut(&3).unwrap().status = PeerState::Failed;
+        snapshot.peers.get_mut(&4).unwrap().status = PeerState::Connected;
+        snapshot.peers.get_mut(&5).unwrap().status = PeerState::Connecting;
+        eligible.remove(&6);
+        workers.insert(7, worker());
+        let mut retries = BTreeMap::from([(
+            2,
+            PeerRetry {
+                failures: 8,
+                at: now + Duration::from_secs(3),
+            },
+        )]);
+        assert_eq!(
+            request_peer_retries(&mut snapshot, &workers, &mut retries, &eligible, now),
+            2
+        );
+        assert_eq!(retries[&2].at, now + Duration::from_secs(3));
+        assert_eq!(retries[&2].failures, 8);
+        let deadline = retries[&3].at;
+        assert!(deadline >= now + Duration::from_millis(7_500));
+        request_peer_retries(
+            &mut snapshot,
+            &workers,
+            &mut retries,
+            &eligible,
+            now + Duration::from_secs(1),
+        );
+        assert_eq!(retries[&3].at, deadline);
+        assert_eq!(retries.keys().copied().collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(snapshot.peers[&2].status, PeerState::Refused);
+        assert_eq!(snapshot.peers[&3].status, PeerState::Failed);
+        assert_eq!(snapshot.peers[&3].detail.matches("Retry queued").count(), 1);
+        workers.into_values().next().unwrap().join.join().unwrap();
+    }
+
+    #[test]
+    fn settling_tracks_queued_and_active_initial_work_but_not_retries() {
+        let mut snapshot = Snapshot::default();
+        let mut workers = BTreeMap::new();
+        let eligible = refresh_membership(
+            &mut snapshot,
+            &membership(),
+            1,
+            &workers,
+            &Diagnostics::default(),
+        )
+        .unwrap();
+        let mut retries = BTreeMap::new();
+        assert!(initial_peer_work(&snapshot, &workers, &retries, &eligible));
+        let mut w = worker();
+        w.mac = None;
+        workers.insert(2, w);
+        snapshot.peers.get_mut(&2).unwrap().status = PeerState::Connecting;
+        assert!(initial_peer_work(&snapshot, &workers, &retries, &eligible));
+        retries.insert(
+            2,
+            PeerRetry {
+                failures: 1,
+                at: Instant::now(),
+            },
+        );
+        assert!(!initial_peer_work(&snapshot, &workers, &retries, &eligible));
+        workers.get_mut(&2).unwrap().mac = Some([2; 6]);
+        retries.clear();
+        assert!(!initial_peer_work(&snapshot, &workers, &retries, &eligible));
+        workers.into_values().next().unwrap().join.join().unwrap();
+    }
+
+    #[test]
+    fn address_announcements_only_reach_authenticated_eligible_channels() {
+        let vip = Ipv4Addr::new(26, 0, 0, 1);
+        let mut workers = BTreeMap::new();
+        let mut receivers = BTreeMap::new();
+        for rid in 2..=7 {
+            let (sender, receiver) = mpsc::sync_channel(2);
+            let mut w = worker();
+            w.sender = sender;
+            workers.insert(rid, w);
+            receivers.insert(rid, receiver);
+        }
+        // Both incoming and outgoing authenticated channels get an announcement.
+        workers.get_mut(&3).unwrap().incoming = true;
+        workers.get_mut(&4).unwrap().mac = None;
+        workers[&5].stop.store(true, Ordering::Relaxed);
+        let eligible = BTreeSet::from([2, 3, 4, 5, 7]);
+        let options = Options {
+            traffic_peers: Some(BTreeSet::from([2, 3, 4, 5, 6])),
+            ..Options::default()
+        };
+        assert_eq!(
+            announce_address(vip, workers.iter(), &eligible, &options),
+            0
+        );
+        for (rid, receiver) in &receivers {
+            if [2, 3].contains(rid) {
+                let frame = receiver.try_recv().unwrap();
+                assert_eq!(frame, tunnel::gratuitous_arp(vip));
+                assert!(tunnel::deliver_to(
+                    &frame,
+                    vip,
+                    tunnel::mac(vip),
+                    Ipv4Addr::new(26, 0, 0, *rid as u8),
+                    [2; 6]
+                ));
+            }
+            assert!(receiver.try_recv().is_err());
+        }
+        // Interface recreation or peer reconnection can announce again.
+        assert_eq!(
+            announce_address(vip, workers.iter(), &eligible, &options),
+            0
+        );
+        assert!(receivers[&2].try_recv().is_ok());
+        for w in workers.into_values() {
+            w.join.join().unwrap();
         }
     }
 

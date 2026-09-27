@@ -43,7 +43,7 @@ An existing profile will not silently replace a different saved identity. Use an
 
 ## Prebuilt release
 
-The [OpenRad v0.4.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.4.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. This release speeds up initial peer connections through parallel UDP discovery and transport negotiation, raises outgoing handshake capacity from 24 to 64, and prioritizes first attempts over retries. It also fixes unnecessary reconnects when membership status or removal events contain an optional second identifier. See [the performance notes](docs/performance.md), [desktop guide](docs/desktop.md), and [CLI guide](docs/cli.md) for details.
+The [OpenRad v0.5.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.5.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. This release spreads retries after initial setup, automatically retries refused peers, and gives direct connections more time before trying relay. It also announces the TAP address with gratuitous ARP when peer channels become ready and aligns CLI group forwarding with the desktop. Retry delays start at 7.5–22.5 seconds, then 15–45 and 30–90 seconds. See [the performance notes](docs/performance.md), [desktop guide](docs/desktop.md), and [CLI guide](docs/cli.md) for details.
 
 [Desktop and identity guide](docs/desktop.md) · [CLI guide](docs/cli.md) · [Architecture](docs/architecture.md)
 

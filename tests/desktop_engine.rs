@@ -308,3 +308,51 @@ fn arp_forwarding_rejects_spoofed_peer_and_oversized_frame() {
     large.push(0);
     assert!(!valid_inbound(&large, vip, remote, mac));
 }
+
+#[test]
+fn gratuitous_arp_replies_and_requests_fan_out_without_rewriting() {
+    let source = Ipv4Addr::new(26, 1, 2, 3);
+    let peers = [Ipv4Addr::new(26, 4, 5, 6), Ipv4Addr::new(26, 7, 8, 9)];
+    let reply = tunnel::gratuitous_arp(source);
+    assert_eq!(reply.len(), 42);
+    assert_eq!(&reply[0..6], &[255; 6]);
+    assert_eq!(&reply[6..12], &tunnel::mac(source));
+    assert_eq!(&reply[12..22], &[8, 6, 0, 1, 8, 0, 6, 4, 0, 2]);
+    assert_eq!(tunnel::arp_endpoints(&reply), Some((source, source)));
+    for operation in [1, 2] {
+        for source_mac in [tunnel::mac(source), [2, 3, 4, 5, 6, 7]] {
+            let mut frame = reply.clone();
+            frame[21] = operation;
+            frame[6..12].copy_from_slice(&source_mac);
+            frame[22..28].copy_from_slice(&source_mac);
+            for target_mac in [[0; 6], [255; 6], source_mac] {
+                frame[32..38].copy_from_slice(&target_mac);
+                for peer in peers {
+                    assert!(tunnel::deliver_to(
+                        &frame,
+                        source,
+                        source_mac,
+                        peer,
+                        tunnel::mac(peer)
+                    ));
+                    assert!(valid_inbound(&frame, peer, source, source_mac));
+                }
+                let encoded = tunnel::encode(&frame).unwrap();
+                let tunnel::Packet::Frames(decoded) = tunnel::decode(&encoded).unwrap() else {
+                    panic!("expected Ethernet");
+                };
+                assert_eq!(decoded, [frame.as_slice()]);
+            }
+        }
+    }
+    for offset in [6, 22, 28, 38] {
+        let mut spoofed = reply.clone();
+        spoofed[offset] ^= 0x40;
+        assert!(!valid_inbound(
+            &spoofed,
+            peers[0],
+            source,
+            tunnel::mac(source)
+        ));
+    }
+}

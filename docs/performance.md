@@ -21,16 +21,25 @@ the advertisement queue accommodates a burst from all 80 setup workers.
 - Both authenticated UDP discovery servers are queried concurrently on the same
   socket with a shared two-second deadline. Both replies must still match their
   transactions and agree on the external address. Only unanswered queries retry.
-- Relay setup starts 750 ms after its ticket arrives, allowing direct paths a
-  short head start. It races with direct authentication instead of waiting for
-  an eight-second direct timeout. The first fully authenticated Ethernet service
-  wins. A relay can therefore win while a slower direct path was still viable;
+- Direct paths get a four-second head start before relay setup, on both incoming
+  and outgoing connections. A later UDP/TCP attempt extends this window, up to
+  eight seconds after the relay ticket arrives. Outgoing relay setup can start
+  sooner if all direct candidate responses have arrived, mapping has completed,
+  and every direct attempt has failed. Explicit relay-only CLI diagnostics skip
+  the wait. Late direct candidates continue to be accepted during relay setup.
+  Once relay starts, the first fully authenticated Ethernet service wins;
   established sessions are not subsequently migrated between transports.
 - Linux TCP connects use one nonblocking connection attempt, with cancellation
   checks at most 50 ms apart. Losing or superseded attempts no longer occupy
   setup slots until the blocking connect timeout expires.
-- The first retry waits 500–625 ms with per-peer jitter, followed by exponential
-  backoff capped at 60–75 seconds. Incoming offers can bypass the retry timer.
+- Desktop recovery retries include `Refused` peers. The first retry waits 7.5–22.5
+  seconds, the second 15–45 seconds, and later retries 30–90 seconds, with
+  per-peer jitter. Recovery also waits until initial handshakes and their queue
+  have been idle for five seconds. At most four outgoing retries run at once,
+  with 2–4 seconds between starts, even if many timers expire together.
+  The Retry button uses this same queue without resetting failure history or
+  established connections. Incoming offers bypass the retry timer and pacing
+  because their authenticated rendezvous windows expire.
 
 For 100 outgoing peers, the capacity check now needs two batches (`64 + 36`)
 instead of five (`24 + 24 + 24 + 24 + 4`). This is a scheduling comparison, not
@@ -41,7 +50,8 @@ and joined before its setup slot is released.
 
 Headless regression tests use local sockets and synthetic credentials to verify
 concurrent discovery, transaction checks, direct TCP progress despite a stalled
-candidate, relay progress before direct timeout, and prompt cancellation. They
+candidate, a slower direct handshake winning over a ready relay, bounded relay
+fallback, paced recovery of 100 overdue retries, and prompt cancellation. They
 also exercise the full peer/service authentication and encrypted traffic on the
 winning path. They do not measure NAT traversal or public relay performance.
 

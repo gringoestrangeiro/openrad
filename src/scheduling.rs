@@ -20,11 +20,46 @@ pub(crate) const ADVERTISEMENT_QUEUE: usize = MAX_HANDSHAKES * 4;
 
 /// Spread recovery of a large roster over time, with a bounded exponential delay.
 pub(crate) fn peer_retry_delay(rid: u64, failures: u32) -> std::time::Duration {
-    let base_ms = (500u64 << failures.saturating_sub(1).min(7)).min(60_000);
+    let base_ms = 7_500u64 << failures.saturating_sub(1).min(2);
     let mixed = rid
         .wrapping_mul(0x9e3779b97f4a7c15)
         .rotate_left(failures % 64);
-    std::time::Duration::from_micros(base_ms * 1_000 + mixed % (base_ms * 250 + 1))
+    Duration::from_micros(base_ms * 1_000 + mixed % (base_ms * 2_000 + 1))
+}
+
+const MAX_RETRY_HANDSHAKES: usize = 4;
+const RETRY_SETTLE_DELAY: Duration = Duration::from_secs(5);
+
+/// Recovery has its own slow lane: due timers must not become a burst when
+/// initial handshakes release their slots, the engine stalls, or Retry is clicked.
+pub(crate) struct RetryPacer {
+    settled_after: Instant,
+    next_start: Instant,
+}
+impl RetryPacer {
+    pub(crate) fn new(now: Instant) -> Self {
+        Self {
+            settled_after: now + RETRY_SETTLE_DELAY,
+            next_start: now,
+        }
+    }
+
+    pub(crate) fn observe_initial_work(&mut self, now: Instant, busy: bool) {
+        if busy {
+            self.settled_after = now + RETRY_SETTLE_DELAY;
+        }
+    }
+
+    pub(crate) fn ready(&self, now: Instant, active: usize) -> bool {
+        active < MAX_RETRY_HANDSHAKES && now >= self.settled_after && now >= self.next_start
+    }
+
+    pub(crate) fn started(&mut self, now: Instant, rid: u64, failures: u32) {
+        let mixed = rid
+            .wrapping_mul(0x9e3779b97f4a7c15)
+            .rotate_left(failures % 64);
+        self.next_start = now + Duration::from_micros(2_000_000 + mixed % 2_000_001);
+    }
 }
 
 /// Incoming offers have short rendezvous windows. Within each traffic priority,
@@ -145,12 +180,57 @@ mod tests {
         let delays: std::collections::BTreeSet<_> =
             (1..=150).map(|rid| peer_retry_delay(rid, 1)).collect();
         assert!(delays.len() > 100);
+        let earliest = *delays.first().unwrap();
+        let latest = *delays.last().unwrap();
+        assert!(latest - earliest > Duration::from_millis(12_500));
         for rid in 1..=150 {
-            assert!(peer_retry_delay(rid, 1) >= std::time::Duration::from_millis(500));
-            assert!(peer_retry_delay(rid, 1) <= std::time::Duration::from_millis(625));
-            assert!(peer_retry_delay(rid, 2) > peer_retry_delay(rid, 1));
-            assert!(peer_retry_delay(rid, u32::MAX) <= std::time::Duration::from_secs(75));
+            for (failures, min, max) in [
+                (1, 7_500, 22_500),
+                (2, 15_000, 45_000),
+                (3, 30_000, 90_000),
+                (u32::MAX, 30_000, 90_000),
+            ] {
+                let delay = peer_retry_delay(rid, failures);
+                assert!(delay >= Duration::from_millis(min));
+                assert!(delay <= Duration::from_millis(max));
+            }
         }
+    }
+
+    #[test]
+    fn retries_wait_for_initial_work_to_settle_and_keep_a_small_concurrency_limit() {
+        let start = Instant::now();
+        let mut pacer = RetryPacer::new(start);
+        let busy = start + Duration::from_secs(40);
+        pacer.observe_initial_work(busy, true);
+        pacer.observe_initial_work(busy + Duration::from_secs(1), false);
+        assert!(!pacer.ready(busy + Duration::from_secs(4), 0));
+        assert!(pacer.ready(busy + Duration::from_secs(5), 3));
+        assert!(!pacer.ready(busy + Duration::from_secs(5), 4));
+        pacer.observe_initial_work(busy + Duration::from_secs(6), true);
+        assert!(!pacer.ready(busy + Duration::from_secs(10), 0));
+    }
+
+    #[test]
+    fn a_hundred_overdue_retries_remain_spaced_even_after_an_engine_stall() {
+        let start = Instant::now();
+        let mut pacer = RetryPacer::new(start);
+        let mut now = start + Duration::from_secs(300);
+        let first = now;
+        for rid in 1..=100 {
+            assert!(pacer.ready(now, 0));
+            pacer.started(now, rid, 1);
+            assert!(!pacer.ready(now, 0));
+            assert!(!pacer.ready(now + Duration::from_millis(1999), 0));
+            assert!(pacer.ready(now + Duration::from_secs(4), 0));
+            now = pacer.next_start;
+        }
+        assert!(now - first >= Duration::from_secs(200));
+        assert!(now - first <= Duration::from_secs(400));
+        now += Duration::from_secs(60);
+        assert!(pacer.ready(now, 0));
+        pacer.started(now, 101, 1);
+        assert!(!pacer.ready(now, 0), "no catch-up burst after a stall");
     }
 
     #[test]

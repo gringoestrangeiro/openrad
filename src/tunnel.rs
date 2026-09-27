@@ -166,13 +166,29 @@ pub fn endpoints(frame: &[u8]) -> Option<(Ipv4Addr, Ipv4Addr)> {
     ipv4_endpoints(frame).or_else(|| arp_endpoints(frame))
 }
 
+/// Announce our TAP address when an authenticated Ethernet link becomes usable.
+/// The kernel may emit its initial broadcast before any peer is connected.
+pub fn gratuitous_arp(vip: Ipv4Addr) -> Vec<u8> {
+    let mac = mac(vip);
+    [
+        [255; 6].as_slice(),
+        &mac,
+        &[8, 6, 0, 1, 8, 0, 6, 4, 0, 2],
+        &mac,
+        &vip.octets(),
+        &[255; 6],
+        &vip.octets(),
+    ]
+    .concat()
+}
+
 /// Largest Ethernet frame (MTU 1500 + header), as accepted by the native Radmin
 /// adapter. Windows peers emit full-size frames, including every first IP fragment.
 pub const MAX_FRAME: usize = 1514;
 
 /// Whether an unchanged Ethernet frame belongs on this authenticated link.
-/// IPv4 group traffic fans out once per peer; directed ARP is sent only to its
-/// target. Received group frames are delivered to the kernel, never re-flooded.
+/// IPv4 group traffic and gratuitous ARP fan out once per peer; directed ARP is
+/// sent only to its target. Received group frames go to the kernel, never re-flooded.
 pub fn deliver_to(
     frame: &[u8],
     source: Ipv4Addr,
