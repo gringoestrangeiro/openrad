@@ -35,3 +35,55 @@ impl HandshakeBudget {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hundred_outgoing_peers_are_scheduled_in_five_batches() {
+        let mut queued = 100;
+        let mut batches = Vec::new();
+        while queued > 0 {
+            let mut budget = HandshakeBudget::new(std::iter::empty());
+            let mut started = 0;
+            while queued > 0 && budget.try_start(false) {
+                queued -= 1;
+                started += 1;
+            }
+            batches.push(started);
+        }
+        assert_eq!(batches, [24, 24, 24, 24, 4]);
+    }
+
+    #[test]
+    fn stalled_outgoing_peers_leave_room_for_incoming_offers() {
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(false, 24));
+        assert!(!budget.try_start(false));
+        for _ in 0..8 {
+            assert!(budget.try_start(true));
+        }
+        assert!(!budget.try_start(true));
+        assert!(!budget.try_start(false));
+    }
+
+    #[test]
+    fn all_slots_can_accept_incoming_peers_and_exits_free_capacity() {
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, 32));
+        assert!(!budget.try_start(true));
+        assert!(!budget.try_start(false));
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, 31));
+        assert!(budget.try_start(false));
+        assert!(!budget.try_start(true));
+    }
+
+    #[test]
+    fn outgoing_exit_frees_one_slot_without_resetting_the_batch() {
+        let mut budget = HandshakeBudget::new(
+            std::iter::repeat_n(false, 23).chain(std::iter::repeat_n(true, 8)),
+        );
+        assert!(budget.try_start(false));
+        assert!(!budget.try_start(false));
+        assert!(!budget.try_start(true));
+    }
+}

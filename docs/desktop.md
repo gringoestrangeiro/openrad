@@ -4,7 +4,15 @@ Build the workspace and keep both binaries together. Start `openrad-desktop` fro
 
 ## Connection and network management
 
-On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. The desktop supports connecting and disconnecting, listing public networks, joining and leaving networks, and viewing member status and transport information. Settings include the device name, automatic connection/reconnection, and UI scale.
+On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. Settings include the device name, automatic connection/reconnection, and UI scale.
+
+In **Your networks**, choose **Create private network** or **Join private network**. Enter the exact network name and password; creation also asks you to confirm the password. Passwords are masked by default and are not saved in your profile. **Browse public** opens the existing public-network catalog.
+
+Select a network to see your role and each member's role. Administrators have a **Manage** menu beside each member with **Remove member**, **Grant admin**, or **Revoke admin**. Each change shows a confirmation naming the member and network. The menu works for offline members too, and is disabled while a command is running. Role changes and removals reported by the service update the view.
+
+**Leave network** removes your own membership. The service may prevent the last administrator from leaving: grant admin to another member first, or use **Delete network**. Deletion requires confirmation and removes the network for everyone. Removing a member is not a permanent ban; someone who still knows the password may rejoin.
+
+Server refusals and password failures appear in the notification and Recent activity. If an operation times out, reconnect to load the service's current membership before retrying. A network that requires administrator approval is shown as **Pending approval** and is excluded from forwarding until approved.
 
 The peer table distinguishes Direct TCP, Direct UDP, and Relay. These labels represent authenticated peer channels. They are separate from the overall service connection status. Incoming channels and outgoing channels use the same authentication and Ethernet forwarding checks.
 

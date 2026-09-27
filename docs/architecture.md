@@ -7,6 +7,7 @@ OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openra
 | `config` | Shared public bootstrap endpoint and RSA modulus |
 | `crypto` | Registration/session cryptography and mutual peer authentication |
 | `protocol` | Bounded message parsing, memberships, and candidate validation |
+| `network` | Shared public/private join authentication and correlated network administration commands |
 | `session` | Framed service connection and session lifecycle |
 | `peer` | Outgoing transport selection, authentication, and relay fallback |
 | `incoming` | Bounded incoming offers, candidate setup, and acceptor authentication |
@@ -28,6 +29,10 @@ Both incoming and outgoing channels perform mutual authentication and the tunnel
 A path reported as Direct TCP or Direct UDP identifies the selected peer socket. Measuring useful direct connectivity also requires observing traffic on that channel; a login indicator or empty socket is insufficient. Local tests cannot predict direct success rates across live NATs and firewalls.
 
 ## Privileges and persistence
+
+The CLI and desktop use the same `NetworkOperation` state machine for creation, joining, leaving, deleting, kicking, and changing admin roles. Private joins verify the network's SH server proof before accepting membership. Administration acknowledgements must match the request, action, context, network, and member. Role and removal notifications update the desktop snapshot and forwarding membership. A kick only removes the affected network relationship; peers sharing another approved network remain eligible. Pending applicants are not eligible for traffic through that network.
+
+Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations. Protocol provenance and the controlled CLI verification are recorded in [the network-management handoff](re-engineering/network-management/README.md).
 
 The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
 

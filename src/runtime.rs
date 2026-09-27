@@ -2,6 +2,7 @@
 //! control I/O, peer handshakes and Ethernet forwarding never run on the UI thread.
 use crate::{
     incoming::{Hub, Policy, Setup},
+    network::{NetworkOperation, NetworkRequest},
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
     protocol::*,
@@ -10,7 +11,7 @@ use crate::{
     tap::Tap,
     tunnel,
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, Result};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,6 +30,7 @@ pub enum Command {
     Search { query: String, cursor: u64 },
     Join(String),
     Leave(String),
+    Network(NetworkRequest),
     RetryPeers,
     RetryInterface,
 }
@@ -75,6 +77,7 @@ pub struct Traffic {
 pub struct Snapshot {
     pub vip: Option<Ipv4Addr>,
     pub networks: Vec<Network>,
+    pub roles: BTreeMap<String, BTreeMap<u64, u32>>,
     pub peers: BTreeMap<u64, PeerView>,
     pub interface_ready: bool,
     pub interface_error: Option<String>,
@@ -121,12 +124,14 @@ enum Message {
     Sent(usize),
     Closed(u64, Option<String>),
 }
+enum PendingKind {
+    Search { query: String, cursor: u64 },
+    Network(Box<NetworkOperation>),
+}
 struct Pending {
-    command: Command,
+    kind: PendingKind,
     id: u64,
-    sequence: u32,
     until: Instant,
-    joined: Option<Network>,
 }
 fn control_loop(
     mut session: Session,
@@ -152,20 +157,37 @@ fn control_loop(
                 if let Ok(command) = commands.try_recv() {
                     next_id += 1;
                     sequence += 1;
-                    let bytes = match &command {
-                        Command::Search { query, cursor } => public_list(query, next_id, *cursor)?,
-                        Command::Join(name) => join(name, next_id, sequence)?,
-                        Command::Leave(id) => leave(id, next_id, sequence)?,
-                        _ => continue,
-                    };
-                    session.send(&bytes)?;
-                    pending = Some(Pending {
-                        command,
-                        id: next_id,
-                        sequence,
-                        until: Instant::now() + Duration::from_secs(20),
-                        joined: None,
-                    });
+                    let prepared = (|| -> Result<_> {
+                        let request = match command {
+                            Command::Search { query, cursor } => {
+                                let bytes = public_list(&query, next_id, cursor)?;
+                                return Ok((PendingKind::Search { query, cursor }, bytes));
+                            }
+                            Command::Join(name) => NetworkRequest::public_join(name),
+                            Command::Leave(network) => NetworkRequest::Leave { network },
+                            Command::Network(request) => request,
+                            _ => anyhow::bail!("unsupported control command"),
+                        };
+                        let (operation, bytes) =
+                            NetworkOperation::start(request, next_id, sequence)?;
+                        Ok((PendingKind::Network(Box::new(operation)), bytes))
+                    })();
+                    match prepared {
+                        Ok((kind, bytes)) => {
+                            session.send(&bytes)?;
+                            pending = Some(Pending {
+                                kind,
+                                id: next_id,
+                                until: Instant::now() + Duration::from_secs(20),
+                            });
+                        }
+                        Err(error) => {
+                            events.send(Message::Update(Update::Operation {
+                                message: error.to_string(),
+                                error: true,
+                            }))?;
+                        }
+                    }
                 }
             }
             if pending.as_ref().is_some_and(|p| Instant::now() >= p.until) {
@@ -187,7 +209,7 @@ fn control_loop(
                     membership.snapshot(&data)?;
                     events.send(Message::Membership(membership.clone()))?;
                 }
-                41 => {
+                41 | 42 => {
                     membership.changes(&data)?;
                     events.send(Message::Membership(membership.clone()))?;
                 }
@@ -199,8 +221,8 @@ fn control_loop(
                 continue;
             };
             let mut complete = None;
-            match (&p.command, operation) {
-                (Command::Search { query, cursor }, 45) => {
+            match &mut p.kind {
+                PendingKind::Search { query, cursor } if operation == 45 => {
                     let (networks, next) = listing(&data, p.id)?;
                     events.send(Message::Update(Update::Catalog {
                         query: query.clone(),
@@ -210,48 +232,13 @@ fn control_loop(
                     }))?;
                     complete = Some(("Public networks updated".to_owned(), false));
                 }
-                (Command::Join(name), 37) => match join_result(&data, p.id)? {
-                    Some(JoinResult::Refused(code)) => {
-                        complete = Some((
-                            format!("Network could not be joined (server error {code})"),
-                            true,
-                        ));
+                PendingKind::Network(network) => {
+                    let progress = network.handle(&data, &mut membership)?;
+                    if let Some(bytes) = progress.send {
+                        session.send(&bytes)?;
                     }
-                    Some(JoinResult::Membership(root)) => {
-                        membership.snapshot(&tlv(0x1316, root))?;
-                        p.joined = membership
-                            .networks
-                            .values()
-                            .find(|n| n.name == *name)
-                            .cloned();
-                        ensure!(p.joined.is_some(), "JOIN network name mismatch");
-                    }
-                    None => {}
-                },
-                (Command::Join(_), 42) if p.joined.is_some() => {
-                    let n = p.joined.as_ref().unwrap();
-                    let r = records(&data)?;
-                    let f = records(field(&r, 0x131f)?)?;
-                    for record in f.iter().filter(|r| r.tag == 0x131e) {
-                        let f = records(record.value)?;
-                        if hex::encode(field(&f, 0x0d000309)?) == n.network_id {
-                            complete = Some((format!("Joined {}", n.name), false));
-                        }
-                    }
-                }
-                (Command::Leave(network), 37) => {
-                    match leave_result(&data, p.id, p.sequence, network)? {
-                        Some(None) => {
-                            membership.remove_network(network);
-                            complete = Some(("Left network".into(), false));
-                        }
-                        Some(Some(code)) => {
-                            complete = Some((
-                                format!("Network could not be left (server error {code})"),
-                                true,
-                            ))
-                        }
-                        None => {}
+                    if let Some(result) = progress.complete {
+                        complete = Some((result.message, result.error));
                     }
                 }
                 _ => {}
@@ -391,6 +378,7 @@ fn refresh_membership(
     workers: &BTreeMap<u64, Worker>,
 ) -> Result<BTreeSet<u64>> {
     snapshot.networks = membership.networks.values().cloned().collect();
+    snapshot.roles = membership.roles.clone();
     snapshot
         .peers
         .retain(|rid, _| membership.peers.contains_key(rid));
@@ -725,4 +713,91 @@ pub fn run(
         let _ = worker.join();
     }
     result
+}
+
+#[cfg(test)]
+mod membership_tests {
+    use super::*;
+
+    fn membership() -> Membership {
+        let mut members = Membership::default();
+        members.networks.insert(
+            "n".into(),
+            Network {
+                name: "network".into(),
+                network_id: "n".into(),
+            },
+        );
+        members.peers.insert(
+            2,
+            Peer {
+                rid: 2,
+                name: "peer".into(),
+                vip: Ipv4Addr::new(26, 0, 0, 2),
+                server: Some("192.0.2.1".into()),
+                state: 1,
+                network_ids: BTreeSet::from(["n".into()]),
+            },
+        );
+        members
+    }
+
+    fn worker() -> Worker {
+        Worker {
+            stop: Arc::new(AtomicBool::new(false)),
+            sender: mpsc::sync_channel(1).0,
+            join: thread::spawn(|| {}),
+            mac: Some([2, 0, 0, 0, 0, 2]),
+            incoming: false,
+        }
+    }
+
+    #[test]
+    fn metadata_update_preserves_connected_status_and_refreshes_ui() {
+        let mut members = membership();
+        let mut snapshot = Snapshot::default();
+        let workers = BTreeMap::from([(2, worker())]);
+        assert_eq!(
+            refresh_membership(&mut snapshot, &members, 1, &workers).unwrap(),
+            BTreeSet::from([2])
+        );
+        snapshot.peers.get_mut(&2).unwrap().status = PeerState::Connected;
+        snapshot.peers.get_mut(&2).unwrap().transport = Some(TransportPath::Relay);
+        members.peers.get_mut(&2).unwrap().name = "renamed".into();
+        members.networks.get_mut("n").unwrap().name = "new network name".into();
+        refresh_membership(&mut snapshot, &members, 1, &workers).unwrap();
+        assert_eq!(snapshot.peers[&2].peer.name, "renamed");
+        assert_eq!(snapshot.networks[0].name, "new network name");
+        assert_eq!(snapshot.peers[&2].status, PeerState::Connected);
+        assert_eq!(snapshot.peers[&2].transport, Some(TransportPath::Relay));
+        assert!(!workers[&2].stop.load(Ordering::Relaxed));
+        workers.into_values().next().unwrap().join.join().unwrap();
+    }
+
+    #[test]
+    fn binding_changes_cancel_stale_workers_and_leave_removes_forwarding() {
+        for change in ["vip", "server", "offline", "leave"] {
+            let mut members = membership();
+            let mut snapshot = Snapshot::default();
+            let workers = BTreeMap::from([(2, worker())]);
+            refresh_membership(&mut snapshot, &members, 1, &workers).unwrap();
+            match change {
+                "vip" => members.peers.get_mut(&2).unwrap().vip = Ipv4Addr::new(26, 0, 0, 3),
+                "server" => members.peers.get_mut(&2).unwrap().server = Some("192.0.2.2".into()),
+                "offline" => members.peers.get_mut(&2).unwrap().state = 0,
+                "leave" => members.remove_network("n"),
+                _ => unreachable!(),
+            }
+            let eligible = refresh_membership(&mut snapshot, &members, 1, &workers).unwrap();
+            assert!(workers[&2].stop.load(Ordering::Relaxed));
+            if matches!(change, "offline" | "leave") {
+                assert!(eligible.is_empty());
+            }
+            if change == "leave" {
+                assert!(snapshot.peers.is_empty());
+                assert!(snapshot.networks.is_empty());
+            }
+            workers.into_values().next().unwrap().join.join().unwrap();
+        }
+    }
 }
