@@ -7,7 +7,7 @@ OpenRad is a Rust VPN client workspace:
 - `src/`: reusable `openrad` library and CLI (`main.rs`); protocol, cryptography, transports, runtime, and Linux TAP support.
 - `desktop/src/`: `eframe` desktop UI, background backend, settings, and credential storage.
 - `tests/`: integration tests; `tests/fixtures/` holds synthetic JSON protocol and cryptographic vectors.
-- `docs/`: Linux setup, CLI/desktop usage, architecture, and protocol evidence under `docs/re-engineering/`.
+- `docs/`: Linux setup, CLI/desktop usage, and architecture.
 
 Keep shared VPN logic independent of the GUI.
 

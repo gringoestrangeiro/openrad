@@ -628,7 +628,7 @@ fn network_id(b: &[u8]) -> Result<String> {
 
 /// Native NodeRemoved/NodeStatus events carry the subject RID followed by an
 /// optional source RID using the same tag. Other message kinds remain strict
-/// singletons. See docs/re-engineering/network-management/member-events.md.
+/// singletons.
 fn event_member(fields: &[Record<'_>]) -> Result<u64> {
     let mut ids = fields.iter().filter(|field| field.tag == 0x020001e1);
     let member = int64(

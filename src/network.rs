@@ -1,4 +1,3 @@
-//! Network management protocol verified in docs/re-engineering/network-management.
 //! One state machine is shared by the CLI and the long-lived desktop engine.
 use crate::{
     crypto::{self, ShClient},

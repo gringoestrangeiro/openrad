@@ -35,10 +35,10 @@ The CLI and desktop use the same `NetworkOperation` state machine for creation, 
 Membership removal and role/status events may carry a mandatory member RID and
 an optional source RID with the same tag. These events validate both values and
 apply the update only to the first. Other message kinds retain strict singleton
-validation. The [native event evidence](re-engineering/network-management/member-events.md)
-documents the 0.3.0 compatibility fix for unexpected attachment reconnects.
+validation. This behavior supports the 0.3.0 compatibility fix for unexpected
+attachment reconnects.
 
-Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations. Protocol provenance and the controlled CLI verification are recorded in [the network-management handoff](re-engineering/network-management/README.md).
+Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations.
 
 The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
 
