@@ -80,6 +80,8 @@ The repository ignores local profiles, reports, credentials, logs, captures, and
 
 asimplestray contributed approximately 95% of the cryptography work behind OpenRad, including the work in `shelper.dll` and the RSA session setup, secure handshake, and encrypted-channel implementation. The MIT license also credits him as a copyright holder.
 
+[Baptiste Rajaut (@baptisterajaut)](https://github.com/baptisterajaut) contributed a robustness audit and fixes for reliable UDP flow control, full-size Ethernet frames, display-name decoding, identity provisioning, reconnection, and TAP helper cleanup in [PR #1](https://github.com/gringoestrangeiro/openrad/pull/1).
+
 ## License
 
 [MIT](LICENSE).
