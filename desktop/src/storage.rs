@@ -155,15 +155,16 @@ pub fn save(vault: &impl Vault, id: &Identity) -> Result<()> {
 }
 pub fn provision_once(
     vault: &impl Vault,
-    provision: impl FnOnce() -> Result<Identity>,
+    provision: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<Identity>,
 ) -> Result<Identity> {
     if let Some(id) = load(vault)? {
         return Ok(id);
     }
-    // Persist the intent before contacting the server. A crash or ambiguous network
-    // failure must never turn a later launch into an extra identity registration.
-    vault.set(PENDING)?;
-    provision()
+    // Persist the intent right before the registering message is sent. A crash or
+    // ambiguous failure after that point must never turn a later launch into an
+    // extra identity registration; a failure before it (no network yet) leaves
+    // nothing behind, so the next attempt can provision normally.
+    provision(&mut || vault.set(PENDING))
 }
 
 /// An explicitly confirmed replacement. Keep the issued identity in memory when
@@ -218,24 +219,40 @@ mod tests {
     #[test]
     fn identity_is_saved_and_reused_without_provisioning_again() {
         let vault = MemoryVault::default();
-        let id = provision_once(&vault, || Ok(identity())).unwrap();
+        let id = provision_once(&vault, |_| Ok(identity())).unwrap();
         save(&vault, &id).unwrap();
         assert_eq!(
-            provision_once(&vault, || panic!("must reuse")).unwrap().rid,
+            provision_once(&vault, |_| panic!("must reuse"))
+                .unwrap()
+                .rid,
             123
         );
     }
     #[test]
     fn interrupted_registration_never_provisions_a_second_identity() {
         let vault = MemoryVault::default();
-        assert!(provision_once(&vault, || bail!("connection lost")).is_err());
-        assert!(provision_once(&vault, || panic!("must not register twice")).is_err());
+        assert!(provision_once(&vault, |commit| {
+            commit()?;
+            bail!("connection lost")
+        })
+        .is_err());
+        assert!(provision_once(&vault, |_| panic!("must not register twice")).is_err());
+    }
+    #[test]
+    fn failure_before_registration_is_sent_allows_a_later_attempt() {
+        let vault = MemoryVault::default();
+        assert!(provision_once(&vault, |_| bail!("network unreachable")).is_err());
+        assert_eq!(provision_once(&vault, |_| Ok(identity())).unwrap().rid, 123);
     }
     #[test]
     fn locked_store_prevents_registration_and_corruption_is_not_first_use() {
         let vault = MemoryVault::default();
         vault.fail.set(true);
-        assert!(provision_once(&vault, || panic!("no durable storage")).is_err());
+        assert!(provision_once(&vault, |commit| {
+            commit()?;
+            panic!("no durable storage")
+        })
+        .is_err());
         *vault.data.borrow_mut() = Some(b"broken".to_vec());
         assert!(load(&vault).is_err());
     }

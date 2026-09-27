@@ -204,12 +204,13 @@ fn manager(
                         Phase::Provisioning,
                         "Preparing your private device identity…".into(),
                     ));
-                    identity = Some(storage::provision_once(&vault, || {
-                        Session::provision(
+                    identity = Some(storage::provision_once(&vault, |commit| {
+                        Session::provision_with_commit(
                             MODULUS,
                             &settings.node_name,
                             openrad::DEFAULT_BOOTSTRAP_HOST,
                             &ReportDirectory::disabled(),
+                            commit,
                         )
                     })?);
                 }
