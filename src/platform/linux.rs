@@ -97,7 +97,7 @@ impl Tap {
     }
     pub fn send(&mut self, b: &[u8]) -> Result<()> {
         ensure!(
-            (14..=1414).contains(&b.len()),
+            (14..=crate::tunnel::MAX_FRAME).contains(&b.len()),
             "TAP Ethernet frame exceeds configured MTU"
         );
         ensure!(self.file.write(b)? == b.len(), "short TAP packet write");
@@ -159,7 +159,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
         "address",
         &mac,
         "mtu",
-        "1400",
+        "1500",
         "addrgenmode",
         "none",
     ])?;
