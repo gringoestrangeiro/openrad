@@ -28,8 +28,12 @@ impl NetworkPassword {
         );
         Ok(Self(value))
     }
-    fn bytes(&self) -> &[u8] {
-        self.0.as_bytes()
+    /// The official client passes the UTF-8 conversion buffer, including its
+    /// terminating NUL, to both the join proof and the creation verifier.
+    fn wire_bytes(&self) -> Zeroizing<Vec<u8>> {
+        let mut bytes = Zeroizing::new(self.0.as_bytes().to_vec());
+        bytes.push(0);
+        bytes
     }
 }
 
@@ -122,7 +126,7 @@ pub fn network_verifier(
     validate_name(name)?;
     let mut input = Zeroizing::new(crypto::identity_bytes(network_identity(name)));
     input.push(b':');
-    input.extend_from_slice(password.bytes());
+    input.extend_from_slice(&password.wire_bytes());
     let x = BigUint::from_bytes_be(&crypto::hash(
         &[salt.to_vec(), crypto::hash(&input)].concat(),
     ));
@@ -221,7 +225,7 @@ impl NetworkOperation {
             NetworkRequest::Join { name, password } => {
                 validate_name(&name)?;
                 let bytes = if let Some(password) = password {
-                    let mut sh = ShClient::new(network_identity(&name), password.bytes())?;
+                    let mut sh = ShClient::new(network_identity(&name), &password.wire_bytes())?;
                     let hello = sh.start()?;
                     let packet = [
                         u32v(CLIENT_OP, 39),

@@ -110,7 +110,8 @@ fn start_private() -> (NetworkOperation, Vec<u8>, Membership, ShServer) {
     .unwrap();
     let server = ShServer::with_private(
         network_identity(NAME),
-        b"synthetic password",
+        // The official UTF-8 conversion includes its terminating NUL.
+        b"synthetic password\0",
         vec![3; 16],
         BigUint::from(789123u32),
     )

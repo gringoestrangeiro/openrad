@@ -13,6 +13,7 @@
 # Local runtime profiles, reports, credentials, and traffic recordings
 /runs/
 /reports/
+/reports/reorc/
 /profiles/
 /captures/
 /data/
