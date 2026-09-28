@@ -92,6 +92,14 @@ impl Drop for Backend {
     }
 }
 type Report = Arc<dyn Fn(Notice) + Send + Sync>;
+fn reconnect_delay(settings: &Settings, attempt: u32) -> Duration {
+    Duration::from_secs(
+        settings
+            .reconnect_base_delay_seconds
+            .saturating_mul(1u64 << attempt.saturating_sub(1).min(9))
+            .min(300),
+    )
+}
 fn manager(
     paths: Paths,
     import: Option<PathBuf>,
@@ -278,12 +286,12 @@ fn manager(
                     let can_retry = !want_reset
                         && !replacement.is_pending()
                         && settings.auto_reconnect
-                        && retries < 3
+                        && retries < settings.reconnect_attempts
                         && persisted;
                     let suffix = if can_retry {
                         retries += 1;
                         want_connect = true;
-                        retry_at = Instant::now() + Duration::from_secs(2u64.pow(retries));
+                        retry_at = Instant::now() + reconnect_delay(&settings, retries);
                         " Reconnecting with the same identity…"
                     } else {
                         ""
@@ -363,7 +371,8 @@ fn manager(
             }
             Ok(Action::Save(s)) => match paths.save_settings(&s) {
                 Ok(()) => {
-                    settings = s;
+                    settings = s.clone();
+                    report(Notice::Settings(s));
                     report(Notice::Engine(runtime::Update::Operation {
                         message: "Settings saved".into(),
                         error: false,
@@ -402,5 +411,18 @@ fn manager(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configurable_reconnect_delay_doubles_and_caps() {
+        let settings = Settings::default();
+        assert_eq!(reconnect_delay(&settings, 1), Duration::from_secs(2));
+        assert_eq!(reconnect_delay(&settings, 2), Duration::from_secs(4));
+        assert_eq!(reconnect_delay(&settings, 10), Duration::from_secs(300));
     }
 }

@@ -4,7 +4,13 @@ Build the workspace and keep both binaries together. Start `openrad-desktop` fro
 
 ## Connection and network management
 
-On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. Settings include the device name, automatic connection/reconnection, and UI scale.
+On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. **Settings** offers:
+
+- **Connection:** connect on launch, reconnect after failures, maximum retry attempts (1–10), and the initial retry delay (1–30 seconds). Later retries double the delay, capped at five minutes. The device name is editable until the identity is created.
+- **Workspace:** the page shown at startup, interface scale, traffic overview and graphs, decimal or binary traffic units, visibility of offline peers, peer sorting, and the number of recent activity events shown.
+- **Developer view:** inline peer connection details, internal IDs, and live session, interface, peer, and frame counters. **Copy diagnostic summary** copies aggregate counters without credentials or packet contents.
+
+Workspace display changes preview immediately. Use **Save preferences** to keep them after restart, **Discard changes** to return to the last saved values, or **Restore defaults** to prepare the defaults for saving. The created identity's name is preserved when restoring defaults. Settings remain separate from credentials and are saved per profile.
 
 In **Your networks**, choose **Create private network** or **Join private network**. Enter the exact network name and password; creation also asks you to confirm the password. Passwords are masked by default and are not saved in your profile. **Browse public** opens the existing public-network catalog.
 

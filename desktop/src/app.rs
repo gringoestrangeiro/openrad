@@ -3,7 +3,7 @@ use crate::{
     network_ui::{
         role_label, DeleteConfirmation, FormEvent, MemberConfirmation, Mode, NetworkForm,
     },
-    storage::{Paths, Settings},
+    storage::{Paths, PeerSort, Settings, StartPage},
 };
 use eframe::egui::{self, Align, Color32, FontId, RichText, Stroke, Vec2};
 use openrad::{
@@ -43,6 +43,7 @@ pub struct App {
     message: String,
     identity: Option<(u64, String)>,
     settings: Settings,
+    saved_settings: Settings,
     snapshot: Snapshot,
     page: Page,
     query: String,
@@ -91,6 +92,7 @@ impl App {
             message: "Opening your credential store…".into(),
             identity: None,
             settings: Settings::default(),
+            saved_settings: Settings::default(),
             snapshot: Snapshot::default(),
             page: Page::Networks,
             query: String::new(),
@@ -152,6 +154,13 @@ impl App {
                 Notice::ReplacementPending(pending) => self.replacement_pending = pending,
                 Notice::Settings(s) => {
                     ctx.set_zoom_factor(s.scale);
+                    if self.phase == Phase::Loading {
+                        self.page = match s.start_page {
+                            StartPage::Networks => Page::Networks,
+                            StartPage::Discover => Page::Discover,
+                        };
+                    }
+                    self.saved_settings = s.clone();
                     self.settings = s;
                 }
                 Notice::Engine(Update::State(state)) => {
@@ -587,18 +596,30 @@ impl App {
             metric(
                 &mut cols[0],
                 "DOWNLOAD",
-                &rate(self.rates.0),
-                &format!("{} received", bytes(self.snapshot.traffic.received_bytes)),
+                &rate(self.rates.0, self.settings.decimal_units),
+                &format!(
+                    "{} received",
+                    bytes(
+                        self.snapshot.traffic.received_bytes,
+                        self.settings.decimal_units
+                    )
+                ),
                 MINT,
-                Some(&self.download),
+                self.settings.show_traffic_graphs.then_some(&self.download),
             );
             metric(
                 &mut cols[1],
                 "UPLOAD",
-                &rate(self.rates.1),
-                &format!("{} sent", bytes(self.snapshot.traffic.sent_bytes)),
+                &rate(self.rates.1, self.settings.decimal_units),
+                &format!(
+                    "{} sent",
+                    bytes(
+                        self.snapshot.traffic.sent_bytes,
+                        self.settings.decimal_units
+                    )
+                ),
                 BLUE,
-                Some(&self.upload),
+                self.settings.show_traffic_graphs.then_some(&self.upload),
             );
             let active = self
                 .snapshot
@@ -627,7 +648,9 @@ impl App {
     }
     fn networks(&mut self, ui: &mut egui::Ui) {
         self.hero(ui);
-        self.traffic(ui);
+        if self.settings.show_traffic {
+            self.traffic(ui);
+        }
         ui.add_space(25.);
         ui.label(RichText::new("Your networks").size(19.).strong());
         ui.add_space(8.);
@@ -721,6 +744,14 @@ impl App {
                     .and_then(|(rid, _)| self.snapshot.roles.get(&n.network_id)?.get(rid).copied());
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(&n.name).strong());
+                    if self.settings.show_internal_ids {
+                        ui.label(
+                            RichText::new(&n.network_id)
+                                .monospace()
+                                .size(11.)
+                                .color(MUTED),
+                        );
+                    }
                     badge(
                         ui,
                         role_label(role),
@@ -755,7 +786,7 @@ impl App {
         }
         ui.add_space(10.);
         let filter = self.peer_filter.to_lowercase();
-        let peers: Vec<_> = self
+        let mut peers: Vec<_> = self
             .snapshot
             .peers
             .values()
@@ -763,11 +794,21 @@ impl App {
                 self.selected_network
                     .as_ref()
                     .is_none_or(|id| p.peer.network_ids.contains(id))
+                    && (self.settings.show_offline_peers || p.status != PeerState::Offline)
                     && (p.peer.name.to_lowercase().contains(&filter)
                         || p.peer.vip.to_string().contains(&filter))
             })
             .cloned()
             .collect();
+        match self.settings.peer_sort {
+            PeerSort::Name => peers.sort_by_key(|p| p.peer.name.to_lowercase()),
+            PeerSort::Status => peers.sort_by(|a, b| {
+                peer_rank(&a.status)
+                    .cmp(&peer_rank(&b.status))
+                    .then_with(|| a.peer.name.to_lowercase().cmp(&b.peer.name.to_lowercase()))
+            }),
+            PeerSort::Address => peers.sort_by_key(|p| (p.peer.vip, p.peer.rid)),
+        }
         card().inner_margin(14).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if peers.is_empty() {
@@ -787,7 +828,14 @@ impl App {
                         dot(ui, color);
                         let width = (ui.available_width() - 330.).max(100.);
                         ui.allocate_ui_with_layout(
-                            Vec2::new(width, 43.),
+                            Vec2::new(
+                                width,
+                                if self.settings.show_internal_ids {
+                                    58.
+                                } else {
+                                    43.
+                                },
+                            ),
                             egui::Layout::top_down(Align::LEFT),
                             |ui| {
                                 ui.add(
@@ -803,6 +851,14 @@ impl App {
                                         .size(11.)
                                         .color(MUTED),
                                 );
+                                if self.settings.show_internal_ids {
+                                    ui.label(
+                                        RichText::new(format!("RID {}", peer.peer.rid))
+                                            .monospace()
+                                            .size(10.)
+                                            .color(MUTED),
+                                    );
+                                }
                             },
                         );
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -868,6 +924,9 @@ impl App {
                             });
                         });
                     });
+                    if self.settings.show_peer_details && !peer.detail.is_empty() {
+                        ui.label(RichText::new(&peer.detail).size(11.).color(MUTED));
+                    }
                     if index + 1 < peers.len() {
                         ui.separator();
                     }
@@ -876,10 +935,14 @@ impl App {
         });
         ui.add_space(12.);
         ui.label(RichText::new("Refused means the remote service declined the connection. Offline members are kept in your network list.").size(11.).color(MUTED));
-        if !self.activity.is_empty() {
+        if self.settings.show_recent_activity && !self.activity.is_empty() {
             ui.add_space(15.);
             egui::CollapsingHeader::new("Recent activity").show(ui, |ui| {
-                for event in self.activity.iter().take(12) {
+                for event in self
+                    .activity
+                    .iter()
+                    .take(self.settings.recent_activity_count)
+                {
                     ui.label(RichText::new(event).size(11.).color(MUTED));
                 }
             });
@@ -1024,7 +1087,7 @@ impl App {
         ui.label(RichText::new("Make yourself at home.").size(28.).strong());
         ui.add_space(8.);
         ui.label(
-            RichText::new("Connection preferences, your identity, and the essentials.")
+            RichText::new("Tune connection behavior, the workspace, and developer diagnostics.")
                 .color(MUTED),
         );
         ui.add_space(25.);
@@ -1038,8 +1101,19 @@ impl App {
             );
             ui.checkbox(
                 &mut self.settings.auto_reconnect,
-                "Reconnect after a connection failure (up to 3 attempts)",
+                "Reconnect after a connection failure",
             );
+            ui.add_enabled_ui(self.settings.auto_reconnect, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Maximum attempts");
+                    ui.add(egui::Slider::new(&mut self.settings.reconnect_attempts, 1..=10));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Initial retry delay");
+                    ui.add(egui::Slider::new(&mut self.settings.reconnect_base_delay_seconds, 1..=30).suffix(" s"));
+                });
+            });
+            ui.label(RichText::new("Each retry waits twice as long, up to five minutes. Changes apply to the next failure.").size(11.).color(MUTED));
             ui.add_space(14.);
             ui.label("Device name");
             ui.add_enabled(
@@ -1051,7 +1125,36 @@ impl App {
                     .size(11.)
                     .color(MUTED),
             );
-            ui.add_space(16.);
+        });
+        ui.add_space(16.);
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("Workspace").size(18.).strong());
+            ui.add_space(12.);
+            ui.label("Open to");
+            egui::ComboBox::from_id_salt("start_page")
+                .selected_text(match self.settings.start_page {
+                    StartPage::Networks => "My networks",
+                    StartPage::Discover => "Discover",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.settings.start_page,
+                        StartPage::Networks,
+                        "My networks",
+                    );
+                    ui.selectable_value(
+                        &mut self.settings.start_page,
+                        StartPage::Discover,
+                        "Discover",
+                    );
+                });
+            ui.label(
+                RichText::new("Used the next time OpenRad starts.")
+                    .size(11.)
+                    .color(MUTED),
+            );
+            ui.add_space(12.);
             ui.label("Interface scale");
             if ui
                 .add(egui::Slider::new(&mut self.settings.scale, 0.8..=1.5).step_by(0.05))
@@ -1059,11 +1162,142 @@ impl App {
             {
                 ui.ctx().set_zoom_factor(self.settings.scale);
             }
+            ui.separator();
+            ui.checkbox(&mut self.settings.show_traffic, "Show traffic overview");
+            ui.add_enabled_ui(self.settings.show_traffic, |ui| {
+                ui.checkbox(
+                    &mut self.settings.show_traffic_graphs,
+                    "Show traffic graphs",
+                );
+                ui.checkbox(
+                    &mut self.settings.decimal_units,
+                    "Use decimal traffic units (kB / MB)",
+                );
+            });
+            ui.checkbox(&mut self.settings.show_offline_peers, "Show offline peers");
+            ui.label("Sort peers by");
+            egui::ComboBox::from_id_salt("peer_sort")
+                .selected_text(match self.settings.peer_sort {
+                    PeerSort::Name => "Name",
+                    PeerSort::Status => "Connection status",
+                    PeerSort::Address => "VPN address",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.settings.peer_sort, PeerSort::Name, "Name");
+                    ui.selectable_value(
+                        &mut self.settings.peer_sort,
+                        PeerSort::Status,
+                        "Connection status",
+                    );
+                    ui.selectable_value(
+                        &mut self.settings.peer_sort,
+                        PeerSort::Address,
+                        "VPN address",
+                    );
+                });
+            ui.checkbox(
+                &mut self.settings.show_recent_activity,
+                "Show recent activity",
+            );
+            ui.add_enabled_ui(self.settings.show_recent_activity, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Events shown");
+                    ui.add(egui::Slider::new(
+                        &mut self.settings.recent_activity_count,
+                        5..=40,
+                    ));
+                });
+            });
+        });
+        ui.add_space(16.);
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("Developer view").size(18.).strong());
             ui.add_space(12.);
-            if ui.add(primary("Save preferences")).clicked() {
-                self.backend.send(Action::Save(self.settings.clone()));
+            ui.checkbox(
+                &mut self.settings.show_peer_details,
+                "Show peer connection details under each row",
+            );
+            ui.checkbox(
+                &mut self.settings.show_internal_ids,
+                "Show internal peer and network IDs",
+            );
+            ui.checkbox(
+                &mut self.settings.show_diagnostics,
+                "Show live diagnostic counters",
+            );
+            if self.settings.show_diagnostics {
+                ui.separator();
+                let connected = self
+                    .snapshot
+                    .peers
+                    .values()
+                    .filter(|p| p.status == PeerState::Connected)
+                    .count();
+                ui.label(format!(
+                    "Session: {} · latency: {} ms · interface: {}",
+                    elapsed(self.snapshot.elapsed_secs),
+                    self.snapshot.latency_ms,
+                    if self.snapshot.interface_ready {
+                        "ready"
+                    } else {
+                        "not ready"
+                    }
+                ));
+                ui.label(format!(
+                    "Networks: {} · peers: {} · connected: {}",
+                    self.snapshot.networks.len(),
+                    self.snapshot.peers.len(),
+                    connected
+                ));
+                ui.label(format!(
+                    "Frames: {} in / {} out / {} filtered",
+                    self.snapshot.traffic.received_frames,
+                    self.snapshot.traffic.sent_frames,
+                    self.snapshot.traffic.dropped
+                ));
+                if ui.button("Copy diagnostic summary").clicked() {
+                    ui.ctx().copy_text(self.diagnostic_summary());
+                }
             }
         });
+        ui.add_space(16.);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    self.settings != self.saved_settings,
+                    primary("Save preferences"),
+                )
+                .clicked()
+            {
+                self.backend.send(Action::Save(self.settings.clone()));
+            }
+            if ui
+                .add_enabled(
+                    self.settings != self.saved_settings,
+                    egui::Button::new("Discard changes"),
+                )
+                .clicked()
+            {
+                self.settings = self.saved_settings.clone();
+                ui.ctx().set_zoom_factor(self.settings.scale);
+            }
+            if ui.button("Restore defaults").clicked() {
+                let mut defaults = Settings::default();
+                if self.identity.is_some() {
+                    defaults.node_name = self.settings.node_name.clone();
+                }
+                self.settings = defaults;
+                ui.ctx().set_zoom_factor(self.settings.scale);
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Display changes preview immediately. Save preferences to keep them after restart.",
+            )
+            .size(11.)
+            .color(MUTED),
+        );
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -1094,6 +1328,9 @@ impl App {
             ui.add_space(10.); ui.label(RichText::new("If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new("Windows and macOS data planes are not implemented or tested. Each connected peer shows its authenticated transport. Direct candidates come from the server; relay remains available when direct connection fails.").size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new(format!("Settings: {}", self.paths.directory.display())).size(11.).color(MUTED));
+            if ui.button("Copy profile path").clicked() {
+                ui.ctx().copy_text(self.paths.directory.display().to_string());
+            }
             ui.add_space(10.);
             ui.label(RichText::new(format!("Connection logs: {}", self.paths.directory.join("diagnostics").display())).size(11.).color(MUTED));
             if ui.button("Copy connection log path").clicked() {
@@ -1102,6 +1339,31 @@ impl App {
         });
         ui.add_space(16.);
         ui.label(RichText::new("Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate").size(11.).color(MUTED));
+    }
+    fn diagnostic_summary(&self) -> String {
+        let connected = self
+            .snapshot
+            .peers
+            .values()
+            .filter(|p| p.status == PeerState::Connected)
+            .count();
+        format!(
+            "OpenRad {}\nState: {:?}\nSession: {}\nInterface ready: {}\nLatency: {} ms\nNetworks: {}\nPeers: {} ({} connected)\nTraffic: {} received / {} sent bytes\nFrames: {} received / {} sent / {} filtered\nRestricted traffic: {}",
+            env!("CARGO_PKG_VERSION"),
+            self.phase,
+            elapsed(self.snapshot.elapsed_secs),
+            self.snapshot.interface_ready,
+            self.snapshot.latency_ms,
+            self.snapshot.networks.len(),
+            self.snapshot.peers.len(),
+            connected,
+            self.snapshot.traffic.received_bytes,
+            self.snapshot.traffic.sent_bytes,
+            self.snapshot.traffic.received_frames,
+            self.snapshot.traffic.sent_frames,
+            self.snapshot.traffic.dropped,
+            self.snapshot.restricted_traffic,
+        )
     }
 }
 impl eframe::App for App {
@@ -1321,9 +1583,9 @@ fn metric(
         ui.label(RichText::new(value).size(23.).color(color));
         ui.add(egui::Label::new(RichText::new(sub).size(10.).color(MUTED)).truncate())
             .on_hover_text(sub);
-        let (rect, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.), egui::Sense::hover());
         if let Some(values) = series {
+            let (rect, _) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.), egui::Sense::hover());
             let max = values.iter().copied().fold(128f32, f32::max);
             let points = (0..60)
                 .map(|i| {
@@ -1351,17 +1613,37 @@ fn peer_color(state: &PeerState) -> Color32 {
         _ => MUTED,
     }
 }
-fn bytes(n: u64) -> String {
-    if n >= 1024 * 1024 {
-        format!("{:.1} MiB", n as f64 / 1048576.)
-    } else if n >= 1024 {
-        format!("{:.1} KiB", n as f64 / 1024.)
+fn peer_rank(state: &PeerState) -> u8 {
+    match state {
+        PeerState::Connected => 0,
+        PeerState::Connecting => 1,
+        PeerState::Online => 2,
+        PeerState::Failed => 3,
+        PeerState::Refused => 4,
+        PeerState::Unavailable => 5,
+        PeerState::Offline => 6,
+    }
+}
+fn bytes(n: u64, decimal: bool) -> String {
+    let base = if decimal { 1000 } else { 1024 };
+    if n >= base * base {
+        format!(
+            "{:.1} {}",
+            n as f64 / (base * base) as f64,
+            if decimal { "MB" } else { "MiB" }
+        )
+    } else if n >= base {
+        format!(
+            "{:.1} {}",
+            n as f64 / base as f64,
+            if decimal { "kB" } else { "KiB" }
+        )
     } else {
         format!("{n} B")
     }
 }
-fn rate(n: f32) -> String {
-    format!("{}/s", bytes(n.max(0.) as u64))
+fn rate(n: f32, decimal: bool) -> String {
+    format!("{}/s", bytes(n.max(0.) as u64, decimal))
 }
 fn elapsed(n: u64) -> String {
     format!("{:02}:{:02}:{:02}", n / 3600, n / 60 % 60, n % 60)

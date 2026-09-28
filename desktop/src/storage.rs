@@ -12,22 +12,77 @@ use std::{
 use zeroize::Zeroizing;
 
 const PENDING: &[u8] = b"openrad-provisioning-pending-v1";
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartPage {
+    #[default]
+    Networks,
+    Discover,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerSort {
+    #[default]
+    Name,
+    Status,
+    Address,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub auto_connect: bool,
     pub auto_reconnect: bool,
+    pub reconnect_attempts: u32,
+    pub reconnect_base_delay_seconds: u64,
     pub node_name: String,
     pub scale: f32,
+    pub start_page: StartPage,
+    pub show_traffic: bool,
+    pub show_traffic_graphs: bool,
+    pub decimal_units: bool,
+    pub show_offline_peers: bool,
+    pub peer_sort: PeerSort,
+    pub show_recent_activity: bool,
+    pub recent_activity_count: usize,
+    pub show_peer_details: bool,
+    pub show_internal_ids: bool,
+    pub show_diagnostics: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             auto_connect: true,
             auto_reconnect: true,
+            reconnect_attempts: 3,
+            reconnect_base_delay_seconds: 2,
             node_name: "openrad-linux".into(),
             scale: 1.0,
+            start_page: StartPage::Networks,
+            show_traffic: true,
+            show_traffic_graphs: true,
+            decimal_units: false,
+            show_offline_peers: true,
+            peer_sort: PeerSort::Name,
+            show_recent_activity: true,
+            recent_activity_count: 12,
+            show_peer_details: false,
+            show_internal_ids: false,
+            show_diagnostics: false,
         }
+    }
+}
+impl Settings {
+    fn normalized(mut self) -> Self {
+        if !self.scale.is_finite() {
+            self.scale = 1.0;
+        }
+        self.scale = self.scale.clamp(0.8, 1.5);
+        self.reconnect_attempts = self.reconnect_attempts.clamp(1, 10);
+        self.reconnect_base_delay_seconds = self.reconnect_base_delay_seconds.clamp(1, 30);
+        self.recent_activity_count = self.recent_activity_count.clamp(5, 40);
+        self
     }
 }
 #[derive(Clone)]
@@ -73,9 +128,8 @@ impl Paths {
             fs::metadata(&path)?.len() < 64 * 1024,
             "Settings file is too large"
         );
-        let mut settings: Settings = serde_json::from_slice(&fs::read(path)?)?;
-        settings.scale = settings.scale.clamp(0.8, 1.5);
-        Ok(settings)
+        let settings: Settings = serde_json::from_slice(&fs::read(path)?)?;
+        Ok(settings.normalized())
     }
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
         ensure!(
@@ -83,6 +137,10 @@ impl Paths {
             "Device name cannot be empty"
         );
         openrad::protocol::textv(0x03000304, &settings.node_name)?;
+        ensure!(
+            settings == &settings.clone().normalized(),
+            "Settings are out of range"
+        );
         let target = self.directory.join("settings.json");
         let tmp = self
             .directory
@@ -272,6 +330,37 @@ mod tests {
     fn settings_never_serialize_credentials() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!json.contains("credential") && !json.contains("password"));
+    }
+    #[test]
+    fn old_settings_receive_new_defaults_and_customization_round_trips() {
+        let old = r#"{"auto_connect":false,"auto_reconnect":true,"node_name":"test","scale":1.25}"#;
+        let settings: Settings = serde_json::from_str(old).unwrap();
+        assert!(!settings.auto_connect);
+        assert_eq!(settings.reconnect_attempts, 3);
+        assert_eq!(settings.start_page, StartPage::Networks);
+        assert!(settings.show_offline_peers);
+        let mut changed = settings;
+        changed.start_page = StartPage::Discover;
+        changed.peer_sort = PeerSort::Status;
+        changed.show_diagnostics = true;
+        let restored: Settings =
+            serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert!(restored == changed);
+    }
+    #[test]
+    fn settings_ranges_are_normalized_on_load() {
+        let settings = Settings {
+            scale: f32::NAN,
+            reconnect_attempts: 99,
+            reconnect_base_delay_seconds: 0,
+            recent_activity_count: 100,
+            ..Default::default()
+        };
+        let settings = settings.normalized();
+        assert_eq!(settings.scale, 1.0);
+        assert_eq!(settings.reconnect_attempts, 10);
+        assert_eq!(settings.reconnect_base_delay_seconds, 1);
+        assert_eq!(settings.recent_activity_count, 40);
     }
     #[test]
     fn replacement_preserves_old_identity_until_success_and_retries_only_storage() {
