@@ -70,15 +70,21 @@ pub fn accept_ack(data: &[u8], version: u32) -> Result<()> {
     Ok(())
 }
 pub fn encode(frame: &[u8]) -> Result<Vec<u8>> {
+    let mut packet = Vec::new();
+    encode_into(frame, &mut packet)?;
+    Ok(packet)
+}
+pub fn encode_into(frame: &[u8], packet: &mut Vec<u8>) -> Result<()> {
     ensure!(
         (14..=65535).contains(&frame.len()),
         "invalid Ethernet length"
     );
-    let mut packet = Vec::with_capacity(10 + frame.len());
+    packet.clear();
+    packet.reserve(10 + frame.len());
     packet.extend_from_slice(&[0; 6]);
     packet.extend_from_slice(&(frame.len() as u32).to_le_bytes());
     packet.extend_from_slice(frame);
-    Ok(packet)
+    Ok(())
 }
 pub enum Packet<'a> {
     Frames(Vec<&'a [u8]>),
@@ -185,6 +191,69 @@ pub fn gratuitous_arp(vip: Ipv4Addr) -> Vec<u8> {
 /// Largest supported Ethernet frame (MTU 1500 plus header).
 pub const MAX_FRAME: usize = 1514;
 
+/// Source-validated forwarding decision, reusable across authenticated peers.
+/// This contains only routing metadata; the Ethernet frame stays unchanged.
+pub struct Forwarding {
+    destination: Ipv4Addr,
+    destination_mac: [u8; 6],
+    group: bool,
+    arp: bool,
+}
+impl Forwarding {
+    /// Group traffic has no single destination; directed ARP remains unicast
+    /// here even when its Ethernet destination is the broadcast MAC.
+    pub fn target(&self) -> Option<Ipv4Addr> {
+        (!self.group).then_some(self.destination)
+    }
+    pub fn deliver_to(&self, target: Ipv4Addr, target_mac: [u8; 6]) -> bool {
+        self.group
+            || self.destination == target
+                && (self.destination_mac == target_mac
+                    || self.arp && self.destination_mac == [255; 6])
+    }
+}
+
+/// Validate the source and packet header once before considering each peer.
+pub fn forwarding(frame: &[u8], source: Ipv4Addr, source_mac: [u8; 6]) -> Option<Forwarding> {
+    if !(14..=MAX_FRAME).contains(&frame.len()) || frame[6..12] != source_mac {
+        return None;
+    }
+    let destination_mac = frame[..6].try_into().ok()?;
+    if let Some((src, dst)) = ipv4_endpoints(frame) {
+        if src != source {
+            return None;
+        }
+        let group_mac = if dst == Ipv4Addr::BROADCAST || dst == Ipv4Addr::new(26, 255, 255, 255) {
+            Some([255; 6])
+        } else if dst.is_multicast() {
+            let b = dst.octets();
+            Some([1, 0, 0x5e, b[1] & 0x7f, b[2], b[3]])
+        } else {
+            None
+        };
+        if group_mac.is_some_and(|mac| destination_mac != mac) {
+            return None;
+        }
+        return Some(Forwarding {
+            destination: dst,
+            destination_mac,
+            group: group_mac.is_some(),
+            arp: false,
+        });
+    }
+    let (src, dst) = arp_endpoints(frame)?;
+    // Check the ARP sender too: the Ethernet source alone is insufficient.
+    if src != source || frame[22..28] != source_mac {
+        return None;
+    }
+    Some(Forwarding {
+        destination: dst,
+        destination_mac,
+        group: dst == source && destination_mac == [255; 6],
+        arp: true,
+    })
+}
+
 /// Whether an unchanged Ethernet frame belongs on this authenticated link.
 /// IPv4 group traffic and gratuitous ARP fan out once per peer; directed ARP is
 /// sent only to its target. Received group frames go to the kernel, never re-flooded.
@@ -195,32 +264,5 @@ pub fn deliver_to(
     target: Ipv4Addr,
     target_mac: [u8; 6],
 ) -> bool {
-    if !(14..=MAX_FRAME).contains(&frame.len()) || frame[6..12] != source_mac {
-        return false;
-    }
-    if let Some((src, dst)) = ipv4_endpoints(frame) {
-        if src != source {
-            return false;
-        }
-        let destination_mac =
-            if dst == Ipv4Addr::BROADCAST || dst == Ipv4Addr::new(26, 255, 255, 255) {
-                [255; 6]
-            } else if dst.is_multicast() {
-                let b = dst.octets();
-                [1, 0, 0x5e, b[1] & 0x7f, b[2], b[3]]
-            } else if dst == target {
-                target_mac
-            } else {
-                return false;
-            };
-        return frame[..6] == destination_mac;
-    }
-    if let Some((src, dst)) = arp_endpoints(frame) {
-        // Check the ARP sender too: the Ethernet source alone is insufficient.
-        return src == source
-            && frame[22..28] == source_mac
-            && (dst == target && (frame[..6] == target_mac || frame[..6] == [255; 6])
-                || dst == source && frame[..6] == [255; 6]);
-    }
-    false
+    forwarding(frame, source, source_mac).is_some_and(|route| route.deliver_to(target, target_mac))
 }

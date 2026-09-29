@@ -2,11 +2,12 @@ use crate::storage::{self, Paths, Settings};
 use anyhow::{ensure, Result};
 use openrad::{output::ReportDirectory, protocol::Identity, runtime, session::Session};
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -43,9 +44,29 @@ pub enum Action {
     Engine(runtime::Command),
     Shutdown,
 }
+/// Coalesce consecutive state snapshots while preserving phase/operation order.
+#[derive(Clone, Default)]
+pub struct Notices(Arc<Mutex<VecDeque<Notice>>>);
+impl Notices {
+    fn send(&self, notice: Notice) {
+        let mut queue = self.0.lock().unwrap();
+        if matches!(notice, Notice::Engine(runtime::Update::State(_)))
+            && matches!(
+                queue.back(),
+                Some(Notice::Engine(runtime::Update::State(_)))
+            )
+        {
+            queue.pop_back();
+        }
+        queue.push_back(notice);
+    }
+    pub fn try_iter(&self) -> std::collections::vec_deque::IntoIter<Notice> {
+        std::mem::take(&mut *self.0.lock().unwrap()).into_iter()
+    }
+}
 pub struct Backend {
     sender: Sender<Action>,
-    pub notices: Receiver<Notice>,
+    pub notices: Notices,
     stop: Arc<AtomicBool>,
 }
 impl Backend {
@@ -56,7 +77,8 @@ impl Backend {
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let (sender, actions) = mpsc::channel();
-        let (updates, notices) = mpsc::channel();
+        let notices = Notices::default();
+        let updates = notices.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = stop.clone();
         thread::spawn(move || {
@@ -64,7 +86,7 @@ impl Backend {
             let report = {
                 let wake = wake.clone();
                 move |n| {
-                    let _ = updates.send(n);
+                    updates.send(n);
                     wake();
                 }
             };
@@ -417,6 +439,44 @@ fn manager(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshots_stay_bounded_without_crossing_phase_or_operation_events() {
+        let notices = Notices::default();
+        let state = |n| {
+            Notice::Engine(runtime::Update::State(runtime::Snapshot {
+                elapsed_secs: n,
+                ..Default::default()
+            }))
+        };
+        for n in 0..10_000 {
+            notices.send(state(n));
+        }
+        notices.send(Notice::Engine(runtime::Update::Operation {
+            message: "keep this result".into(),
+            error: false,
+        }));
+        for n in 10_000..20_000 {
+            notices.send(state(n));
+        }
+        notices.send(Notice::Phase(Phase::Disconnected, "finished".into()));
+        let mut queued = notices.try_iter();
+        assert_eq!(queued.len(), 4);
+        assert!(
+            matches!(queued.next(), Some(Notice::Engine(runtime::Update::State(s))) if s.elapsed_secs == 9999)
+        );
+        assert!(
+            matches!(queued.next(), Some(Notice::Engine(runtime::Update::Operation { message, .. })) if message == "keep this result")
+        );
+        assert!(
+            matches!(queued.next(), Some(Notice::Engine(runtime::Update::State(s))) if s.elapsed_secs == 19999)
+        );
+        assert!(matches!(
+            queued.next(),
+            Some(Notice::Phase(Phase::Disconnected, _))
+        ));
+        assert_eq!(notices.try_iter().count(), 0);
+    }
 
     #[test]
     fn configurable_reconnect_delay_doubles_and_caps() {

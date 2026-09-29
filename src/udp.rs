@@ -496,14 +496,45 @@ impl Enet {
     ) -> Result<()> {
         // Reliable datagrams include a CRC checksum.
         // The packet header is a checksum, while CONNECT carries its own cookie.
-        let mut packet = Vec::with_capacity(8 + command.len());
-        packet.extend([0; 4]);
-        packet.extend((remote_id | 0x8000).to_be_bytes());
-        packet.extend((started.elapsed().as_millis() as u16).to_be_bytes());
-        packet.extend(command);
-        let checksum = crate::session::rendezvous_checksum(&packet);
-        packet[..4].copy_from_slice(&checksum.to_be_bytes());
-        socket.send(&packet)?;
+        let mut header = [0; 8];
+        header[4..6].copy_from_slice(&(remote_id | 0x8000).to_be_bytes());
+        header[6..8].copy_from_slice(&(started.elapsed().as_millis() as u16).to_be_bytes());
+        let checksum = crate::session::checksum_slices(&header, command);
+        header[..4].copy_from_slice(&checksum.to_be_bytes());
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let mut parts = [
+                libc::iovec {
+                    iov_base: header.as_ptr().cast_mut().cast(),
+                    iov_len: header.len(),
+                },
+                libc::iovec {
+                    iov_base: command.as_ptr().cast_mut().cast(),
+                    iov_len: command.len(),
+                },
+            ];
+            let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+            message.msg_iov = parts.as_mut_ptr();
+            message.msg_iovlen = parts.len();
+            // SAFETY: both slices and the iovec array live through sendmsg,
+            // which reads them and emits one connected UDP datagram.
+            let sent = unsafe { libc::sendmsg(socket.as_raw_fd(), &message, 0) };
+            if sent < 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            ensure!(
+                sent as usize == header.len() + command.len(),
+                "short UDP datagram write"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut packet = Vec::with_capacity(header.len() + command.len());
+            packet.extend_from_slice(&header);
+            packet.extend_from_slice(command);
+            socket.send(&packet)?;
+        }
         Ok(())
     }
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
@@ -543,7 +574,9 @@ impl Enet {
         let start = self.outgoing.wrapping_add(1);
         for (index, part) in data.chunks(fragment_size).enumerate() {
             self.outgoing = self.outgoing.wrapping_add(1);
-            let mut c = vec![if count == 1 { 0x86 } else { 0x88 }, 0];
+            let header_size = if count == 1 { 6 } else { 24 };
+            let mut c = Vec::with_capacity(header_size + part.len());
+            c.extend([if count == 1 { 0x86 } else { 0x88 }, 0]);
             c.extend(self.outgoing.to_be_bytes());
             if count > 1 {
                 c.extend(start.to_be_bytes());
@@ -573,21 +606,65 @@ impl Enet {
             }
             ensure!(Instant::now() < until, "UDP receive timeout");
             self.pump()?;
-            std::thread::sleep(Duration::from_millis(2));
+            if self.ready.is_empty() {
+                self.wait_until(until, None)?;
+            }
         }
     }
     pub fn ready(&mut self, timeout_ms: i32) -> Result<bool> {
+        self.ready_wait(timeout_ms, None)
+    }
+    pub(crate) fn ready_or_wake(
+        &mut self,
+        timeout_ms: i32,
+        wake: &crate::wake::Wake,
+    ) -> Result<bool> {
+        self.ready_wait(timeout_ms, Some(wake))
+    }
+    fn ready_wait(&mut self, timeout_ms: i32, wake: Option<&crate::wake::Wake>) -> Result<bool> {
         let until = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
             self.pump()?;
             if !self.ready.is_empty() {
                 return Ok(true);
             }
-            if Instant::now() >= until {
+            if Instant::now() >= until || wake.is_some_and(|w| w.is_pending()) {
                 return Ok(false);
             }
-            std::thread::sleep(Duration::from_millis(2));
+            self.wait_until(until, wake)?;
         }
+    }
+    fn wait_until(&self, until: Instant, wake: Option<&crate::wake::Wake>) -> Result<()> {
+        let now = Instant::now();
+        let mut next = until.min(self.last_receive + Duration::from_secs(35));
+        if let Some(deadline) = self.deadline {
+            next = next.min(deadline);
+        }
+        for pending in self.pending.values() {
+            next = next.min(pending.last + Duration::from_millis(400));
+        }
+        let mut remaining = next.saturating_duration_since(now);
+        // Public callers only expose an atomic stop flag. Peer workers provide a
+        // local cancellation notification and can sleep until their next timer.
+        if wake.is_none() {
+            remaining = remaining.min(Duration::from_millis(50));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            if let Some(wake) = wake {
+                wake.wait(Some(self.socket.as_raw_fd()), remaining)?;
+            } else {
+                let millis = remaining
+                    .as_nanos()
+                    .div_ceil(1_000_000)
+                    .min(i32::MAX as u128) as i32;
+                crate::session::readable(self.socket.as_raw_fd(), millis)?;
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        std::thread::sleep(remaining.min(Duration::from_millis(2)));
+        Ok(())
     }
     fn pump(&mut self) -> Result<()> {
         ensure!(
@@ -620,14 +697,10 @@ impl Enet {
             self.last_receive.elapsed() < Duration::from_secs(35),
             "UDP liveness timeout"
         );
-        let retry: Vec<_> = self
-            .pending
-            .iter()
-            .filter(|(_, p)| p.last.elapsed() >= Duration::from_millis(400))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in retry {
-            let p = self.pending.get_mut(&key).unwrap();
+        for p in self.pending.values_mut() {
+            if p.last.elapsed() < Duration::from_millis(400) {
+                continue;
+            }
             ensure!(p.tries < 20, "UDP acknowledgement timeout");
             p.tries += 1;
             p.last = Instant::now();
@@ -758,9 +831,9 @@ impl Enet {
                 _ => bail!("unsupported ENET channel/command"),
             };
             if c[0] & 128 != 0 && accepted {
-                let mut ack = vec![1, channel, 0, 0];
-                ack.extend(seq.to_be_bytes());
-                ack.extend(time.to_be_bytes());
+                let mut ack = [1, channel, 0, 0, 0, 0, 0, 0];
+                ack[4..6].copy_from_slice(&seq.to_be_bytes());
+                ack[6..8].copy_from_slice(&time.to_be_bytes());
                 self.transmit(&ack)?;
             }
             self.last_receive = Instant::now();
@@ -973,6 +1046,182 @@ mod tests {
         let crc = crate::session::rendezvous_checksum(&b);
         b[..4].copy_from_slice(&crc.to_be_bytes());
         b
+    }
+    fn received_command(remote: &UdpSocket) -> Vec<u8> {
+        let mut wire = [0; 4096];
+        let len = remote.recv(&mut wire).unwrap();
+        assert_eq!(u16be(&wire, 4), 0x8000);
+        assert_eq!(u32be(&wire, 0), crate::session::enet_checksum(&wire[..len]));
+        wire[8..len].to_vec()
+    }
+    #[test]
+    fn readiness_wait_keeps_retransmission_deadlines_without_incoming_data() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.send(b"needs retry while waiting").unwrap();
+        let command = received_command(&remote);
+        let start = Instant::now();
+        assert!(!e.ready(550).unwrap());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(received_command(&remote), command);
+        assert_eq!(e.pending[&(0, 1)].tries, 2);
+    }
+    #[test]
+    fn waiting_consumes_ack_before_final_retry_and_wakes_on_payload() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.send(b"final attempt").unwrap();
+        received_command(&remote);
+        let pending = e.pending.get_mut(&(0, 1)).unwrap();
+        pending.tries = 20;
+        pending.last = Instant::now() - Duration::from_millis(250);
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            remote.send(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+            remote
+                .send(&packet(&reliable(1, b"immediate incoming data")))
+                .unwrap();
+            remote
+        });
+        assert!(e.ready(1000).unwrap());
+        assert!(e.pending.is_empty());
+        assert_eq!(e.receive(128).unwrap(), b"immediate incoming data");
+        worker.join().unwrap();
+    }
+    #[test]
+    fn idle_wait_is_cancelled_by_flag_or_notification() {
+        for notified in [false, true] {
+            let (mut e, _remote) = pair();
+            let stop = Arc::new(AtomicBool::new(false));
+            e.set_stop(Some(stop.clone()));
+            let wake = Arc::new(crate::wake::Wake::new().unwrap());
+            let waiting = wake.clone();
+            let (entered, started) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                entered.send(()).unwrap();
+                if notified {
+                    e.ready_or_wake(15_000, &waiting)
+                } else {
+                    e.ready(15_000)
+                }
+            });
+            started.recv().unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            let start = Instant::now();
+            stop.store(true, Ordering::Relaxed);
+            if notified {
+                wake.notify();
+            }
+            assert!(worker.join().unwrap().is_err());
+            assert!(start.elapsed() < Duration::from_secs(1));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "local CPU benchmark; no TAP, credentials or external network"]
+    fn benchmark_event_wait_cpu_with_120_idle_peers() {
+        fn cpu_ms() -> f64 {
+            let mut t = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            assert_eq!(
+                unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) },
+                0
+            );
+            t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1_000_000.0
+        }
+        for old in [true, false] {
+            let mut jobs = Vec::new();
+            let mut sockets = Vec::new();
+            for _ in 0..120 {
+                let (mut e, remote) = pair();
+                sockets.push(remote);
+                jobs.push(std::thread::spawn(move || {
+                    let wake = crate::wake::Wake::new().unwrap();
+                    let start = cpu_ms();
+                    let until = Instant::now() + Duration::from_secs(2);
+                    if old {
+                        while Instant::now() < until {
+                            e.pump().unwrap();
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                    } else {
+                        assert!(!e.ready_or_wake(2000, &wake).unwrap());
+                    }
+                    cpu_ms() - start
+                }));
+            }
+            let cpu: f64 = jobs.into_iter().map(|job| job.join().unwrap()).sum();
+            println!("120 idle UDP peers, 2s, busy_poll={old}: thread CPU {cpu:.3}ms");
+            drop(sockets);
+        }
+    }
+    #[test]
+    fn send_and_ack_preserve_wire_bytes_and_fragment_sequence_wraparound() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.send(b"abc").unwrap();
+        assert_eq!(received_command(&remote), b"\x86\0\0\x01\0\x03abc");
+        e.ingest(&packet(&[0x86, 0, 0, 1, 0, 1, b'x'])).unwrap();
+        assert_eq!(received_command(&remote), [1, 0, 0, 0, 0, 1, 0, 42]);
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+
+        e.mtu = 576;
+        e.outgoing = u16::MAX - 1;
+        let data: Vec<_> = (0..600).map(|n| (n % 251) as u8).collect();
+        e.send(&data).unwrap();
+        let first = received_command(&remote);
+        assert_eq!(
+            first[..24],
+            [
+                0x88, 0, 255, 255, 255, 255, 2, 32, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 2, 88, 0, 0, 0,
+                0,
+            ]
+        );
+        assert_eq!(first[24..], data[..544]);
+        let second = received_command(&remote);
+        assert_eq!(
+            second[..24],
+            [0x88, 0, 0, 0, 255, 255, 0, 56, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 2, 88, 0, 0, 2, 32,]
+        );
+        assert_eq!(second[24..], data[544..]);
+    }
+    #[test]
+    fn retries_preserve_command_bytes_key_order_and_retry_deadlines() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.outgoing = u16::MAX - 1;
+        e.send(b"old").unwrap();
+        e.send(b"new").unwrap();
+        let old = received_command(&remote);
+        let new = received_command(&remote);
+        // Only the first command is due; fresh entries must stay untouched.
+        e.pending.get_mut(&(0, u16::MAX)).unwrap().last = Instant::now() - Duration::from_secs(1);
+        e.pump().unwrap();
+        assert_eq!(received_command(&remote), old);
+        assert_eq!(e.pending[&(0, 0)].tries, 1);
+        assert_eq!(e.pending[&(0, u16::MAX)].tries, 2);
+        for p in e.pending.values_mut() {
+            p.last = Instant::now() - Duration::from_secs(1);
+        }
+        e.pump().unwrap();
+        assert_eq!(received_command(&remote), new);
+        assert_eq!(received_command(&remote), old);
+        e.pump().unwrap();
+        remote.set_nonblocking(true).unwrap();
+        assert_eq!(
+            remote.recv(&mut [0; 4096]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
     fn reliable(sequence: u16, data: &[u8]) -> Vec<u8> {
         [

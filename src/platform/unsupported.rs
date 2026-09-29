@@ -15,6 +15,9 @@ impl Tap {
     pub fn ready(&self, _: i32) -> Result<bool> {
         bail!("VPN interface unavailable on this platform")
     }
+    pub(crate) fn poll_fd(&self) -> Option<i32> {
+        None
+    }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         bail!("VPN interface unavailable on this platform")
     }

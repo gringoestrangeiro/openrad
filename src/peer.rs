@@ -63,6 +63,16 @@ impl PeerStream {
             Self::Udp(s) => s.ready(timeout_ms),
         }
     }
+    pub(crate) fn ready_or_wake(
+        &mut self,
+        timeout_ms: i32,
+        wake: &crate::wake::Wake,
+    ) -> Result<bool> {
+        match self {
+            Self::Tcp(s) => s.ready_or_wake(timeout_ms, wake),
+            Self::Udp(s) => s.ready_or_wake(timeout_ms, wake),
+        }
+    }
     pub fn set_stop(&mut self, stop: Option<Arc<AtomicBool>>) {
         match self {
             Self::Tcp(s) => s.set_stop(stop),
@@ -752,8 +762,19 @@ impl PeerChannel {
     }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         let ct = self.stream.receive(65536)?;
-        let pt = self.channel.decrypt(&ct)?;
+        let pt = self.channel.decrypt_owned(ct)?;
         Ok(pt)
+    }
+    /// A reusable buffer avoids envelope/ciphertext allocations for TAP traffic.
+    /// Keep the congestion check before encryption to preserve the CBC chain.
+    pub(crate) fn send_frame(&mut self, frame: &[u8], buffer: &mut Vec<u8>) -> Result<bool> {
+        crate::tunnel::encode_into(frame, buffer)?;
+        if !self.stream.has_room((buffer.len() + 9).div_ceil(16) * 16) {
+            return Ok(false);
+        }
+        self.channel.encrypt_in_place(buffer)?;
+        self.stream.send(buffer)?;
+        Ok(true)
     }
 }
 
@@ -763,8 +784,7 @@ mod tests {
     use crate::udp::Enet;
     use std::net::UdpSocket;
 
-    #[test]
-    fn a_full_udp_window_drops_before_advancing_the_encryption_chain() {
+    fn udp_channels() -> (PeerChannel, Enet, Channel) {
         let a = UdpSocket::bind("[::1]:0").unwrap();
         let b = UdpSocket::bind("[::1]:0").unwrap();
         let aa = a.local_addr().unwrap();
@@ -777,8 +797,8 @@ mod tests {
         outgoing.sustain();
         receiver.sustain();
         let key = [7; 32];
-        let mut decrypt = Channel::new(&key).unwrap();
-        let mut sender = PeerChannel {
+        let decrypt = Channel::new(&key).unwrap();
+        let sender = PeerChannel {
             peer: Peer {
                 rid: 1,
                 name: "Synthetic peer".into(),
@@ -795,6 +815,63 @@ mod tests {
             _coordinator: None,
         };
 
+        (sender, receiver, decrypt)
+    }
+
+    #[test]
+    fn a_thousand_full_size_udp_frames_keep_payload_order_and_cbc_chain_under_load() {
+        let (mut sender, mut receiver, mut decrypt) = udp_channels();
+        let reader = std::thread::spawn(move || {
+            for sequence in 0..1024u64 {
+                let plaintext = decrypt
+                    .decrypt_owned(receiver.receive(65536).unwrap())
+                    .unwrap();
+                let tunnel::Packet::Frames(frames) = tunnel::decode(&plaintext).unwrap() else {
+                    panic!("expected Ethernet");
+                };
+                assert_eq!(frames.len(), 1);
+                assert_eq!(frames[0].len(), tunnel::MAX_FRAME);
+                assert_eq!(frames[0][..8], sequence.to_be_bytes());
+                assert!(frames[0][8..]
+                    .iter()
+                    .all(|byte| *byte == (sequence % 251) as u8));
+            }
+            receiver
+        });
+        let mut scratch = Vec::with_capacity(1536);
+        let storage = scratch.as_ptr();
+        let mut frame = vec![0; tunnel::MAX_FRAME];
+        let until = Instant::now() + Duration::from_secs(15);
+        for sequence in 0..1024u64 {
+            frame[..8].copy_from_slice(&sequence.to_be_bytes());
+            frame[8..].fill((sequence % 251) as u8);
+            while !sender.stream.has_room(1536) {
+                assert!(
+                    Instant::now() < until,
+                    "send window did not recover under load"
+                );
+                sender.stream.ready(1).unwrap();
+            }
+            assert!(sender.send_frame(&frame, &mut scratch).unwrap());
+            assert_eq!(scratch.as_ptr(), storage);
+            sender.stream.ready(0).unwrap();
+        }
+        // Keep ACK/retry processing alive while the receiver drains the final
+        // burst; accepted UDP writes can still be lost in local socket queues.
+        while !reader.is_finished() {
+            assert!(
+                Instant::now() < until,
+                "receiver did not drain the final burst"
+            );
+            sender.stream.ready(20).unwrap();
+        }
+        let _remote = reader.join().unwrap();
+    }
+
+    #[test]
+    fn a_full_udp_window_drops_before_advancing_the_encryption_chain() {
+        let (mut sender, mut receiver, mut decrypt) = udp_channels();
+
         // Deliver every message but leave ACKs unread on the sender, filling
         // its window without losing packets to the local socket buffers.
         for value in 0..=255u8 {
@@ -803,6 +880,9 @@ mod tests {
             assert_eq!(decrypt.decrypt(&ciphertext).unwrap(), [value]);
         }
         assert!(!sender.send(b"dropped").unwrap());
+        let frame = [3; 14];
+        let mut scratch = Vec::with_capacity(1536);
+        assert!(!sender.send_frame(&frame, &mut scratch).unwrap());
         sender.stream.ready(0).unwrap();
         assert!(sender.send(b"resumed").unwrap());
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -816,6 +896,14 @@ mod tests {
         }
         let ciphertext = receiver.receive(65536).unwrap();
         assert_eq!(decrypt.decrypt(&ciphertext).unwrap(), b"resumed");
+        let storage = scratch.as_ptr();
+        assert!(sender.send_frame(&frame, &mut scratch).unwrap());
+        assert_eq!(scratch.as_ptr(), storage);
+        let ciphertext = receiver.receive(65536).unwrap();
+        assert_eq!(
+            decrypt.decrypt_owned(ciphertext).unwrap(),
+            tunnel::encode(&frame).unwrap()
+        );
     }
 }
 

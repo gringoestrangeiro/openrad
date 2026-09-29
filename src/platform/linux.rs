@@ -97,6 +97,9 @@ impl Tap {
     pub fn ready(&self, timeout: i32) -> Result<bool> {
         readable(self.file.as_raw_fd(), timeout)
     }
+    pub(crate) fn poll_fd(&self) -> Option<i32> {
+        Some(self.file.as_raw_fd())
+    }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         if self.read_buffer.is_empty() {
             self.read_buffer.resize(65536, 0);

@@ -14,5 +14,6 @@ pub mod session;
 pub mod tap;
 pub mod tunnel;
 pub mod udp;
+mod wake;
 
 pub use config::{DEFAULT_BOOTSTRAP_HOST, SERVER_MODULUS};

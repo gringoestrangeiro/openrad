@@ -15,6 +15,7 @@ OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openra
 | `tunnel` | Ethernet envelopes, address checks, and forwarding rules |
 | `tap` / `platform` | Linux interface setup and descriptor lifecycle |
 | `runtime` | Long-lived engine shared by the desktop and CLI service, with live snapshots |
+| `wake` | Private, coalesced queue/cancellation notifications for socket and TAP waits |
 | `client` | Bounded diagnostic sessions retained in the library |
 | `output` | Private JSON reports and explicit identity persistence |
 | `src/daemon.rs` | Per-user CLI service, Unix-socket commands, reconnection supervisor, and profile isolation |
@@ -28,6 +29,14 @@ Direct TCP and UDP candidates start as they arrive, within time budgets. UDP end
 Both incoming and outgoing channels perform mutual authentication and the tunnel service handshake. A socket that merely connects does not become an authenticated peer channel. Transport reports separate path, authentication, service-handshake completion, and transferred traffic. Simultaneous incoming/outgoing attempts are resolved deterministically while retaining a working channel.
 
 A path reported as Direct TCP or Direct UDP identifies the selected peer socket. Measuring useful direct connectivity also requires observing traffic on that channel; a login indicator or empty socket is insufficient. Local tests cannot predict direct success rates across live NATs and firewalls.
+
+## Traffic processing and local notifications
+
+The engine validates each outbound Ethernet frame once. A virtual-IP index selects unicast and directed ARP recipients; group traffic visits eligible members in RID order. Workers still check membership, traffic policy, authentication, and the destination MAC before queueing. Immutable frames are shared across bounded peer queues. Each peer reuses its own envelope/encryption buffer, and received encrypted records are decrypted in their owned transport buffer.
+
+On Linux, established workers wait on their socket and a coalesced `eventfd` notification. Queued frames and cancellation wake the same wait; reliable UDP retransmission and keepalive deadlines bound it. The engine similarly waits for TAP readiness and peer/control events. External command and cancellation checks remain bounded by 50 ms. Other supported control-only platforms use a condition-variable notification fallback. These notifications are local and add no network bytes.
+
+Desktop peer lists borrow the current snapshot. Consecutive queued state snapshots are coalesced, preserving phase transitions and operation results as ordered barriers. See [performance](performance.md) for isolated measurements and validation scope.
 
 ## Privileges and persistence
 
@@ -43,4 +52,4 @@ Operational reporting does not log session keys, authentication passwords, hands
 
 ## Current scope
 
-Linux is the implemented TAP platform. Relay is a valid outcome for peers that cannot establish a direct channel. Broad interoperability, difficult NAT combinations, long-running recovery behavior, and other operating-system data planes need further work. Protocol compatibility is not a claim of a completed security audit.
+Linux is the implemented TAP platform. Relay is a valid outcome for peers that cannot establish a direct channel. Difficult NAT combinations, long-running recovery behavior, and other operating-system data planes remain areas for further work. Protocol compatibility is not a claim of a completed security audit.

@@ -9,7 +9,7 @@ use eframe::egui::{self, Align, Color32, FontId, RichText, Stroke, Vec2};
 use openrad::{
     network::MemberAction,
     protocol::PublicNetwork,
-    runtime::{self, Command, PeerState, Snapshot, Update},
+    runtime::{self, Command, PeerState, PeerView, Snapshot, Update},
 };
 use std::{
     collections::VecDeque,
@@ -805,30 +805,13 @@ impl App {
             }
         }
         ui.add_space(10.);
-        let filter = self.peer_filter.to_lowercase();
-        let mut peers: Vec<_> = self
-            .snapshot
-            .peers
-            .values()
-            .filter(|p| {
-                self.selected_network
-                    .as_ref()
-                    .is_none_or(|id| p.peer.network_ids.contains(id))
-                    && (self.settings.show_offline_peers || p.status != PeerState::Offline)
-                    && (p.peer.name.to_lowercase().contains(&filter)
-                        || p.peer.vip.to_string().contains(&filter))
-            })
-            .cloned()
-            .collect();
-        match self.settings.peer_sort {
-            PeerSort::Name => peers.sort_by_key(|p| p.peer.name.to_lowercase()),
-            PeerSort::Status => peers.sort_by(|a, b| {
-                peer_rank(&a.status)
-                    .cmp(&peer_rank(&b.status))
-                    .then_with(|| a.peer.name.to_lowercase().cmp(&b.peer.name.to_lowercase()))
-            }),
-            PeerSort::Address => peers.sort_by_key(|p| (p.peer.vip, p.peer.rid)),
-        }
+        let can_manage = self.connected() && !self.busy;
+        let peers = visible_peers(
+            &self.snapshot,
+            self.selected_network.as_deref(),
+            &self.peer_filter,
+            &self.settings,
+        );
         card().inner_margin(14).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if peers.is_empty() {
@@ -882,18 +865,18 @@ impl App {
                             },
                         );
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if let Some(network) = self.selected_network.clone() {
+                            if let Some(network) = &self.selected_network {
                                 let role = self
                                     .snapshot
                                     .roles
-                                    .get(&network)
+                                    .get(network)
                                     .and_then(|r| r.get(&peer.peer.rid))
                                     .copied();
                                 let own_role = self.identity.as_ref().and_then(|(rid, _)| {
-                                    self.snapshot.roles.get(&network)?.get(rid).copied()
+                                    self.snapshot.roles.get(network)?.get(rid).copied()
                                 });
                                 if own_role == Some(2) {
-                                    ui.add_enabled_ui(self.connected() && !self.busy, |ui| {
+                                    ui.add_enabled_ui(can_manage, |ui| {
                                         ui.menu_button("Manage", |ui| {
                                             let role_action = match role {
                                                 Some(2) => Some(MemberAction::RevokeAdmin),
@@ -911,7 +894,7 @@ impl App {
                                                                 .snapshot
                                                                 .networks
                                                                 .iter()
-                                                                .find(|n| n.network_id == network)
+                                                                .find(|n| &n.network_id == network)
                                                                 .map(|n| n.name.clone())
                                                                 .unwrap_or_default(),
                                                             member: peer.peer.rid,
@@ -1644,6 +1627,33 @@ fn peer_rank(state: &PeerState) -> u8 {
         PeerState::Offline => 6,
     }
 }
+fn visible_peers<'a>(
+    snapshot: &'a Snapshot,
+    network: Option<&str>,
+    filter: &str,
+    settings: &Settings,
+) -> Vec<&'a PeerView> {
+    let filter = filter.to_lowercase();
+    let mut peers: Vec<_> = snapshot
+        .peers
+        .values()
+        .filter(|p| {
+            network.is_none_or(|id| p.peer.network_ids.contains(id))
+                && (settings.show_offline_peers || p.status != PeerState::Offline)
+                && (filter.is_empty()
+                    || p.peer.name.to_lowercase().contains(&filter)
+                    || p.peer.vip.to_string().contains(&filter))
+        })
+        .collect();
+    match settings.peer_sort {
+        PeerSort::Name => peers.sort_by_cached_key(|p| p.peer.name.to_lowercase()),
+        PeerSort::Status => {
+            peers.sort_by_cached_key(|p| (peer_rank(&p.status), p.peer.name.to_lowercase()))
+        }
+        PeerSort::Address => peers.sort_by_key(|p| (p.peer.vip, p.peer.rid)),
+    }
+    peers
+}
 fn bytes(n: u64, decimal: bool) -> String {
     let base = if decimal { 1000 } else { 1024 };
     if n >= base * base {
@@ -1667,4 +1677,63 @@ fn rate(n: f32, decimal: bool) -> String {
 }
 fn elapsed(n: u64) -> String {
     format!("{:02}:{:02}:{:02}", n / 3600, n / 60 % 60, n % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openrad::protocol::Peer;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn peer_view_preserves_unicode_filtering_sort_order_and_membership() {
+        let mut snapshot = Snapshot::default();
+        for (rid, name, status, network, address) in [
+            (1, "Zeta", PeerState::Offline, "a", 3),
+            (2, "áLPHA", PeerState::Connected, "a", 2),
+            (3, "alpha", PeerState::Connected, "b", 1),
+            (4, "ALPHA", PeerState::Connected, "a", 2),
+            (5, "Beta", PeerState::Failed, "a", 4),
+        ] {
+            snapshot.peers.insert(
+                rid,
+                PeerView {
+                    peer: Peer {
+                        rid,
+                        name: name.into(),
+                        vip: Ipv4Addr::new(26, 0, 0, address),
+                        server: None,
+                        state: 1,
+                        network_ids: [network.into()].into_iter().collect(),
+                    },
+                    status,
+                    detail: String::new(),
+                    transport: None,
+                },
+            );
+        }
+        let ids = |network, filter, settings: &Settings| {
+            visible_peers(&snapshot, network, filter, settings)
+                .iter()
+                .map(|p| p.peer.rid)
+                .collect::<Vec<_>>()
+        };
+        let mut settings = Settings {
+            show_offline_peers: true,
+            peer_sort: PeerSort::Name,
+            ..Settings::default()
+        };
+        assert_eq!(ids(None, "", &settings), [3, 4, 5, 1, 2]);
+        settings.peer_sort = PeerSort::Status;
+        assert_eq!(ids(None, "", &settings), [3, 4, 2, 5, 1]);
+        settings.peer_sort = PeerSort::Address;
+        assert_eq!(ids(None, "", &settings), [3, 2, 4, 1, 5]);
+        settings.peer_sort = PeerSort::Name;
+        settings.show_offline_peers = false;
+        assert_eq!(ids(Some("a"), "", &settings), [4, 5, 2]);
+        assert_eq!(ids(Some("a"), "Ál", &settings), [2]);
+        assert_eq!(ids(None, "26.0.0.2", &settings), [4, 2]);
+        assert_eq!(ids(Some("b"), "ALPHA", &settings), [3]);
+        assert!(ids(Some("missing"), "", &settings).is_empty());
+    }
 }

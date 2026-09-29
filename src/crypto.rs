@@ -82,9 +82,21 @@ impl Channel {
         let total = (plain.len() + 9).div_ceil(16) * 16;
         let mut out = Vec::with_capacity(total);
         out.extend_from_slice(plain);
+        self.encrypt_in_place(&mut out)?;
+        Ok(out)
+    }
+    /// Encode the same authenticated CBC record while retaining the allocation.
+    pub fn encrypt_in_place(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let plain_len = out.len();
+        ensure!(
+            !out.is_empty() && plain_len <= 4 * 1024 * 1024,
+            "invalid plaintext length"
+        );
+        let total = (plain_len + 9).div_ceil(16) * 16;
+        out.reserve(total - plain_len);
         out.resize(total - 9, 0xcc);
-        out.extend(auth8(&out));
-        out.push((total - plain.len()) as u8);
+        out.extend(auth8(out));
+        out.push((total - plain_len) as u8);
         for block in out.as_chunks_mut::<16>().0 {
             for (b, v) in block.iter_mut().zip(self.enc_iv) {
                 *b ^= v;
@@ -93,7 +105,7 @@ impl Channel {
                 .encrypt_block(GenericArray::from_mut_slice(block));
             self.enc_iv.copy_from_slice(block);
         }
-        Ok(out)
+        Ok(())
     }
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         ensure!(
@@ -102,7 +114,14 @@ impl Channel {
                 && ciphertext.len() <= 4 * 1024 * 1024,
             "invalid ciphertext length"
         );
-        let mut out = ciphertext.to_vec();
+        self.decrypt_owned(ciphertext.to_vec())
+    }
+    /// Reuse the received ciphertext allocation for authenticated plaintext.
+    pub fn decrypt_owned(&mut self, mut out: Vec<u8>) -> Result<Vec<u8>> {
+        ensure!(
+            !out.is_empty() && out.len().is_multiple_of(16) && out.len() <= 4 * 1024 * 1024,
+            "invalid ciphertext length"
+        );
         for block in out.as_chunks_mut::<16>().0 {
             let next = *block;
             self.cipher

@@ -132,3 +132,115 @@ implementation and the current release implementation. The fan-out comparison
 uses bounded per-peer channels and compares copied-frame queueing with the
 current shared-frame approach. These are isolated local operations, not
 measured VPN throughput or process RSS.
+
+## Reused forwarding validation and desktop peer views
+
+- TAP forwarding validates Ethernet source, IPv4 checksum, IP addresses, and ARP
+  sender once per frame. Each authenticated peer then checks the validated
+  destination metadata. Previously those checks were repeated for every peer.
+  Invalid frames are dropped before scanning peers or allocating a shared frame.
+  Forwarding eligibility, destination rules, queue bounds, and frame bytes stay
+  the same in the persistent engine and the bounded diagnostic client.
+- Reliable UDP commands reserve their complete header and payload size before
+  encoding. ACK commands use an eight-byte stack buffer. Retries traverse the
+  pending entries directly, without collecting keys and looking them up again;
+  they retain key order, the 400 ms retry interval, and the existing retry limit.
+- Desktop peer rows borrow the current snapshot instead of cloning peer names,
+  membership sets, server addresses, and details on every repaint. Name and
+  status sorting compute each lowercase name once, and an empty search avoids
+  lowercase/address conversions. Unicode filtering and stable sort ties remain
+  unchanged.
+
+Ethernet envelopes remain uncompressed. Cryptographic algorithms, authentication,
+wire formats, and queue limits are unchanged. Regression tests
+compare forwarding against the previous rules for valid, mutated, truncated,
+and oversized frames. Local UDP tests check exact command/ACK bytes,
+fragmentation across sequence wraparound, and retry ordering and deadlines.
+The existing fixed cryptographic vectors and workspace tests also pass.
+
+### Local operation measurements
+
+| Operation | Before | After | Speedup |
+| --- | ---: | ---: | ---: |
+| Validate 30,000 IPv4 broadcast frames for 120 peers | 60.3 ms | 4.6 ms | 13.1× |
+| Build 2,000 desktop peer lists, 120 peers, sorted by name | 381.9 ms | 29.1 ms | 13.1× |
+
+These are medians of nine alternating runs on Linux x86-64 with Rust 1.98.1 and
+optimized code. The forwarding comparison compiles the previous and current
+validation rules together, uses 1,514-byte frames with 20-byte IPv4 headers, and
+checks every peer in the same order. The peer-list comparison uses synthetic
+peers with Unicode names, two network memberships, server addresses, and
+details, with an empty filter. It measures list preparation, excluding painting.
+
+For one 120-peer list sorted by name, a separate allocator-instrumented run
+recorded **2,651 → 127 allocation/reallocation calls** and **71,924 → 7,504
+bytes** of peak temporary live heap memory. These figures exclude the existing
+snapshot and the rest of the application. They describe this synthetic
+operation; they do not measure process RSS, total application CPU usage, or
+end-to-end VPN throughput.
+
+## Event waits, destination indexing, and buffer reuse
+
+- Established peer workers on Linux wait for socket readiness, queued frames,
+  cancellation, or the next transport/keepalive deadline. A coalesced `eventfd`
+  notification replaces repeated 2 ms UDP polling and the worker's fixed 20 ms
+  queue check. Reliable UDP still retransmits after 400 ms and keeps the same
+  retry and liveness limits. Callers that only supply an atomic cancellation
+  flag retain a maximum 50 ms wait between cancellation checks.
+- The engine waits for TAP readiness and peer/control notifications, with a
+  maximum 50 ms delay for external commands and cancellation. Connection
+  scheduling is recalculated on state changes or every 50 ms, rather than for
+  every traffic event. The scheduler reuses its candidate vector.
+- A membership-derived destination index narrows unicast IPv4 and directed ARP
+  forwarding to peers with that virtual IP. Duplicate IP bindings retain every
+  eligible peer in RID order. Broadcast, multicast, and gratuitous ARP still
+  visit all eligible peers. Authentication, MAC, membership, and traffic policy
+  checks remain in the forwarding path.
+- Peer workers reuse an Ethernet envelope/encryption buffer. Receive processing
+  decrypts the owned transport buffer directly. CBC chaining, authentication
+  trailers, padding, and encrypted bytes are unchanged. A full UDP send window
+  is checked before encryption, so a dropped frame cannot advance the CBC chain.
+  Each established worker reserves 1,536 bytes for normal full-size frames;
+  this trades a small persistent buffer for fewer transient allocations/copies.
+- Linux UDP sends use a stack header and two stack-backed scatter/gather
+  descriptors to transmit the existing command buffer. They still produce one
+  datagram with the same checksum and bytes,
+  without allocating and copying a concatenated datagram for each transmission.
+  The diagnostic client also shares immutable queued frames between peers.
+- The desktop notice queue replaces consecutive state snapshots with the latest
+  snapshot. Phase transitions and operation results remain ordered barriers.
+  An inactive UI therefore does not accumulate every periodic state update.
+
+### Local operation measurements
+
+| Operation | Before | After | Improvement |
+| --- | ---: | ---: | ---: |
+| Sum of worker CPU time, 120 idle UDP peers over 2 seconds | 391.6 ms | 1.2 ms | 99.7% less CPU time |
+| Select recipients for 30,000 directed ARP frames, 120 peers | 60.8 ms | 1.2 ms | 50.6× faster |
+| Select recipients for 30,000 gratuitous ARP frames, 120 peers | 49.7 ms | 23.2 ms | 2.1× faster |
+
+The idle comparison uses three release-mode runs on Linux x86-64 with Rust
+1.98.1, taking the median for each implementation. It compares the previous
+2 ms pump/sleep loop with the event wait, using synthetic connected UDP sockets
+and per-thread CPU clocks. It excludes authentication, TAP, the engine thread,
+and GUI work. Run the explicit local benchmark with:
+
+```bash
+cargo test -p openrad-client --lib --release --locked \
+  benchmark_event_wait_cpu_with_120_idle_peers -- --ignored --nocapture
+```
+
+Recipient-selection figures are medians of nine alternating optimized runs.
+Both implementations validate the frame once; the baseline then scans the
+worker map, while the new implementation uses the destination index. These
+measurements exclude queueing, encryption, and socket transmission. They cannot
+be read as whole-application CPU, process RSS, or VPN throughput improvements.
+
+Regression coverage includes fixed cryptographic/wire vectors, checksums at
+every header/payload split, forwarding equivalence with duplicate IP bindings,
+full queues, retry deadlines, cancellation, and concurrent notifications.
+A local UDP load test sends 1,024 full-size Ethernet frames through synthetic
+peer channels with a shared test key and checks every payload byte, delivery
+order, CBC chaining, and buffer reuse. A separate UI test queues 20,000 snapshots
+around operation/phase events and verifies that only the two latest snapshots
+and both barriers remain.

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0 — 2026-09-29
+
+### CPU and forwarding
+
+- Replaced repeated idle UDP polling and established peer queue checks with Linux socket/event notifications. Queued frames and cancellation wake workers immediately; keepalive, reliable UDP retransmission, and liveness deadlines remain enforced. The engine also waits for TAP and peer/control events, with external commands and cancellation checked within 50 ms.
+- Validate outbound Ethernet/IP/ARP headers once per frame and index eligible recipients by virtual IP for unicast and directed ARP. Duplicate IP bindings, RID order, authenticated MAC checks, traffic policy, and group forwarding rules are preserved.
+- Recalculate connection scheduling on state changes or every 50 ms, reuse candidate storage, traverse UDP retries directly, reserve command sizes, and encode ACK commands on the stack.
+
+### Memory and desktop
+
+- Reuse each peer's Ethernet envelope/encryption buffer and decrypt received records in their owned transport buffer. Preserve CBC chaining, padding, authentication trailers, and fixed ciphertext vectors. Check the reliable UDP send window before advancing the encryption chain.
+- Send Linux UDP headers and existing command buffers as one datagram with scatter/gather I/O, removing the concatenated packet allocation. Share immutable frames between diagnostic-client peer queues.
+- Borrow desktop peer views and cache sort keys instead of cloning peer data and repeatedly converting names. Coalesce consecutive queued state snapshots while retaining operation results and phase transitions in order.
+
+### Local measurements
+
+- For 120 idle UDP peers over 2 seconds, summed worker CPU time fell from 391.6 ms to 1.2 ms, a 99.7% reduction. These are medians of three release-mode local runs.
+- Selecting recipients for 30,000 directed ARP frames with 120 peers fell from 60.8 ms to 1.2 ms (50.6× faster). Preparing 2,000 name-sorted desktop peer lists fell from 381.9 ms to 29.1 ms (13.1× faster). These are medians of nine alternating optimized runs.
+- One 120-peer desktop list used 127 allocation/reallocation calls instead of 2,651, with peak temporary live heap falling from 71,924 to 7,504 bytes (89.6% less). The existing snapshot is excluded.
+- These figures measure individual operations, not whole-application CPU, process RSS, or VPN throughput. Each established peer retains a 1,536-byte send buffer to reduce transient allocations. See `docs/performance.md` for methodology.
+
+### Validation
+
+- Added forwarding equivalence, buffer reuse, checksum split, exact UDP command/ACK, sequence wraparound, retry, cancellation, concurrent notification, and snapshot coalescing tests. A local UDP load test checks every byte and delivery order across 1,024 full-size Ethernet frames.
+- Passed 147 default workspace tests, formatting, Clippy with warnings denied, and host release builds. The explicit idle CPU benchmark was also run. The privileged TAP test remains opt-in; no new live interoperability session or process-RSS measurement was performed during this release preparation.
+
 ## 0.7.0 — 2026-09-28
 
 ### Headless CLI and service

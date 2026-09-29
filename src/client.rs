@@ -93,7 +93,7 @@ fn worker(
     reports: ReportDirectory,
     data_enabled: bool,
     events: SyncSender<Event>,
-    commands: mpsc::Receiver<Vec<u8>>,
+    commands: mpsc::Receiver<Arc<Vec<u8>>>,
     incoming: Option<Setup>,
     peer_stop: Arc<AtomicBool>,
 ) {
@@ -134,11 +134,12 @@ fn worker(
                 .map(|n| n.to_string_lossy().into_owned()),
         ))?;
         let mut next_keepalive = Instant::now() + Duration::from_secs(15);
+        let mut send_buffer = Vec::with_capacity((10 + tunnel::MAX_FRAME + 9).div_ceil(16) * 16);
         let mut seq = 0;
         let mut last_verified = 0;
         while !context.stop.load(Ordering::Relaxed) && !peer_stop.load(Ordering::Relaxed) {
             for frame in commands.try_iter().take(32) {
-                if channel.send(&tunnel::encode(&frame)?)? {
+                if channel.send_frame(&frame, &mut send_buffer)? {
                     events.send(Event::Sent(rid))?;
                 } else {
                     events.send(Event::Dropped(rid))?;
@@ -343,7 +344,9 @@ pub fn run(
                         if tap.is_some()
                             && options.traffic_peers.contains(&rid)
                             && eligible_rids.contains(&rid)
-                            && senders[&rid].try_send(tunnel::gratuitous_arp(vip)).is_err()
+                            && senders[&rid]
+                                .try_send(Arc::new(tunnel::gratuitous_arp(vip)))
+                                .is_err()
                         {
                             stats.tap_dropped += 1;
                         }
@@ -432,7 +435,9 @@ pub fn run(
                             .get(rid)
                             .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
                         && senders.get(rid).is_some_and(|sender| {
-                            sender.try_send(tunnel::gratuitous_arp(vip)).is_err()
+                            sender
+                                .try_send(Arc::new(tunnel::gratuitous_arp(vip)))
+                                .is_err()
                         })
                     {
                         stats.tap_dropped += 1;
@@ -449,6 +454,11 @@ pub fn run(
                     }
                     let frame = t.receive()?;
                     stats.tap_read += 1;
+                    let Some(route) = tunnel::forwarding(&frame, vip, tunnel::mac(vip)) else {
+                        stats.tap_dropped += 1;
+                        continue;
+                    };
+                    let frame = Arc::new(frame);
                     let mut forwarded = false;
                     for p in options
                         .traffic_peers
@@ -460,8 +470,8 @@ pub fn run(
                                 && workers
                                     .get(&p.rid)
                                     .is_some_and(|w| !w.stop.load(Ordering::Relaxed))
-                                && tunnel::deliver_to(&frame, vip, tunnel::mac(vip), p.vip, *mac)
-                                && senders[&p.rid].try_send(frame.clone()).is_ok()
+                                && route.deliver_to(p.vip, *mac)
+                                && senders[&p.rid].try_send(Arc::clone(&frame)).is_ok()
                             {
                                 forwarded = true;
                             }

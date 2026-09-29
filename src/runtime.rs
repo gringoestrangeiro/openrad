@@ -13,6 +13,7 @@ use crate::{
     session::Session,
     tap::Tap,
     tunnel,
+    wake::Wake,
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -160,6 +161,7 @@ struct TrafficCounters {
 struct ControlOutbox {
     sender: SyncSender<Message>,
     pending: VecDeque<Message>,
+    wake: Option<Arc<Wake>>,
 }
 impl ControlOutbox {
     fn push(&mut self, message: Message) {
@@ -168,7 +170,11 @@ impl ControlOutbox {
     fn flush(&mut self) -> Result<bool> {
         while let Some(message) = self.pending.pop_front() {
             match self.sender.try_send(message) {
-                Ok(()) => {}
+                Ok(()) => {
+                    if let Some(wake) = &self.wake {
+                        wake.notify();
+                    }
+                }
                 Err(mpsc::TrySendError::Full(message)) => {
                     self.pending.push_front(message);
                     return Ok(false);
@@ -193,6 +199,7 @@ struct ControlConfig {
     diagnostics: Diagnostics,
     heartbeat_interval: Duration,
     operation_timeout: Duration,
+    wake: Option<Arc<Wake>>,
 }
 impl Default for ControlConfig {
     fn default() -> Self {
@@ -200,6 +207,7 @@ impl Default for ControlConfig {
             diagnostics: Diagnostics::default(),
             heartbeat_interval: Duration::from_secs(10),
             operation_timeout: Duration::from_secs(20),
+            wake: None,
         }
     }
 }
@@ -240,6 +248,7 @@ fn control_loop(
     let mut outbox = ControlOutbox {
         sender: events.clone(),
         pending: VecDeque::new(),
+        wake: config.wake.clone(),
     };
     let result = (|| -> Result<()> {
         let mut next_id = 100;
@@ -488,6 +497,9 @@ fn control_loop(
                 .map(|e| format!("{e:#}"))
                 .unwrap_or_else(|| "Control connection closed".into()),
         ));
+        if let Some(wake) = &config.wake {
+            wake.notify();
+        }
     }
 }
 
@@ -499,6 +511,82 @@ struct Worker {
     incoming: bool,
     attempt: u64,
     connected_at: Option<Instant>,
+    wake: Arc<Wake>,
+}
+impl Worker {
+    fn queue(&self, frame: Arc<Vec<u8>>) -> bool {
+        if self.sender.try_send(frame).is_err() {
+            return false;
+        }
+        self.wake.notify();
+        true
+    }
+    fn cancel(&self) -> bool {
+        let changed = !self.stop.swap(true, Ordering::Relaxed);
+        self.wake.notify();
+        changed
+    }
+}
+
+#[derive(Default)]
+struct ForwardingTable {
+    all: Vec<(u64, Ipv4Addr)>,
+    by_ip: BTreeMap<Ipv4Addr, Vec<(u64, Ipv4Addr)>>,
+}
+impl ForwardingTable {
+    fn rebuild(&mut self, membership: &Membership, eligible: &BTreeSet<u64>) {
+        self.all.clear();
+        self.by_ip.clear();
+        for (&rid, peer) in &membership.peers {
+            if eligible.contains(&rid) {
+                let binding = (rid, peer.vip);
+                self.all.push(binding);
+                self.by_ip.entry(peer.vip).or_default().push(binding);
+            }
+        }
+    }
+    fn targets(&self, route: &tunnel::Forwarding) -> &[(u64, Ipv4Addr)] {
+        route.target().map_or(&self.all, |ip| {
+            self.by_ip.get(&ip).map_or(&[], Vec::as_slice)
+        })
+    }
+}
+
+fn forward_frame(
+    frame: Vec<u8>,
+    vip: Ipv4Addr,
+    workers: &BTreeMap<u64, Worker>,
+    table: &ForwardingTable,
+    options: &Options,
+) -> u64 {
+    let Some(route) = tunnel::forwarding(&frame, vip, tunnel::mac(vip)) else {
+        return 1;
+    };
+    let frame = Arc::new(frame);
+    let mut forwarded = false;
+    let mut dropped = 0;
+    for &(rid, peer_ip) in table.targets(&route) {
+        if !options.allows(rid) {
+            continue;
+        }
+        let Some(worker) = workers
+            .get(&rid)
+            .filter(|w| !w.stop.load(Ordering::Relaxed))
+        else {
+            continue;
+        };
+        let Some(mac) = worker.mac else {
+            continue;
+        };
+        if route.deliver_to(peer_ip, mac) {
+            if worker.queue(Arc::clone(&frame)) {
+                forwarded = true;
+            } else {
+                dropped += 1;
+            }
+        }
+    }
+    dropped + u64::from(!forwarded)
 }
 struct PeerRetry {
     failures: u32,
@@ -520,7 +608,7 @@ fn announce_address<'a>(
             && eligible.contains(&rid)
             && options.allows(rid)
         {
-            let queued = worker.sender.try_send(Arc::clone(&frame)).is_ok();
+            let queued = worker.queue(Arc::clone(&frame));
             dropped += u64::from(!queued);
             options.diagnostics.event(
                 "peer_address_announcement",
@@ -606,6 +694,7 @@ struct PeerEvents {
     traffic: Arc<TrafficCounters>,
     diagnostics: Diagnostics,
     attempt: u64,
+    wake: Arc<Wake>,
 }
 impl PeerEvents {
     fn packet(&self, rid: u64, frame: &[u8]) {
@@ -614,6 +703,8 @@ impl PeerEvents {
             self.traffic
                 .receive_queue_dropped
                 .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.wake.notify();
         }
     }
 }
@@ -627,6 +718,7 @@ fn peer_loop(
     events: PeerEvents,
     frames: Receiver<Arc<Vec<u8>>>,
     incoming: Option<Setup>,
+    wake: Arc<Wake>,
 ) {
     let rid = peer.rid;
     let started = Instant::now();
@@ -680,9 +772,13 @@ fn peer_loop(
                 channel.transport.path.unwrap(),
                 channel.transport.incoming,
             ))?;
+            events.wake.notify();
             let mut heartbeat = Instant::now();
             let mut sequence = 0u32;
+            let mut send_buffer =
+                Vec::with_capacity((10 + tunnel::MAX_FRAME + 9).div_ceil(16) * 16);
             while !stop.load(Ordering::Relaxed) {
+                wake.clear();
                 if Instant::now() >= heartbeat {
                     sequence = sequence.wrapping_add(1);
                     if channel.send(&tunnel::keepalive(sequence, false))? {
@@ -693,8 +789,10 @@ fn peer_loop(
                     }
                 }
                 let send_started = Instant::now();
+                let mut sent = 0;
                 for frame in frames.try_iter().take(32) {
-                    if channel.send(&tunnel::encode(&frame)?)? {
+                    sent += 1;
+                    if channel.send_frame(&frame, &mut send_buffer)? {
                         events
                             .traffic
                             .sent_bytes
@@ -707,7 +805,17 @@ fn peer_loop(
                         break;
                     }
                 }
-                if !channel.stream.ready(20)? {
+                let busy = sent == 32 || send_started.elapsed() >= Duration::from_millis(20);
+                let wait_ms = if busy {
+                    0
+                } else {
+                    heartbeat
+                        .saturating_duration_since(Instant::now())
+                        .as_nanos()
+                        .div_ceil(1_000_000)
+                        .min(i32::MAX as u128) as i32
+                };
+                if !channel.stream.ready_or_wake(wait_ms, &wake)? {
                     continue;
                 }
                 let data = channel.receive()?;
@@ -747,6 +855,7 @@ fn peer_loop(
         }),
     );
     let _ = events.lifecycle.send(Message::Closed(rid, error));
+    events.wake.notify();
 }
 
 pub fn base_peer_state(peer: &Peer) -> PeerState {
@@ -806,7 +915,7 @@ fn refresh_membership(
             view.detail.clear();
             view.transport = None;
             if let Some(w) = workers.get(&p.rid) {
-                if !w.stop.swap(true, Ordering::Relaxed) {
+                if w.cancel() {
                     diagnostics.event("peer_cancelled", json!({
                         "rid": p.rid, "attempt": w.attempt, "reason": "membership_binding_changed",
                         "old_state": view.peer.state, "new_state": p.state,
@@ -824,7 +933,7 @@ fn refresh_membership(
         .map(|p| p.rid)
         .collect();
     for (rid, w) in workers {
-        if !eligible.contains(rid) && !w.stop.swap(true, Ordering::Relaxed) {
+        if !eligible.contains(rid) && w.cancel() {
             diagnostics.event(
                 "peer_cancelled",
                 json!({"rid": rid, "attempt": w.attempt, "reason": "membership_ineligible"}),
@@ -870,6 +979,7 @@ pub fn run(
         ..Default::default()
     };
     let (tx, rx) = mpsc::sync_channel(512);
+    let wake = Arc::new(Wake::new()?);
     let (packet_tx, packets) = mpsc::sync_channel::<(u64, Vec<u8>)>(512);
     let traffic = Arc::new(TrafficCounters::default());
     let (control_tx, control_rx) = mpsc::sync_channel(8);
@@ -881,6 +991,7 @@ pub fn run(
     );
     let (events, control_stop, members) = (tx.clone(), stop.clone(), membership.clone());
     let control_log = diagnostics.clone();
+    let control_wake = wake.clone();
     let control = thread::spawn(move || {
         control_loop(
             session,
@@ -891,6 +1002,7 @@ pub fn run(
             control_stop,
             ControlConfig {
                 diagnostics: control_log,
+                wake: Some(control_wake),
                 ..Default::default()
             },
         )
@@ -904,6 +1016,7 @@ pub fn run(
     let mut next_report = Instant::now();
     let mut membership_changed = true;
     let mut eligible = BTreeSet::new();
+    let mut forwarding_table = ForwardingTable::default();
     let mut retries: BTreeMap<u64, PeerRetry> = BTreeMap::new();
     let mut retry_pacer = RetryPacer::new(Instant::now());
     let mut attempt = 0u64;
@@ -912,14 +1025,26 @@ pub fn run(
     let mut max_loop_gap_ms = 0u128;
     let mut previous_connected = 0usize;
     let mut previous_peer_drops = 0;
+    let mut schedule_dirty = true;
+    let mut next_schedule = Instant::now();
+    let mut pending = BTreeSet::new();
+    let mut queued = Vec::new();
+    let mut due_retries = 0;
+    let mut retry_policy = retry_pacer.policy(Instant::now(), 0);
     let result = (|| -> Result<()> {
         loop {
+            wake.clear();
             if stop.load(Ordering::Relaxed) {
                 break;
             }
             max_loop_gap_ms = max_loop_gap_ms.max(previous_loop.elapsed().as_millis());
             previous_loop = Instant::now();
-            match commands.try_recv() {
+            let command = commands.try_recv();
+            let command_received = command.is_ok();
+            if command_received {
+                schedule_dirty = true;
+            }
+            match command {
                 Ok(Command::RetryInterface) => {
                     attempted_interface = false;
                 }
@@ -947,6 +1072,7 @@ pub fn run(
             }
             let mut new_channels = BTreeSet::new();
             for message in rx.try_iter().take(512) {
+                schedule_dirty = true;
                 match message {
                     Message::Membership(m) => {
                         membership = m;
@@ -1048,6 +1174,7 @@ pub fn run(
                     &diagnostics,
                 )?;
                 retries.retain(|rid, _| eligible.contains(rid));
+                forwarding_table.rebuild(&membership, &eligible);
                 diagnostics.event("membership_updated", json!({
                     "peers": snapshot.peers.len(), "eligible": eligible.len(), "networks": snapshot.networks.len(),
                     "online_without_server": snapshot.peers.values().filter(|p| p.status == PeerState::Unavailable).count(),
@@ -1079,113 +1206,120 @@ pub fn run(
                     snapshot.traffic.dropped += 1;
                 }
             }
-            incoming.expire();
-            let pending = incoming.pending_rids();
-            for rid in &pending {
-                if let Some(w) = workers.get(rid) {
-                    if w.mac.is_some() {
-                        incoming.reject(*rid);
-                    } else if !w.incoming
-                        && identity.rid > *rid
-                        && !w.stop.swap(true, Ordering::Relaxed)
-                    {
-                        diagnostics.event("peer_cancelled", json!({"rid": rid, "attempt": w.attempt, "reason": "incoming_collision"}));
+            if schedule_dirty || Instant::now() >= next_schedule {
+                schedule_dirty = false;
+                next_schedule = Instant::now() + Duration::from_millis(50);
+                incoming.expire();
+                pending = incoming.pending_rids();
+                for rid in &pending {
+                    if let Some(w) = workers.get(rid) {
+                        if w.mac.is_some() {
+                            incoming.reject(*rid);
+                        } else if !w.incoming && identity.rid > *rid && w.cancel() {
+                            diagnostics.event("peer_cancelled", json!({"rid": rid, "attempt": w.attempt, "reason": "incoming_collision"}));
+                        }
                     }
                 }
-            }
-            // Established channels do not occupy handshake slots. Reserve room
-            // for incoming offers while slow outgoing attempts are in flight.
-            let mut budget = HandshakeBudget::new(
-                workers
-                    .values()
-                    .filter(|w| w.mac.is_none())
-                    .map(|w| w.incoming),
-            );
-            let now = Instant::now();
-            let mut retrying = workers
-                .iter()
-                .filter(|(rid, w)| w.mac.is_none() && !w.incoming && retries.contains_key(rid))
-                .count();
-            let mut queued: Vec<_> = snapshot
-                .peers
-                .values()
-                .filter(|p| {
-                    (pending.contains(&p.peer.rid)
-                        || retries
-                            .get(&p.peer.rid)
-                            .map_or(p.status == PeerState::Online, |retry| now >= retry.at))
-                        && eligible.contains(&p.peer.rid)
-                        && !workers.contains_key(&p.peer.rid)
-                })
-                .map(|p| p.peer.rid)
-                .collect();
-            let due_retries = queued
-                .iter()
-                .filter(|rid| !pending.contains(rid) && retries.contains_key(rid))
-                .count();
-            let retry_policy = retry_pacer.policy(now, due_retries + retrying);
-            let mut remaining_retries = due_retries;
-            queued.sort_by_key(|rid| {
-                let retry = retries.get(rid);
-                peer_priority(
-                    pending.contains(rid),
-                    retry.is_some(),
-                    retry.is_some_and(|r| r.previously_connected),
-                    options.allows(*rid),
-                    retry.map_or(0, |retry| retry.failures),
-                    *rid,
-                )
-            });
-            for rid in queued {
-                let is_incoming = pending.contains(&rid);
-                let is_retry = !is_incoming && retries.contains_key(&rid);
-                if is_retry && !retry_pacer.ready(now, retrying, retry_policy) {
-                    continue;
-                }
-                let reserve = if is_retry || is_incoming {
-                    0
-                } else {
-                    remaining_retries.min(retry_policy.active_limit.saturating_sub(retrying))
-                };
-                if !budget.try_start_with_reserve(is_incoming, reserve) {
-                    continue;
-                }
-                if is_retry {
-                    retry_pacer.started(now, retry_policy);
-                    retrying += 1;
-                    remaining_retries -= 1;
-                }
-                let peer = snapshot.peers[&rid].peer.clone();
-                let setup = incoming.take(rid, Policy::All);
-                let is_incoming = setup.is_some();
-                snapshot.peers.get_mut(&rid).unwrap().status = PeerState::Connecting;
-                let (sender, frames) = mpsc::sync_channel(64);
-                let peer_stop = Arc::new(AtomicBool::new(false));
-                attempt += 1;
-                diagnostics.event("peer_connecting", json!({"rid": rid, "attempt": attempt, "incoming": is_incoming, "server": peer.server}));
-                let (id, key, cancel) = (identity.clone(), modulus.clone(), peer_stop.clone());
-                let events = PeerEvents {
-                    lifecycle: tx.clone(),
-                    packets: packet_tx.clone(),
-                    traffic: traffic.clone(),
-                    diagnostics: diagnostics.clone(),
-                    attempt,
-                };
-                let join = thread::spawn(move || {
-                    peer_loop(id, key, vip, peer, cancel, events, frames, setup)
-                });
-                workers.insert(
-                    rid,
-                    Worker {
-                        stop: peer_stop,
-                        sender,
-                        join,
-                        mac: None,
-                        incoming: is_incoming,
-                        attempt,
-                        connected_at: None,
-                    },
+                // Established channels do not occupy handshake slots. Reserve room
+                // for incoming offers while slow outgoing attempts are in flight.
+                let mut budget = HandshakeBudget::new(
+                    workers
+                        .values()
+                        .filter(|w| w.mac.is_none())
+                        .map(|w| w.incoming),
                 );
+                let now = Instant::now();
+                let mut retrying = workers
+                    .iter()
+                    .filter(|(rid, w)| w.mac.is_none() && !w.incoming && retries.contains_key(rid))
+                    .count();
+                queued.clear();
+                queued.extend(
+                    snapshot
+                        .peers
+                        .values()
+                        .filter(|p| {
+                            (pending.contains(&p.peer.rid)
+                                || retries
+                                    .get(&p.peer.rid)
+                                    .map_or(p.status == PeerState::Online, |retry| now >= retry.at))
+                                && eligible.contains(&p.peer.rid)
+                                && !workers.contains_key(&p.peer.rid)
+                        })
+                        .map(|p| p.peer.rid),
+                );
+                due_retries = queued
+                    .iter()
+                    .filter(|rid| !pending.contains(rid) && retries.contains_key(rid))
+                    .count();
+                retry_policy = retry_pacer.policy(now, due_retries + retrying);
+                let mut remaining_retries = due_retries;
+                queued.sort_by_key(|rid| {
+                    let retry = retries.get(rid);
+                    peer_priority(
+                        pending.contains(rid),
+                        retry.is_some(),
+                        retry.is_some_and(|r| r.previously_connected),
+                        options.allows(*rid),
+                        retry.map_or(0, |retry| retry.failures),
+                        *rid,
+                    )
+                });
+                for rid in queued.iter().copied() {
+                    let is_incoming = pending.contains(&rid);
+                    let is_retry = !is_incoming && retries.contains_key(&rid);
+                    if is_retry && !retry_pacer.ready(now, retrying, retry_policy) {
+                        continue;
+                    }
+                    let reserve = if is_retry || is_incoming {
+                        0
+                    } else {
+                        remaining_retries.min(retry_policy.active_limit.saturating_sub(retrying))
+                    };
+                    if !budget.try_start_with_reserve(is_incoming, reserve) {
+                        continue;
+                    }
+                    if is_retry {
+                        retry_pacer.started(now, retry_policy);
+                        retrying += 1;
+                        remaining_retries -= 1;
+                    }
+                    let peer = snapshot.peers[&rid].peer.clone();
+                    let setup = incoming.take(rid, Policy::All);
+                    let is_incoming = setup.is_some();
+                    snapshot.peers.get_mut(&rid).unwrap().status = PeerState::Connecting;
+                    let (sender, frames) = mpsc::sync_channel(64);
+                    let peer_stop = Arc::new(AtomicBool::new(false));
+                    let peer_wake = Arc::new(Wake::new()?);
+                    attempt += 1;
+                    diagnostics.event("peer_connecting", json!({"rid": rid, "attempt": attempt, "incoming": is_incoming, "server": peer.server}));
+                    let (id, key, cancel) = (identity.clone(), modulus.clone(), peer_stop.clone());
+                    let events = PeerEvents {
+                        lifecycle: tx.clone(),
+                        packets: packet_tx.clone(),
+                        traffic: traffic.clone(),
+                        diagnostics: diagnostics.clone(),
+                        attempt,
+                        wake: wake.clone(),
+                    };
+                    let notify = peer_wake.clone();
+                    let join = thread::spawn(move || {
+                        peer_loop(id, key, vip, peer, cancel, events, frames, setup, notify)
+                    });
+                    workers.insert(
+                        rid,
+                        Worker {
+                            stop: peer_stop,
+                            sender,
+                            join,
+                            mac: None,
+                            incoming: is_incoming,
+                            attempt,
+                            connected_at: None,
+                            wake: peer_wake,
+                        },
+                    );
+                }
             }
             if !attempted_interface && !options.disable_interface {
                 // Keep the /8 interface stable across membership changes. Dynamic
@@ -1247,32 +1381,8 @@ pub fn run(
                             }
                             Err(error) => return Err(error),
                         };
-                        let frame = Arc::new(frame);
-                        let mut forwarded = false;
-                        for (rid, w) in &workers {
-                            if !options.allows(*rid)
-                                || !eligible.contains(rid)
-                                || w.stop.load(Ordering::Relaxed)
-                            {
-                                continue;
-                            }
-                            let Some(mac) = w.mac else {
-                                continue;
-                            };
-                            let Some(p) = membership.peers.get(rid) else {
-                                continue;
-                            };
-                            if tunnel::deliver_to(&frame, vip, tunnel::mac(vip), p.vip, mac) {
-                                if w.sender.try_send(Arc::clone(&frame)).is_ok() {
-                                    forwarded = true;
-                                } else {
-                                    snapshot.traffic.dropped += 1;
-                                }
-                            }
-                        }
-                        if !forwarded {
-                            snapshot.traffic.dropped += 1;
-                        }
+                        snapshot.traffic.dropped +=
+                            forward_frame(frame, vip, &workers, &forwarding_table, &options);
                     }
                     Ok(())
                 })();
@@ -1325,7 +1435,15 @@ pub fn run(
                 report(Update::State(snapshot.clone()));
                 next_report = Instant::now() + Duration::from_millis(250);
             }
-            thread::sleep(Duration::from_millis(5));
+            let wait = if command_received {
+                Duration::ZERO
+            } else {
+                next_report
+                    .min(next_schedule)
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(50))
+            };
+            wake.wait(tap.as_ref().and_then(Tap::poll_fd), wait)?;
         }
         Ok(())
     })();
@@ -1339,7 +1457,7 @@ pub fn run(
     drop(tap);
     stop.store(true, Ordering::Relaxed);
     for worker in workers.values() {
-        worker.stop.store(true, Ordering::Relaxed);
+        worker.cancel();
     }
     drop(rx); // Unblock producers before joining, including full event queues.
     drop(control_tx);
@@ -1446,6 +1564,7 @@ mod control_tests {
                         diagnostics,
                         heartbeat_interval: Duration::from_millis(25),
                         operation_timeout: Duration::from_millis(300),
+                        wake: None,
                     },
                 )
             });
@@ -1643,6 +1762,7 @@ mod control_tests {
             traffic: Arc::default(),
             diagnostics: Diagnostics::default(),
             attempt: 1,
+            wake: Arc::new(Wake::new().unwrap()),
         };
         for rid in 1..=150 {
             events.packet(rid, &[1, 2, 3]);
@@ -1735,6 +1855,7 @@ mod membership_tests {
             incoming: false,
             attempt: 1,
             connected_at: Some(Instant::now()),
+            wake: Arc::new(Wake::new().unwrap()),
         }
     }
 
@@ -1764,6 +1885,112 @@ mod membership_tests {
         assert!(retries[&2].previously_connected);
         assert!(schedule_peer_retry(&mut retries, 2, None, false, false, now).is_none());
         assert!(retries.is_empty());
+    }
+
+    #[test]
+    fn indexed_forwarding_preserves_duplicate_addresses_filters_bytes_and_queue_drops() {
+        let source = Ipv4Addr::new(26, 0, 0, 1);
+        let mut members = membership();
+        let template = members.peers[&2].clone();
+        for rid in 2..=32 {
+            let mut peer = template.clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, if rid == 3 { 2 } else { rid as u8 });
+            members.peers.insert(rid, peer);
+        }
+        let eligible: BTreeSet<_> = (2..=32).filter(|rid| *rid != 6).collect();
+        let options = Options {
+            traffic_peers: Some((2..=32).filter(|rid| *rid != 7).collect()),
+            ..Default::default()
+        };
+        let make_workers = || {
+            let mut workers = BTreeMap::new();
+            let mut receivers = BTreeMap::new();
+            for (&rid, peer) in &members.peers {
+                let (sender, receiver) = mpsc::sync_channel(1);
+                let mut w = worker();
+                w.sender = sender;
+                w.mac = (rid != 4).then(|| tunnel::mac(peer.vip));
+                if rid == 5 {
+                    w.cancel();
+                }
+                if rid == 8 {
+                    w.sender.send(Arc::new(vec![99])).unwrap();
+                }
+                workers.insert(rid, w);
+                receivers.insert(rid, receiver);
+            }
+            (workers, receivers)
+        };
+        let (before, old_receivers) = make_workers();
+        let (after, new_receivers) = make_workers();
+        let mut table = ForwardingTable::default();
+        table.rebuild(&members, &eligible);
+        let mut directed = tunnel::gratuitous_arp(source);
+        directed[21] = 1;
+        directed[38..42].copy_from_slice(&members.peers[&2].vip.octets());
+        let mut wrong_source = directed.clone();
+        wrong_source[6] ^= 1;
+        let frames = [
+            tunnel::gratuitous_arp(source),
+            directed,
+            wrong_source,
+            vec![0; tunnel::MAX_FRAME + 1],
+        ];
+        for frame in frames {
+            let mut dropped = 0;
+            let mut forwarded = false;
+            let shared = Arc::new(frame.clone());
+            for (&rid, w) in &before {
+                if !eligible.contains(&rid)
+                    || !options.allows(rid)
+                    || w.stop.load(Ordering::Relaxed)
+                {
+                    continue;
+                }
+                if w.mac.is_some_and(|mac| {
+                    tunnel::deliver_to(
+                        &frame,
+                        source,
+                        tunnel::mac(source),
+                        members.peers[&rid].vip,
+                        mac,
+                    )
+                }) {
+                    if w.sender.try_send(shared.clone()).is_ok() {
+                        forwarded = true;
+                    } else {
+                        dropped += 1;
+                    }
+                }
+            }
+            dropped += u64::from(!forwarded);
+            assert_eq!(
+                forward_frame(frame, source, &after, &table, &options),
+                dropped
+            );
+            for rid in members.peers.keys() {
+                let old: Vec<_> = old_receivers[rid].try_iter().collect();
+                let new: Vec<_> = new_receivers[rid].try_iter().collect();
+                assert_eq!(old, new, "different queue contents for {rid}");
+            }
+        }
+        members.peers.remove(&2);
+        table.rebuild(&members, &eligible);
+        let route = tunnel::forwarding(
+            &{
+                let mut frame = tunnel::gratuitous_arp(source);
+                frame[38..42].copy_from_slice(&Ipv4Addr::new(26, 0, 0, 2).octets());
+                frame
+            },
+            source,
+            tunnel::mac(source),
+        )
+        .unwrap();
+        assert_eq!(table.targets(&route), [(3, Ipv4Addr::new(26, 0, 0, 2))]);
+        for w in before.into_values().chain(after.into_values()) {
+            w.join.join().unwrap();
+        }
     }
 
     #[test]

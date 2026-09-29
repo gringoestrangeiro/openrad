@@ -50,6 +50,51 @@ fn channel_rejects_tamper_and_consumes_ciphertext_iv() {
     assert!(tx.encrypt(&[]).is_err());
 }
 #[test]
+fn reused_channel_buffers_match_independent_vectors_and_rekey_without_reallocation() {
+    let f = fixture();
+    let key: Vec<u8> = (0..32).collect();
+    let (mut tx, mut rx) = (Channel::new(&key).unwrap(), Channel::new(&key).unwrap());
+    let mut buffer = Vec::with_capacity(4 * 1024 * 1024 + 32);
+    let allocation = buffer.as_ptr();
+    for r in f["channel"].as_array().unwrap() {
+        let pt = bytes(&r["pt"]);
+        let ct = bytes(&r["ct"]);
+        buffer.clear();
+        buffer.extend_from_slice(&pt);
+        tx.encrypt_in_place(&mut buffer).unwrap();
+        assert_eq!(buffer, ct);
+        assert_eq!(buffer.as_ptr(), allocation);
+        let received = ct;
+        let storage = received.as_ptr();
+        let decrypted = rx.decrypt_owned(received).unwrap();
+        assert_eq!(decrypted, pt);
+        assert_eq!(decrypted.as_ptr(), storage);
+    }
+    let key: Vec<u8> = (32..64).collect();
+    tx.rekey(&key).unwrap();
+    rx.rekey(&key).unwrap();
+    buffer.clear();
+    buffer.extend(bytes(&f["rekey"]["pt"]));
+    tx.encrypt_in_place(&mut buffer).unwrap();
+    assert_eq!(buffer, bytes(&f["rekey"]["ct"]));
+    assert_eq!(rx.decrypt_owned(buffer).unwrap(), bytes(&f["rekey"]["pt"]));
+}
+#[test]
+fn reused_channel_buffers_keep_tamper_rejection_and_ciphertext_iv_consumption() {
+    let (mut tx, mut rx) = (
+        Channel::new(&[0; 32]).unwrap(),
+        Channel::new(&[0; 32]).unwrap(),
+    );
+    let mut bad = tx.encrypt(b"authenticated message long enough").unwrap();
+    bad[0] ^= 1;
+    assert!(rx.decrypt_owned(bad).is_err());
+    let mut next = b"next".to_vec();
+    tx.encrypt_in_place(&mut next).unwrap();
+    assert_eq!(rx.decrypt_owned(next).unwrap(), b"next");
+    assert!(rx.decrypt_owned(vec![0; 15]).is_err());
+    assert!(tx.encrypt_in_place(&mut Vec::new()).is_err());
+}
+#[test]
 fn sh_matches_fixed_responder_vectors_and_rejects_wrong_m2() {
     let f = fixture();
     let s = &f["sh"];

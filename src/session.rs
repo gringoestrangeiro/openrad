@@ -218,6 +218,21 @@ impl Framed {
         #[cfg(not(target_os = "linux"))]
         self.ready_peek(timeout_ms)
     }
+    pub(crate) fn ready_or_wake(&self, timeout_ms: i32, wake: &crate::wake::Wake) -> Result<bool> {
+        self.check_cancelled()?;
+        #[cfg(target_os = "linux")]
+        let ready = {
+            use std::os::fd::AsRawFd;
+            wake.wait(
+                Some(self.socket.as_raw_fd()),
+                Duration::from_millis(timeout_ms.max(0) as u64),
+            )?
+        };
+        #[cfg(not(target_os = "linux"))]
+        let ready = self.ready(timeout_ms.min(50))?;
+        self.check_cancelled()?;
+        Ok(ready)
+    }
     #[cfg(not(target_os = "linux"))]
     fn ready_peek(&self, timeout_ms: i32) -> Result<bool> {
         // peek preserves framing; this also reports EOF as readable.
@@ -389,6 +404,9 @@ pub(crate) fn enet_checksum(data: &[u8]) -> u32 {
     checksum_bytes([0; 4].into_iter().chain(data[4..].iter().copied()))
 }
 
+pub(crate) fn checksum_slices(first: &[u8], second: &[u8]) -> u32 {
+    checksum_bytes(first.iter().chain(second).copied())
+}
 fn checksum_bytes(bytes: impl IntoIterator<Item = u8>) -> u32 {
     let mut crc = u32::MAX;
     for byte in bytes {
@@ -444,6 +462,12 @@ mod checksum_tests {
         for len in [0, 1, 4, 8, 15, 16, 64, 1400, 4096] {
             let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
             assert_eq!(rendezvous_checksum(&data), bitwise_checksum(&data));
+            for split in 0..=len {
+                assert_eq!(
+                    checksum_slices(&data[..split], &data[split..]),
+                    bitwise_checksum(&data)
+                );
+            }
             if len >= 4 {
                 let mut zeroed = data.clone();
                 zeroed[..4].fill(0);
@@ -587,7 +611,7 @@ impl Session {
     }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
         let ct = self.stream.receive(4 * 1024 * 1024)?;
-        let pt = self.channel.decrypt(&ct)?;
+        let pt = self.channel.decrypt_owned(ct)?;
         Ok(pt)
     }
     pub fn attach(
