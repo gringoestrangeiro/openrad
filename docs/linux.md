@@ -25,9 +25,11 @@ sudo -v
 
 The application invokes `sudo -n` for its short-lived helper. A valid sudo credential is needed when connecting. On systems where sudo credentials are tied to a terminal or parent process, `sudo -v` may not be sufficient for a graphical launch; arrange a narrowly scoped, administrator-managed helper authorization. Do not run the whole GUI as root or grant blanket passwordless access to a user-writable executable.
 
+The headless CLI uses the same helper from its persistent per-user service. Run `sudo -v` before `openrad start`. If `openrad status` reports an interface error, refresh sudo authorization and run `openrad retry-interface`. For a control-only session, use `openrad start --no-tap`; that mode cannot forward application traffic.
+
 The helper currently expects the standard Linux locations `/usr/bin/sudo` and `/usr/bin/ip`. These are operating-system paths, not per-user installation paths. Distributions with a different layout must adapt `src/platform/linux.rs`. Both binaries can otherwise be built or installed in any directory.
 
-The interface is named `radminvpn0`, has MTU 1500 like the native Radmin adapter, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. Desktop mode adds a connected `/8` LAN and broadcast/multicast routes; CLI test mode uses explicit peer host routes. Other applications using overlapping routes may affect traffic selection.
+The interface is named `radminvpn0`, has MTU 1500 like the native Radmin adapter, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
 
 ## Troubleshooting
 

@@ -6,9 +6,11 @@ offers when outgoing attempts are stalled. Established channels do not consume
 handshake slots, and cancelled workers retain their slots until they exit.
 
 Both the desktop application and CLI use these limits. Incoming offers have
-priority, followed by peers selected for application traffic. Within each
-priority, peers with fewer failures go first, so repeated failures cannot keep
-new peers behind them. Incoming offers have a bounded 256-entry mailbox, and
+priority, followed by peers whose channels were connected before, other
+retries, and new peers. Within each group, peers selected for application
+traffic and then peers with fewer failures go first. Retry concurrency stays
+below the outgoing limit so new peers retain setup capacity. Incoming offers
+have a bounded 256-entry mailbox, and
 the advertisement queue accommodates a burst from all 80 setup workers.
 
 ## Initial peer connection
@@ -32,14 +34,19 @@ the advertisement queue accommodates a burst from all 80 setup workers.
 - Linux TCP connects use one nonblocking connection attempt, with cancellation
   checks at most 50 ms apart. Losing or superseded attempts no longer occupy
   setup slots until the blocking connect timeout expires.
-- Desktop recovery retries include `Refused` peers. The first retry waits 7.5–22.5
-  seconds, the second 15–45 seconds, and later retries 30–90 seconds, with
-  per-peer jitter. Recovery also waits until initial handshakes and their queue
-  have been idle for five seconds. At most four outgoing retries run at once,
-  with 2–4 seconds between starts, even if many timers expire together.
-  The Retry button uses this same queue without resetting failure history or
-  established connections. Incoming offers bypass the retry timer and pacing
-  because their authenticated rendezvous windows expire.
+- Desktop recovery retries include `Refused` peers. The first retry waits 1.5–4.5
+  seconds, the second 3–9, the third 6–18, and later retries 12–36 seconds, with
+  per-peer jitter. Recovery starts alongside initial handshakes; peers that
+  were previously connected go first. The scheduler allows 16, 32, or 48
+  outgoing retries in progress as recovery demand grows, with 200, 100, or
+  50 milliseconds between starts. If at least three quarters of eight or more
+  attempts in the last 30 seconds fail, it limits retries to at most 32 and
+  spaces starts by at least 150 milliseconds. The overall 64 outgoing / 80
+  total handshake limits still apply. Due retries reserve outgoing slots, while
+  other slots remain available for new peers and incoming offers. The Retry
+  button uses this same queue without resetting failure
+  history or established connections. Incoming offers bypass the retry timer
+  and pacing because their authenticated rendezvous windows expire.
 
 For 100 outgoing peers, the capacity check now needs two batches (`64 + 36`)
 instead of five (`24 + 24 + 24 + 24 + 4`). This is a scheduling comparison, not
@@ -87,3 +94,41 @@ connection time also depends on peer responses, NAT, and relay availability.
 Cryptography, authentication sequences and UDP wire formats are unchanged.
 Scheduling and transport timing changes are described above. Vectored TCP writes
 preserve the same framing and payload byte stream.
+
+## Packet-path memory and CPU
+
+- A TAP read now reuses one 64 KiB read buffer and returns a vector sized to the
+  actual frame. Previously every read allocated and zeroed a 64 KiB vector,
+  including reads of ordinary Ethernet frames.
+- Outgoing peer queues share one reference-counted frame buffer when a TAP frame
+  or address announcement reaches multiple peers. For a 1,514-byte frame sent
+  to 120 peers, the frame payload is held once instead of 120 times; queue
+  entries hold references to it. Each queue still has its existing 64-entry
+  bound and makes its own send/drop decision.
+- UDP receive checksum validation reads the datagram in place instead of
+  copying it to zero its first four bytes. Duplicate reliable commands and
+  fragments copy their payloads only when first admitted to the reorder buffer.
+  Retransmission reads the saved command rather than cloning it.
+- The shared checksum routine uses a 256-entry static lookup table instead of
+  eight bit steps per byte. Encryption and TLV output vectors reserve their
+  final size before writing data.
+
+These changes preserve Ethernet payloads, encrypted records, ENET datagrams,
+and the order of forwarding decisions. Fixed wire vectors, independent
+checksum equivalence tests, local socket tests, and the workspace test suite
+cover the affected paths. The memory example is a payload-size calculation,
+not a measured process RSS reduction.
+
+### 0.7.0 local microbenchmarks
+
+| Operation | Before | After | Speedup |
+| --- | ---: | ---: | ---: |
+| 30,000 checksums of 1,400-byte packets | 201.4 ms | 74.6 ms | 2.7× |
+| Queue and drain 2,000 1,514-byte frames across 120 peers | 45.0 ms | 6.2 ms | 7.3× |
+
+The medians come from nine alternating runs on Linux x86-64 with optimized
+code and host Rust 1.98.1. The checksum comparison uses the prior bitwise
+implementation and the current release implementation. The fan-out comparison
+uses bounded per-peer channels and compares copied-frame queueing with the
+current shared-frame approach. These are isolated local operations, not
+measured VPN throughput or process RSS.

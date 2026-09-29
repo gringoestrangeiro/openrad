@@ -14,9 +14,10 @@ OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openra
 | `udp` | UDP endpoint discovery, rendezvous, and reliable datagrams |
 | `tunnel` | Ethernet envelopes, address checks, and forwarding rules |
 | `tap` / `platform` | Linux interface setup and descriptor lifecycle |
-| `runtime` | Long-lived desktop engine and snapshots |
-| `client` | Bounded headless sessions and operational results |
-| `output` | Private JSON reports and explicit CLI identity persistence |
+| `runtime` | Long-lived engine shared by the desktop and CLI service, with live snapshots |
+| `client` | Bounded diagnostic sessions retained in the library |
+| `output` | Private JSON reports and explicit identity persistence |
+| `src/daemon.rs` | Per-user CLI service, Unix-socket commands, reconnection supervisor, and profile isolation |
 
 ## Peer transport lifecycle
 
@@ -30,7 +31,7 @@ A path reported as Direct TCP or Direct UDP identifies the selected peer socket.
 
 ## Privileges and persistence
 
-The CLI and desktop use the same `NetworkOperation` state machine for creation, joining, leaving, deleting, kicking, and changing admin roles. Private joins verify the network's SH server proof before accepting membership. Administration acknowledgements must match the request, action, context, network, and member. Role and removal notifications update the desktop snapshot and forwarding membership. A kick only removes the affected network relationship; peers sharing another approved network remain eligible. Pending applicants are not eligible for traffic through that network.
+The CLI and desktop use the same `NetworkOperation` state machine for creation, joining, leaving, deleting, kicking, and changing admin roles. The CLI service tags each operation so its result reaches the requesting command. Private joins verify the network's SH server proof before accepting membership. Administration acknowledgements must match the request, action, context, network, and member. Role and removal notifications update both clients' snapshots and forwarding membership. A kick only removes the affected network relationship; peers sharing another approved network remain eligible. Pending applicants are not eligible for traffic through that network.
 
 Membership removal and role/status events may carry a mandatory member RID and
 an optional source RID with the same tag. These events validate both values and
@@ -42,7 +43,7 @@ Network passwords use masked desktop fields or a CLI password file, are redacted
 
 The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
 
-The desktop stores identities in the platform credential store and settings in its profile directory. Provisioning and reset logic are isolated from the GUI; tests use an in-memory vault. The CLI intentionally exports a provisioned identity into its private output directory for subsequent headless use.
+The desktop stores identities in the platform credential store and settings in its profile directory. Provisioning and reset logic are isolated from the GUI; tests use an in-memory vault. The CLI saves a provisioned or imported identity under its private data directory. A per-user Unix socket accepts bounded local commands; a lock prevents a second service for the same profile. The service reuses the desktop engine to keep peer channels and TAP alive between commands and reconnects to the server after failures.
 
 Operational reporting does not log session keys, authentication passwords, handshake secrets, or Ethernet payloads. Synthetic fixtures exercise protocol and cryptographic behavior without real accounts or live recordings.
 

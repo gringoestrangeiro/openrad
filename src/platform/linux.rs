@@ -22,6 +22,7 @@ const TUNSETOWNER: libc::c_ulong = 0x400454cc;
 
 pub struct Tap {
     file: File,
+    read_buffer: Vec<u8>,
 }
 impl Tap {
     pub fn create(vip: Ipv4Addr, peers: &[Ipv4Addr]) -> Result<Self> {
@@ -34,8 +35,8 @@ impl Tap {
     ) -> Result<Self> {
         Self::create_configured(vip, peers, helper, false)
     }
-    /// Normal desktop LAN: a connected /8 and explicit IPv4 group routes.
-    /// The bounded CLI retains its separate controlled-peer /32 route mode.
+    /// Persistent desktop and CLI LAN: a connected /8 and IPv4 group routes.
+    /// The bounded diagnostic client retains controlled-peer /32 route mode.
     pub fn create_lan_with_helper(vip: Ipv4Addr, helper: &std::path::Path) -> Result<Self> {
         Self::create_configured(vip, &[], helper, true)
     }
@@ -88,16 +89,20 @@ impl Tap {
             "TAP helper failed; sudo is required only for interface setup"
         );
         let file = received.context("TAP helper did not return an interface descriptor")?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            read_buffer: Vec::new(),
+        })
     }
     pub fn ready(&self, timeout: i32) -> Result<bool> {
         readable(self.file.as_raw_fd(), timeout)
     }
     pub fn receive(&mut self) -> Result<Vec<u8>> {
-        let mut b = vec![0; 65536];
-        let n = self.file.read(&mut b)?;
-        b.truncate(n);
-        Ok(b)
+        if self.read_buffer.is_empty() {
+            self.read_buffer.resize(65536, 0);
+        }
+        let n = self.file.read(&mut self.read_buffer)?;
+        Ok(self.read_buffer[..n].to_vec())
     }
     pub fn send(&mut self, b: &[u8]) -> Result<()> {
         ensure!(

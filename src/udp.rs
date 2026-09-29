@@ -2,6 +2,7 @@
 //! Socket reachability is never authentication; the caller still runs peer SH.
 use anyhow::{bail, ensure, Result};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, VecDeque},
     net::{IpAddr, SocketAddr, UdpSocket},
     sync::{
@@ -485,15 +486,24 @@ impl Enet {
         self.deadline = None;
     }
     fn transmit(&self, command: &[u8]) -> Result<()> {
+        Self::transmit_to(&self.socket, self.remote_id, self.started, command)
+    }
+    fn transmit_to(
+        socket: &UdpSocket,
+        remote_id: u16,
+        started: Instant,
+        command: &[u8],
+    ) -> Result<()> {
         // Reliable datagrams include a CRC checksum.
         // The packet header is a checksum, while CONNECT carries its own cookie.
-        let mut packet = vec![0; 4];
-        packet.extend((self.remote_id | 0x8000).to_be_bytes());
-        packet.extend((self.started.elapsed().as_millis() as u16).to_be_bytes());
+        let mut packet = Vec::with_capacity(8 + command.len());
+        packet.extend([0; 4]);
+        packet.extend((remote_id | 0x8000).to_be_bytes());
+        packet.extend((started.elapsed().as_millis() as u16).to_be_bytes());
         packet.extend(command);
         let checksum = crate::session::rendezvous_checksum(&packet);
         packet[..4].copy_from_slice(&checksum.to_be_bytes());
-        self.socket.send(&packet)?;
+        socket.send(&packet)?;
         Ok(())
     }
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
@@ -621,8 +631,7 @@ impl Enet {
             ensure!(p.tries < 20, "UDP acknowledgement timeout");
             p.tries += 1;
             p.last = Instant::now();
-            let c = p.command.clone();
-            self.transmit(&c)?;
+            Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)?;
         }
         Ok(())
     }
@@ -644,9 +653,7 @@ impl Enet {
         if b.len() < 8 {
             return Ok(());
         }
-        let mut checked = b.to_vec();
-        checked[..4].fill(0);
-        if u32be(b, 0) != crate::session::rendezvous_checksum(&checked) {
+        if u32be(b, 0) != crate::session::enet_checksum(b) {
             return Ok(());
         }
         let id = u16be(b, 4);
@@ -746,7 +753,7 @@ impl Enet {
                 }
                 2 | 3 | 5 | 10 | 11 => true,
                 4 => bail!("UDP peer disconnected"),
-                6 if channel == 0 => self.accept_ordered(seq, 1, payload.to_vec()),
+                6 if channel == 0 => self.accept_ordered(seq, 1, Cow::Borrowed(payload)),
                 8 if channel == 0 => self.fragment(c, payload)?,
                 _ => bail!("unsupported ENET channel/command"),
             };
@@ -763,7 +770,7 @@ impl Enet {
     }
     /// Returns whether the command may be acknowledged: true once it is buffered
     /// or already delivered, false when it falls outside the receive window.
-    fn accept_ordered(&mut self, start: u16, count: u16, data: Vec<u8>) -> bool {
+    fn accept_ordered(&mut self, start: u16, count: u16, data: Cow<'_, [u8]>) -> bool {
         let ahead = start.wrapping_sub(self.incoming);
         if ahead == 0 || ahead > 0x8000 {
             return true;
@@ -774,7 +781,9 @@ impl Enet {
         if ahead > RECEIVE_WINDOW || (full && ahead != 1) {
             return false;
         }
-        self.ordered.entry(start).or_insert((count, data));
+        self.ordered
+            .entry(start)
+            .or_insert_with(|| (count, data.into_owned()));
         while let Some((n, data)) = self.ordered.remove(&self.incoming.wrapping_add(1)) {
             self.incoming = self.incoming.wrapping_add(n);
             self.ready.push_back(data);
@@ -821,7 +830,9 @@ impl Enet {
             f.total == total && f.count == count as u16,
             "inconsistent UDP fragments"
         );
-        f.parts.entry(index).or_insert((offset, payload.to_vec()));
+        f.parts
+            .entry(index)
+            .or_insert_with(|| (offset, payload.to_vec()));
         if f.parts.len() == count as usize {
             let mut out = Vec::with_capacity(total);
             for (offset, data) in f.parts.values() {
@@ -831,7 +842,7 @@ impl Enet {
             ensure!(out.len() == total, "UDP fragment total mismatch");
             // Earlier parts have already been acknowledged. Keep them if the
             // reorder queue is full: the sender only retries the final part.
-            let accepted = self.accept_ordered(start, count as u16, out);
+            let accepted = self.accept_ordered(start, count as u16, Cow::Owned(out));
             if accepted {
                 self.fragments.remove(&start);
             }

@@ -22,11 +22,18 @@ Server refusals and password failures appear in the notification and Recent acti
 
 The peer table distinguishes Direct TCP, Direct UDP, and Relay. These labels represent authenticated peer channels. They are separate from the overall service connection status. Incoming channels and outgoing channels use the same authentication and Ethernet forwarding checks.
 
-Transient peer failures and refused connections retry automatically: 7.5–22.5 seconds
-after the first failure, 15–45 after the second, then 30–90 seconds. Recovery
-waits five seconds after initial setup settles, with 2–4 seconds between retry
-starts and at most four outgoing retries in progress. **Retry** uses the same
-paced queue, retaining failure history and already queued earlier deadlines.
+Transient peer failures and refused connections retry automatically: 1.5–4.5 seconds
+after the first failure, 3–9 after the second, 6–18 after the third, then
+12–36 seconds. Recovery runs alongside initial setup and prioritizes peers that
+were previously connected. Depending on the recovery demand, it allows 16, 32,
+or 48 outgoing retries in progress, with 200, 100, or 50 milliseconds between
+starts. If at least three quarters of eight or more recent retries fail, the
+limit falls to at most 32 and starts are spaced by at least 150 milliseconds.
+Due retries reserve outgoing setup slots while new peers are also connecting.
+**Retry** uses the same adaptive queue, retaining failure history and already
+queued earlier deadlines.
+The network page shows failed/refused, offline, active retry, and queued retry
+counts so recovery can be monitored separately from the total roster.
 Incoming offers can bypass the wait to preserve their rendezvous window.
 Roster-only members without a server endpoint are
 not scheduled for connections. Both online presence states preserve established

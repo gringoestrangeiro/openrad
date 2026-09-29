@@ -1,6 +1,7 @@
 //! Shared limits for blocking peer setup workers, independent of wire protocol.
 
 use std::{
+    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -18,59 +19,107 @@ pub(crate) const MAX_PENDING_OFFERS: usize = 256;
 // Every incoming setup can advertise TCP, local UDP and mapped UDP at once.
 pub(crate) const ADVERTISEMENT_QUEUE: usize = MAX_HANDSHAKES * 4;
 
-/// Spread recovery of a large roster over time, with a bounded exponential delay.
+/// Retry promptly, while retaining jitter so peers do not reconnect in lockstep.
 pub(crate) fn peer_retry_delay(rid: u64, failures: u32) -> std::time::Duration {
-    let base_ms = 7_500u64 << failures.saturating_sub(1).min(2);
+    let base_ms = 1_500u64 << failures.saturating_sub(1).min(3);
     let mixed = rid
         .wrapping_mul(0x9e3779b97f4a7c15)
         .rotate_left(failures % 64);
     Duration::from_micros(base_ms * 1_000 + mixed % (base_ms * 2_000 + 1))
 }
 
-const MAX_RETRY_HANDSHAKES: usize = 4;
-const RETRY_SETTLE_DELAY: Duration = Duration::from_secs(5);
+const RETRY_OUTCOME_WINDOW: Duration = Duration::from_secs(30);
 
-/// Recovery has its own slow lane: due timers must not become a burst when
-/// initial handshakes release their slots, the engine stalls, or Retry is clicked.
+#[derive(Clone, Copy)]
+pub(crate) struct RetryPolicy {
+    pub(crate) active_limit: usize,
+    pub(crate) start_interval: Duration,
+}
+
+/// Use more setup capacity when many peers need recovery. Reduce pressure when
+/// recent attempts mostly fail, without stopping retries altogether.
 pub(crate) struct RetryPacer {
-    settled_after: Instant,
     next_start: Instant,
+    outcomes: VecDeque<(Instant, bool)>,
 }
 impl RetryPacer {
     pub(crate) fn new(now: Instant) -> Self {
         Self {
-            settled_after: now + RETRY_SETTLE_DELAY,
             next_start: now,
+            outcomes: VecDeque::new(),
         }
     }
 
-    pub(crate) fn observe_initial_work(&mut self, now: Instant, busy: bool) {
-        if busy {
-            self.settled_after = now + RETRY_SETTLE_DELAY;
+    pub(crate) fn record_outcome(&mut self, now: Instant, success: bool) {
+        self.outcomes.push_back((now, success));
+        self.prune(now);
+    }
+
+    fn prune(&mut self, now: Instant) {
+        while self
+            .outcomes
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > RETRY_OUTCOME_WINDOW)
+        {
+            self.outcomes.pop_front();
         }
     }
 
-    pub(crate) fn ready(&self, now: Instant, active: usize) -> bool {
-        active < MAX_RETRY_HANDSHAKES && now >= self.settled_after && now >= self.next_start
+    pub(crate) fn policy(&mut self, now: Instant, waiting: usize) -> RetryPolicy {
+        self.prune(now);
+        let mut policy = if waiting >= 32 {
+            RetryPolicy {
+                active_limit: 48,
+                start_interval: Duration::from_millis(50),
+            }
+        } else if waiting >= 8 {
+            RetryPolicy {
+                active_limit: 32,
+                start_interval: Duration::from_millis(100),
+            }
+        } else {
+            RetryPolicy {
+                active_limit: 16,
+                start_interval: Duration::from_millis(200),
+            }
+        };
+        let failures = self.outcomes.iter().filter(|(_, success)| !success).count();
+        if self.outcomes.len() >= 8 && failures * 4 >= self.outcomes.len() * 3 {
+            policy.active_limit = policy.active_limit.min(32);
+            policy.start_interval = policy.start_interval.max(Duration::from_millis(150));
+        }
+        policy
     }
 
-    pub(crate) fn started(&mut self, now: Instant, rid: u64, failures: u32) {
-        let mixed = rid
-            .wrapping_mul(0x9e3779b97f4a7c15)
-            .rotate_left(failures % 64);
-        self.next_start = now + Duration::from_micros(2_000_000 + mixed % 2_000_001);
+    pub(crate) fn ready(&self, now: Instant, active: usize, policy: RetryPolicy) -> bool {
+        active < policy.active_limit && now >= self.next_start
+    }
+
+    pub(crate) fn started(&mut self, now: Instant, policy: RetryPolicy) {
+        self.next_start = now + policy.start_interval;
     }
 }
 
-/// Incoming offers have short rendezvous windows. Within each traffic priority,
-/// let every new peer try before an already-failed peer takes another slot.
+/// Incoming offers have short rendezvous windows. Recover established channels
+/// first, then other failed peers, while leaving setup slots for new peers.
 pub(crate) fn peer_priority(
     incoming: bool,
+    retry: bool,
+    previously_connected: bool,
     traffic: bool,
     failures: u32,
     rid: u64,
-) -> (bool, bool, u32, u64) {
-    (!incoming, !traffic, failures, rid)
+) -> (u8, bool, u32, u64) {
+    let lane = if incoming {
+        0
+    } else if previously_connected {
+        1
+    } else if retry {
+        2
+    } else {
+        3
+    };
+    (lane, !traffic, failures, rid)
 }
 
 pub(crate) struct SetupResult<T> {
@@ -162,7 +211,20 @@ impl HandshakeBudget {
     }
 
     pub(crate) fn try_start(&mut self, incoming: bool) -> bool {
-        if self.total >= MAX_HANDSHAKES || (!incoming && self.outgoing >= MAX_OUTGOING_HANDSHAKES) {
+        self.try_start_with_reserve(incoming, 0)
+    }
+
+    /// Hold outgoing room for retries that are already due. Incoming offers
+    /// still use the full total budget and never consume outgoing slots.
+    pub(crate) fn try_start_with_reserve(
+        &mut self,
+        incoming: bool,
+        reserved_outgoing: usize,
+    ) -> bool {
+        if self.total >= MAX_HANDSHAKES
+            || (!incoming
+                && self.outgoing >= MAX_OUTGOING_HANDSHAKES.saturating_sub(reserved_outgoing))
+        {
             return false;
         }
         self.total += 1;
@@ -182,13 +244,14 @@ mod tests {
         assert!(delays.len() > 100);
         let earliest = *delays.first().unwrap();
         let latest = *delays.last().unwrap();
-        assert!(latest - earliest > Duration::from_millis(12_500));
+        assert!(latest - earliest > Duration::from_millis(2_500));
         for rid in 1..=150 {
             for (failures, min, max) in [
-                (1, 7_500, 22_500),
-                (2, 15_000, 45_000),
-                (3, 30_000, 90_000),
-                (u32::MAX, 30_000, 90_000),
+                (1, 1_500, 4_500),
+                (2, 3_000, 9_000),
+                (3, 6_000, 18_000),
+                (4, 12_000, 36_000),
+                (u32::MAX, 12_000, 36_000),
             ] {
                 let delay = peer_retry_delay(rid, failures);
                 assert!(delay >= Duration::from_millis(min));
@@ -198,39 +261,61 @@ mod tests {
     }
 
     #[test]
-    fn retries_wait_for_initial_work_to_settle_and_keep_a_small_concurrency_limit() {
+    fn recovery_scales_with_backlog_and_never_exceeds_reserved_capacity() {
         let start = Instant::now();
         let mut pacer = RetryPacer::new(start);
-        let busy = start + Duration::from_secs(40);
-        pacer.observe_initial_work(busy, true);
-        pacer.observe_initial_work(busy + Duration::from_secs(1), false);
-        assert!(!pacer.ready(busy + Duration::from_secs(4), 0));
-        assert!(pacer.ready(busy + Duration::from_secs(5), 3));
-        assert!(!pacer.ready(busy + Duration::from_secs(5), 4));
-        pacer.observe_initial_work(busy + Duration::from_secs(6), true);
-        assert!(!pacer.ready(busy + Duration::from_secs(10), 0));
+        assert_eq!(pacer.policy(start, 1).active_limit, 16);
+        assert_eq!(pacer.policy(start, 8).active_limit, 32);
+        let burst = pacer.policy(start, 300);
+        assert_eq!(burst.active_limit, 48);
+        assert!(pacer.ready(start, 47, burst));
+        assert!(!pacer.ready(start, 48, burst));
+        assert!(burst.active_limit < MAX_OUTGOING_HANDSHAKES);
     }
 
     #[test]
-    fn a_hundred_overdue_retries_remain_spaced_even_after_an_engine_stall() {
+    fn failures_reduce_pressure_and_recent_success_restores_burst_capacity() {
         let start = Instant::now();
         let mut pacer = RetryPacer::new(start);
-        let mut now = start + Duration::from_secs(300);
-        let first = now;
-        for rid in 1..=100 {
-            assert!(pacer.ready(now, 0));
-            pacer.started(now, rid, 1);
-            assert!(!pacer.ready(now, 0));
-            assert!(!pacer.ready(now + Duration::from_millis(1999), 0));
-            assert!(pacer.ready(now + Duration::from_secs(4), 0));
-            now = pacer.next_start;
+        for _ in 0..8 {
+            pacer.record_outcome(start, false);
         }
-        assert!(now - first >= Duration::from_secs(200));
-        assert!(now - first <= Duration::from_secs(400));
-        now += Duration::from_secs(60);
-        assert!(pacer.ready(now, 0));
-        pacer.started(now, 101, 1);
-        assert!(!pacer.ready(now, 0), "no catch-up burst after a stall");
+        let restrained = pacer.policy(start, 100);
+        assert_eq!(restrained.active_limit, 32);
+        assert_eq!(restrained.start_interval, Duration::from_millis(150));
+        assert_eq!(
+            pacer
+                .policy(start + Duration::from_secs(31), 100)
+                .active_limit,
+            48
+        );
+    }
+
+    #[test]
+    fn overdue_retries_start_quickly_without_an_unbounded_burst() {
+        let start = Instant::now();
+        let mut pacer = RetryPacer::new(start);
+        let policy = pacer.policy(start, 100);
+        assert!(pacer.ready(start, 0, policy));
+        pacer.started(start, policy);
+        assert!(!pacer.ready(start, 0, policy));
+        assert!(!pacer.ready(start + Duration::from_millis(49), 0, policy));
+        assert!(pacer.ready(start + Duration::from_millis(50), 0, policy));
+        let after_stall = start + Duration::from_secs(300);
+        pacer.started(after_stall, policy);
+        assert!(!pacer.ready(after_stall, 0, policy));
+    }
+
+    #[test]
+    fn recovery_prioritizes_prior_channels_and_preserves_incoming_offers() {
+        let mut peers = [
+            peer_priority(false, false, false, true, 0, 1),
+            peer_priority(false, true, false, true, 1, 2),
+            peer_priority(false, true, true, true, 2, 3),
+            peer_priority(true, true, false, true, 2, 4),
+        ];
+        peers.sort();
+        assert_eq!(peers.iter().map(|p| p.3).collect::<Vec<_>>(), [4, 3, 2, 1]);
     }
 
     #[test]
@@ -281,16 +366,33 @@ mod tests {
     }
 
     #[test]
-    fn incoming_then_traffic_then_first_attempts_precede_retries() {
+    fn due_retries_keep_outgoing_slots_while_initial_work_continues() {
+        let mut budget = HandshakeBudget::new(std::iter::empty());
+        for _ in 0..16 {
+            assert!(budget.try_start_with_reserve(false, 48));
+        }
+        assert!(!budget.try_start_with_reserve(false, 48));
+        for _ in 0..48 {
+            assert!(budget.try_start(false));
+        }
+        assert!(!budget.try_start(false));
+        for _ in 0..16 {
+            assert!(budget.try_start(true));
+        }
+        assert!(!budget.try_start(true));
+    }
+
+    #[test]
+    fn traffic_priority_applies_within_each_recovery_lane() {
         let mut queued = [
-            (false, true, 3, 1),
-            (false, true, 0, 99),
-            (false, false, 0, 2),
-            (true, false, 5, 100),
+            (false, true, false, true, 3, 1),
+            (false, false, false, true, 0, 99),
+            (false, true, false, false, 0, 2),
+            (true, true, false, false, 5, 100),
         ];
-        queued.sort_by_key(|&(incoming, traffic, failures, rid)| {
-            peer_priority(incoming, traffic, failures, rid)
+        queued.sort_by_key(|&(incoming, retry, connected, traffic, failures, rid)| {
+            peer_priority(incoming, retry, connected, traffic, failures, rid)
         });
-        assert_eq!(queued.map(|p| p.3), [100, 99, 1, 2]);
+        assert_eq!(queued.map(|p| p.5), [100, 1, 2, 99]);
     }
 }

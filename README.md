@@ -11,7 +11,7 @@ The project is experimental. Linux is the supported data-plane platform; Windows
 - Incoming and outgoing authenticated peer channels, bounded concurrent connection setup, direct TCP and reliable UDP, and relay fallback.
 - Linux TAP interface with Ethernet, ARP, IPv4 unicast, broadcast, and multicast forwarding.
 - Desktop credentials stored in the operating system's credential store, with a confirmed identity-reset flow.
-- A headless CLI for provisioning, listing networks and peers, private-network administration, and bounded connection sessions.
+- A headless CLI backed by a persistent per-user service: networks and peers stay connected after the terminal closes, with automatic service reconnection and live membership updates.
 
 A successful service login does not establish a direct connection to every peer. Direct connectivity depends on both peers and their network conditions. The peer table reports the selected transport; data counters provide a separate indication of traffic.
 
@@ -41,9 +41,21 @@ An existing profile will not silently replace a different saved identity. Use an
 ./target/release/openrad-desktop --data-dir ./profiles/alternate --identity /path/to/identity.json
 ```
 
-## Prebuilt release
+For headless use, initialize a private CLI profile once and start the background service:
 
-The [OpenRad v0.6.0 Linux x86-64 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.6.0) includes the desktop app, CLI, setup and usage guides, and SHA-256 checksums. It fixes authentication when joining private networks created by the official client and adds desktop preferences for reconnect behavior, peer display, traffic graphs, and diagnostics. See the [changelog](CHANGELOG.md), [desktop guide](docs/desktop.md), and [CLI guide](docs/cli.md) for details.
+```sh
+./target/release/openrad init --node-name my-device
+sudo -v
+./target/release/openrad start
+./target/release/openrad status
+./target/release/openrad create 'Friends LAN' --password-file /path/to/password.txt
+```
+
+See the [CLI guide](docs/cli.md) for importing an identity, joining later, and managing the service.
+
+## Releases
+
+The [release page](https://github.com/gringoestrangeiro/openrad/releases) provides Linux x86-64 archives with the desktop app, CLI, guides, and SHA-256 checksums. See the [0.7.0 changelog](CHANGELOG.md), [desktop guide](docs/desktop.md), and [CLI guide](docs/cli.md) for this source revision.
 
 [Desktop and identity guide](docs/desktop.md) · [CLI guide](docs/cli.md) · [Architecture](docs/architecture.md)
 
@@ -68,11 +80,11 @@ An optional Linux interface test is ignored by default because it creates a TAP 
 | `tests/` | Headless integration tests and synthetic protocol vectors |
 | `docs/` | Setup, usage, and development guides |
 
-The public service endpoint and public RSA modulus are bundled in `src/config.rs`; no external files or vendor runtime are needed. CLI provisioning supports an endpoint override, and CLI commands accept an optional public-modulus override.
+The public service endpoint and public RSA modulus are bundled in `src/config.rs`; no external files or vendor runtime are needed. CLI initialization supports endpoint and public-modulus overrides. The chosen modulus is stored in the CLI profile for later service connections.
 
 ## Local data
 
-The desktop stores settings and bounded, rotating connection diagnostics in the platform's application-data directory, and credentials in the OS credential store. Settings shows the connection log location; see [diagnosing connection drops](docs/desktop.md#diagnosing-connection-drops). CLI provisioning explicitly exports a reusable identity to a private output directory; keep that file private. Operational reports can include peer IDs, addresses, and network names, but do not record session keys, authentication passwords, or packet contents.
+The desktop stores settings and bounded, rotating connection diagnostics in the platform's application-data directory, and credentials in the OS credential store. Settings shows the connection log location; see [diagnosing connection drops](docs/desktop.md#diagnosing-connection-drops). The CLI saves a reusable identity and service state in its private profile directory; keep the identity private. Diagnostics can include peer IDs, addresses, and network names, but do not record session keys, authentication passwords, or packet contents.
 
 The repository ignores local profiles, reports, credentials, logs, captures, and build products. Use the documented output locations, and review any files before sharing them. Test fixtures contain only synthetic credentials and key material.
 

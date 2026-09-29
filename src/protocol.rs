@@ -75,12 +75,11 @@ pub fn display_text(b: &[u8]) -> Result<String> {
     Ok(String::from_utf16_lossy(&utf16(b)?).replace('\0', "\u{fffd}"))
 }
 pub fn tlv(tag: u32, b: &[u8]) -> Vec<u8> {
-    [
-        (b.len() as u32).to_be_bytes().to_vec(),
-        tag.to_be_bytes().to_vec(),
-        b.to_vec(),
-    ]
-    .concat()
+    let mut out = Vec::with_capacity(8 + b.len());
+    out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+    out.extend_from_slice(&tag.to_be_bytes());
+    out.extend_from_slice(b);
+    out
 }
 pub fn u32v(tag: u32, v: u32) -> Vec<u8> {
     tlv(tag, &v.to_be_bytes())

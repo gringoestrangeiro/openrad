@@ -239,6 +239,7 @@ impl App {
                     self.log(message.clone());
                     self.toast = Some((message, error, Instant::now()));
                 }
+                Notice::Engine(Update::CommandResult { .. }) => {}
                 Notice::Stopped => self.stopped = true,
                 Notice::CloseBlocked(message) => {
                     self.closing = false;
@@ -359,11 +360,10 @@ impl App {
                 ui.add_space(24.);
                 ui.label(RichText::new("MEMBERSHIPS").size(10.).color(MUTED));
                 ui.add_space(10.);
-                let networks = self.snapshot.networks.clone();
-                if networks.is_empty() {
+                if self.snapshot.networks.is_empty() {
                     ui.label(RichText::new("No networks yet").size(12.).color(MUTED));
                 }
-                for n in networks.iter().take(8) {
+                for n in self.snapshot.networks.iter().take(8) {
                     if ui
                         .add(
                             egui::Button::new(RichText::new(&n.name).size(12.))
@@ -695,7 +695,7 @@ impl App {
             {
                 self.selected_network = None;
             }
-            for n in self.snapshot.networks.clone() {
+            for n in &self.snapshot.networks {
                 if ui
                     .selectable_label(
                         self.selected_network.as_ref() == Some(&n.network_id),
@@ -729,6 +729,26 @@ impl App {
                 self.command(Command::RetryPeers);
             }
         });
+        let failed = self
+            .snapshot
+            .peers
+            .values()
+            .filter(|p| matches!(p.status, PeerState::Failed | PeerState::Refused))
+            .count();
+        let offline = self
+            .snapshot
+            .peers
+            .values()
+            .filter(|p| p.status == PeerState::Offline)
+            .count();
+        ui.label(
+            RichText::new(format!(
+                "{failed} failed/refused · {offline} offline · {} retrying · {} retries queued",
+                self.snapshot.retry_active, self.snapshot.retry_queued
+            ))
+            .size(11.)
+            .color(MUTED),
+        );
         if let Some(id) = &self.selected_network {
             if let Some(n) = self
                 .snapshot

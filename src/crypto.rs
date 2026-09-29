@@ -80,7 +80,8 @@ impl Channel {
             "invalid plaintext length"
         );
         let total = (plain.len() + 9).div_ceil(16) * 16;
-        let mut out = plain.to_vec();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(plain);
         out.resize(total - 9, 0xcc);
         out.extend(auth8(&out));
         out.push((total - plain.len()) as u8);

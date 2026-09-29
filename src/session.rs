@@ -382,20 +382,76 @@ fn write_frame(writer: &mut impl Write, payload: &[u8]) -> io::Result<()> {
 
 /// The checksum feeds each byte into the low byte after shifting.
 pub fn rendezvous_checksum(data: &[u8]) -> u32 {
+    checksum_bytes(data.iter().copied())
+}
+
+/// ENET checksums treat their first four (checksum) bytes as zero.
+pub(crate) fn enet_checksum(data: &[u8]) -> u32 {
+    checksum_bytes([0; 4].into_iter().chain(data[4..].iter().copied()))
+}
+
+fn checksum_bytes(bytes: impl IntoIterator<Item = u8>) -> u32 {
     let mut crc = u32::MAX;
-    for &byte in data {
-        let mut table = crc & 0xff00_0000;
-        for _ in 0..8 {
-            table = (table << 1)
-                ^ if table & 0x8000_0000 != 0 {
+    for byte in bytes {
+        crc = CRC_TABLE[(crc >> 24) as usize] ^ ((crc << 8) | byte as u32);
+    }
+    !crc
+}
+
+const CRC_TABLE: [u32; 256] = {
+    let mut table = [0; 256];
+    let mut index = 0;
+    while index < table.len() {
+        let mut value = (index as u32) << 24;
+        let mut bit = 0;
+        while bit < 8 {
+            value = (value << 1)
+                ^ if value & 0x8000_0000 != 0 {
                     0x04c1_1db7
                 } else {
                     0
                 };
+            bit += 1;
         }
-        crc = table ^ ((crc << 8) | byte as u32);
+        table[index] = value;
+        index += 1;
     }
-    !crc
+    table
+};
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::*;
+
+    fn bitwise_checksum(data: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for &byte in data {
+            let mut table = crc & 0xff00_0000;
+            for _ in 0..8 {
+                table = (table << 1)
+                    ^ if table & 0x8000_0000 != 0 {
+                        0x04c1_1db7
+                    } else {
+                        0
+                    };
+            }
+            crc = table ^ ((crc << 8) | byte as u32);
+        }
+        !crc
+    }
+
+    #[test]
+    fn lookup_checksum_matches_bitwise_for_packet_sizes_and_zero_prefix() {
+        for len in [0, 1, 4, 8, 15, 16, 64, 1400, 4096] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+            assert_eq!(rendezvous_checksum(&data), bitwise_checksum(&data));
+            if len >= 4 {
+                let mut zeroed = data.clone();
+                zeroed[..4].fill(0);
+                assert_eq!(enet_checksum(&data), bitwise_checksum(&zeroed));
+            }
+        }
+    }
 }
 #[cfg(target_os = "linux")]
 pub fn readable(fd: i32, timeout_ms: i32) -> Result<bool> {
