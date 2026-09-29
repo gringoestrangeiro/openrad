@@ -182,8 +182,7 @@ pub fn gratuitous_arp(vip: Ipv4Addr) -> Vec<u8> {
     .concat()
 }
 
-/// Largest Ethernet frame (MTU 1500 + header), as accepted by the native Radmin
-/// adapter. Windows peers emit full-size frames, including every first IP fragment.
+/// Largest supported Ethernet frame (MTU 1500 plus header).
 pub const MAX_FRAME: usize = 1514;
 
 /// Whether an unchanged Ethernet frame belongs on this authenticated link.

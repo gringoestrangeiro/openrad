@@ -28,8 +28,6 @@ impl NetworkPassword {
         );
         Ok(Self(value))
     }
-    /// The official client passes the UTF-8 conversion buffer, including its
-    /// terminating NUL, to both the join proof and the creation verifier.
     fn wire_bytes(&self) -> Zeroizing<Vec<u8>> {
         let mut bytes = Zeroizing::new(self.0.as_bytes().to_vec());
         bytes.push(0);
@@ -101,7 +99,6 @@ pub fn validate_name(name: &str) -> Result<()> {
     );
     Ok(())
 }
-/// Native CRC64, initial/final all-ones, over exact UTF-16LE name bytes.
 pub fn network_identity(name: &str) -> u64 {
     let mut crc = u64::MAX;
     for byte in name.encode_utf16().flat_map(u16::to_le_bytes) {
@@ -117,7 +114,6 @@ pub fn network_identity(name: &str) -> u64 {
     }
     !crc
 }
-/// LE32 salt length + salt + minimal big-endian SH verifier.
 pub fn network_verifier(
     name: &str,
     password: &NetworkPassword,

@@ -18,7 +18,6 @@
 /captures/
 /data/
 /evidence/
-/docs/re-engineering/
 identity*.json
 *identity*.secret
 credentials*

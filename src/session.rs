@@ -47,7 +47,6 @@ impl Framed {
             .write_all(&rendezvous_checksum(&data[4..]).to_be_bytes())?;
         Ok(())
     }
-    /// Protocol version 23+ TCP rendezvous precedes the length-framed SH channel.
     pub fn peer_rendezvous(&mut self, rid: u64, cid: u64, server_id: u32) -> Result<()> {
         ensure!(
             rid != 0 && cid != 0 && server_id != 0,

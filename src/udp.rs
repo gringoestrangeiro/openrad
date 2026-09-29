@@ -1,4 +1,4 @@
-//! Datagram channel: seven-byte P/A/C rendezvous, then reliable ENET.
+//! UDP rendezvous and reliable datagram channel.
 //! Socket reachability is never authentication; the caller still runs peer SH.
 use anyhow::{bail, ensure, Result};
 use std::{

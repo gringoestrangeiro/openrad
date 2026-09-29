@@ -101,12 +101,11 @@ pub fn op(data: &[u8]) -> Result<u32> {
     int32(field(&records(data)?, SERVER_OP)?)
 }
 
-/// PushInfo (6), root 0x1236, repeated client addresses (0x127d).
 /// Only consume these records after control-session authentication and CID matching.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TcpCandidate {
     pub endpoint: std::net::SocketAddr,
-    /// Opaque native 0x0b000360 flag; it is not proof of LAN reachability.
+    /// A server-provided flag is not proof of LAN reachability.
     pub server_flag: bool,
 }
 pub fn tcp_candidates(data: &[u8], connection_id: u64) -> Result<Vec<TcpCandidate>> {
@@ -190,7 +189,6 @@ pub fn advertise_tcp(cid: u64, endpoints: &[std::net::SocketAddr]) -> Result<Vec
     }
     Ok([request_tcp_candidates(cid), tlv(0x1230, &body)].concat())
 }
-/// Direct UDP candidate advertisement (28).
 pub fn advertise_udp(
     connection_id: u64,
     endpoints: &[std::net::SocketAddr],
@@ -222,9 +220,7 @@ pub fn advertise_udp(
     .concat())
 }
 
-/// Native UES list: authenticated LoginComplete root 0x1340, UTF-8 tag
-/// 0x0e00036c.
-/// Root 0x1263 / 0x03000237 is the connection-server configuration, not UES.
+/// Authenticated UES hosts are separate from connection servers.
 pub fn ues_hosts(data: &[u8]) -> Result<Vec<std::net::Ipv4Addr>> {
     ensure!(op(data)? == 21, "expected LoginComplete");
     let fields = records(data)?;
@@ -253,7 +249,7 @@ pub fn ues_hosts(data: &[u8]) -> Result<Vec<std::net::Ipv4Addr>> {
     }
     Ok(hosts)
 }
-/// Cone mapping verified at two native UES servers; no predicted ports are sent.
+/// Advertise a mapping only after two authenticated UES hosts agree.
 pub fn advertise_mapped_udp(cid: u64, endpoint: std::net::SocketAddr) -> Result<Vec<u8>> {
     advertise_mapped_udp_with_nonce(cid, endpoint, 0)
 }
@@ -500,8 +496,6 @@ pub enum JoinResult<'a> {
     Membership(&'a [u8]),
     Refused(u32),
 }
-/// Public JOIN (operation 39) does not echo ManageNetwork2's sequence field.
-/// Correlate by request ID and action, then validate the returned network name.
 pub fn join_result(data: &[u8], id: u64) -> Result<Option<JoinResult<'_>>> {
     if op(data)? != 37 {
         return Ok(None);
@@ -520,7 +514,6 @@ pub fn join_result(data: &[u8], id: u64) -> Result<Option<JoinResult<'_>>> {
     }
     Ok(Some(JoinResult::Membership(field(&f, 0x1316)?)))
 }
-/// Request leaving a network with the ManageNetwork2 operation.
 pub fn leave(network: &str, id: u64, seq: u32) -> Result<Vec<u8>> {
     let guid = hex::decode(network)?;
     ensure!(guid.len() == 16 && id > 0, "invalid leave request");
@@ -539,7 +532,6 @@ pub fn leave(network: &str, id: u64, seq: u32) -> Result<Vec<u8>> {
     ]
     .concat())
 }
-/// A network command response echoes its verb; only 0x010001d2 is a failure.
 pub fn leave_result(
     data: &[u8],
     id: u64,
@@ -625,9 +617,8 @@ fn network_id(b: &[u8]) -> Result<String> {
     Ok(hex::encode(b))
 }
 
-/// Native NodeRemoved/NodeStatus events carry the subject RID followed by an
-/// optional source RID using the same tag. Other message kinds remain strict
-/// singletons.
+/// The first RID identifies the member; an optional second RID names the source.
+/// Other message kinds retain strict singleton validation.
 fn event_member(fields: &[Record<'_>]) -> Result<u64> {
     let mut ids = fields.iter().filter(|field| field.tag == 0x020001e1);
     let member = int64(

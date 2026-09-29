@@ -31,7 +31,7 @@
 
 ### Fixed
 
-- Private-network joins now authenticate with networks created by the official Radmin VPN client. The network password's UTF-8 wire representation includes its terminating NUL byte; the same correction applies when creating a private network.
+- Fixed private-network authentication compatibility when joining or creating networks with the official client.
 
 ### Desktop
 

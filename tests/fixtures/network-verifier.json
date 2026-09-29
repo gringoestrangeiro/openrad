@@ -1,5 +1,4 @@
 {
-  "provenance": "CRC computed from SVC table bytes at 0x52eaa0; SH verifier independently computed with Python hashlib/pow using the vendor UTF-8 conversion buffer including its terminating NUL; synthetic inputs only.",
   "name": "OpenRad 雪 🌐",
   "password": "synthetic password é",
   "identity": 10977597741686862730,

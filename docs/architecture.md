@@ -33,12 +33,6 @@ A path reported as Direct TCP or Direct UDP identifies the selected peer socket.
 
 The CLI and desktop use the same `NetworkOperation` state machine for creation, joining, leaving, deleting, kicking, and changing admin roles. The CLI service tags each operation so its result reaches the requesting command. Private joins verify the network's SH server proof before accepting membership. Administration acknowledgements must match the request, action, context, network, and member. Role and removal notifications update both clients' snapshots and forwarding membership. A kick only removes the affected network relationship; peers sharing another approved network remain eligible. Pending applicants are not eligible for traffic through that network.
 
-Membership removal and role/status events may carry a mandatory member RID and
-an optional source RID with the same tag. These events validate both values and
-apply the update only to the first. Other message kinds retain strict singleton
-validation. This behavior supports the 0.3.0 compatibility fix for unexpected
-attachment reconnects.
-
 Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations.
 
 The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.

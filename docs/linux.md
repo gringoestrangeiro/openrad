@@ -29,7 +29,7 @@ The headless CLI uses the same helper from its persistent per-user service. Run 
 
 The helper currently expects the standard Linux locations `/usr/bin/sudo` and `/usr/bin/ip`. These are operating-system paths, not per-user installation paths. Distributions with a different layout must adapt `src/platform/linux.rs`. Both binaries can otherwise be built or installed in any directory.
 
-The interface is named `radminvpn0`, has MTU 1500 like the native Radmin adapter, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
+The interface is named `radminvpn0`, has MTU 1500, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
 
 ## Troubleshooting
 
