@@ -34,6 +34,7 @@ function Reset-Case {
     $script:taskResult = 0
     $script:startDenied = $false
     $script:registrationDenied = $false
+    $script:startRace = $false
 }
 function Get-NetAdapter {
     param([switch]$IncludeHidden)
@@ -189,13 +190,13 @@ function Start-ScheduledTask {
 }
 function Get-ScheduledTask {
     param([string]$TaskName)
-    $script:polls++
-    $state = if ($script:polls -eq 2) { 'Queued' } elseif ($script:polls -eq 3) { 'Running' } else { 'Ready' }
+    $state = if ($script:polls -eq 1 -and $script:startRace) { 'Running' } elseif ($script:polls -eq 2) { 'Queued' } elseif ($script:polls -eq 3) { 'Running' } else { 'Ready' }
     return [PSCustomObject]@{ State = $state }
 }
 function Get-ScheduledTaskInfo {
     param([string]$TaskName)
-    $time = if ($script:polls -eq 1) { [DateTime]'1999-01-01' } else { [DateTime]::Now }
+    $script:polls++
+    $time = if ($script:polls -eq 1 -and -not $script:startRace) { [DateTime]'1999-01-01' } else { [DateTime]::Now }
     $result = if ($script:polls -eq 2) { 267009 } elseif ($script:polls -eq 3) { 267011 } else { $script:taskResult }
     return [PSCustomObject]@{ LastRunTime = $time; LastTaskResult = $result }
 }
@@ -214,6 +215,12 @@ Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') '
 Assert-Equal $script:polls 4 'Task success was accepted before its worker finished'
 
 Reset-Case
+$script:startRace = $true
+Invoke-OpenRadRadminRecovery -InterfaceIndex @(19)
+Assert-Equal $script:polls 4 'An old Ready state and a new LastRunTime falsely signaled completion'
+Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') 'Start-race task was not cleaned up'
+
+Reset-Case
 $script:taskResult = 1
 Assert-Rejected { Invoke-OpenRadRadminRecovery -InterfaceIndex @(19) } 'Worker failure was ignored'
 Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') 'Failed task was not cleaned up'
@@ -228,4 +235,4 @@ $script:registrationDenied = $true
 Assert-Rejected { Invoke-OpenRadRadminRecovery -InterfaceIndex @(19) } 'Registration failure was ignored'
 Assert-Equal $script:actions @() 'Cleaned up a task that was not registered'
 
-Write-Host 'PASS: 18 synthetic Radmin worker/scheduler cases and embedded/encoded script syntax. No Windows services, processes, adapters, or scheduled tasks were changed.'
+Write-Host 'PASS: 19 synthetic Radmin worker/scheduler cases and embedded/encoded script syntax. No Windows services, processes, adapters, or scheduled tasks were changed.'

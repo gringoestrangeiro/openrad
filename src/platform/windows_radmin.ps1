@@ -80,10 +80,12 @@ function Invoke-OpenRadRadminRecovery {
         Start-ScheduledTask -TaskName $taskName
         $deadline = [DateTime]::UtcNow.AddSeconds(40)
         do {
-            $task = Get-ScheduledTask -TaskName $taskName
             $info = Get-ScheduledTaskInfo -TaskName $taskName
+            $task = Get-ScheduledTask -TaskName $taskName
             # A just-registered task reports Ready/zero before its first run.
             # Wait for a real run and exclude queued/running scheduler results.
+            # Read run info before state: a pre-start Ready snapshot must not
+            # combine with a later LastRunTime and falsely signal completion.
             if ($info.LastRunTime.Year -gt 2000 -and $task.State -notin @('Running', 'Queued') -and $info.LastTaskResult -notin @(267009, 267011)) {
                 if ($info.LastTaskResult -ne 0) { throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult) }
                 return
