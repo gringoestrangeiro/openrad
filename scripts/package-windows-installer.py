@@ -166,7 +166,7 @@ def main():
         (payload / 'DLL-IMPORTS.json').write_text(json.dumps({
             'target': TARGET, 'application_runtime_dlls': [],
             'windows_system_dlls_are_not_bundled': True, 'imports': audit,
-            'dynamic_windows_components': ['newdev.dll', 'Windows PowerShell 5.1 NetAdapter module', 'dxgi.dll', 'd3d12.dll', 'd3dcompiler_47.dll', 'Windows WARP CPU renderer'],
+            'dynamic_windows_components': ['newdev.dll', 'Windows PowerShell 5.1 NetAdapter, ScheduledTasks and CIM modules', 'dxgi.dll', 'd3d12.dll', 'd3dcompiler_47.dll', 'Windows WARP CPU renderer'],
             'graphics_default': 'auto: Direct3D 12 hardware, Direct3D 12 WARP CPU, OpenGL',
             'dx12_shader_compiler': 'System FXC; no DXC or Agility SDK files required',
             'setup_engine': 'NSIS bootstrapper and embedded System plugin; automatically extracted by the installer',
@@ -182,7 +182,8 @@ def main():
             'windows_minimum': 'Windows 10 version 1709, x64',
             'graphics_renderers': ['auto', 'opengl', 'wgpu (DX12 hardware)', 'software (DX12 WARP CPU)'],
             'diagnostics_build': f'release-{version}',
-            'system_mode': 'Opt-in Debug-OpenRad.cmd -System; official Microsoft PsExec download, signature validation and separate profile',
+            'system_mode': 'Automatic temporary SYSTEM task for official Radmin VPN conflicts; application stays in user profile. Separate opt-in PsExec SYSTEM diagnostic launcher.',
+            'radmin_conflict_recovery': 'Stop RvControlSvc.exe service/processes, disable selected Famatech adapter, recheck active addresses and continue connection',
         }, indent=2) + '\n')
         # This manifest is also embedded separately for repeat-run readiness checks.
         records = [{'path': path.relative_to(payload).as_posix(), 'sha256': digest(path)} for path in sorted(payload.rglob('*')) if path.is_file()]
@@ -196,7 +197,7 @@ def main():
         # Source of our installer is shipped too; it contains no user state.
         source_zip = payload / 'installer-source.zip'
         with zipfile.ZipFile(source_zip, 'w', zipfile.ZIP_DEFLATED) as archive:
-            for path in ['packaging/windows/OpenRad-Setup.nsi', 'packaging/windows/setup-adapter.ps1', 'packaging/windows/Launch-CLI.cmd', 'packaging/windows/Launch-CLI.ps1', 'packaging/windows/Test-Windows.ps1', 'packaging/windows/Test-SetupLogic.ps1', 'packaging/windows/test-fixtures/setup-worker.c', 'scripts/test-windows-installer-flow.py', 'scripts/package-windows-installer.py', 'scripts/pe_resources.py', 'scripts/package-windows.py', 'src/setup.rs', 'src/setup_main.rs', 'src/platform/windows_setup.rs', 'desktop/Cargo.toml', 'desktop/src/main.rs', 'desktop/src/graphics.rs', 'desktop/src/startup_log.rs', 'src/early_log.rs', 'src/platform/windows.rs', 'src/platform/windows_security.rs', 'src/platform/windows_crash.rs', 'src/main.rs', 'src/daemon.rs', 'Cargo.toml', 'Cargo.lock', 'packaging/windows/Debug-OpenRad.cmd', 'packaging/windows/Debug-OpenRad.ps1', 'desktop/src/platform/windows_launch.rs', 'LICENSE']:
+            for path in ['packaging/windows/OpenRad-Setup.nsi', 'packaging/windows/setup-adapter.ps1', 'packaging/windows/Launch-CLI.cmd', 'packaging/windows/Launch-CLI.ps1', 'packaging/windows/Test-Windows.ps1', 'packaging/windows/Test-SetupLogic.ps1', 'packaging/windows/test-fixtures/setup-worker.c', 'scripts/test-windows-installer-flow.py', 'scripts/package-windows-installer.py', 'scripts/pe_resources.py', 'scripts/package-windows.py', 'src/setup.rs', 'src/setup_main.rs', 'src/platform/windows_setup.rs', 'desktop/Cargo.toml', 'desktop/src/main.rs', 'desktop/src/graphics.rs', 'desktop/src/startup_log.rs', 'src/early_log.rs', 'src/platform/windows.rs', 'src/platform/windows_radmin.rs', 'src/platform/windows_radmin.ps1', 'packaging/windows/Test-RadminRecovery.ps1', 'src/platform/windows_security.rs', 'src/platform/windows_crash.rs', 'src/main.rs', 'src/daemon.rs', 'Cargo.toml', 'Cargo.lock', 'packaging/windows/Debug-OpenRad.cmd', 'packaging/windows/Debug-OpenRad.ps1', 'desktop/src/platform/windows_launch.rs', 'LICENSE']:
                 archive.write(ROOT / path, path)
         # Include installer source in both repeat-run hashes and exact uninstall.
         records.append({'path': source_zip.name, 'sha256': digest(source_zip)})

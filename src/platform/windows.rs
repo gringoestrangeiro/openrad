@@ -10,7 +10,7 @@ use crate::{
 use anyhow::{bail, ensure, Context, Result};
 use std::{net::Ipv4Addr, path::Path, sync::Arc};
 use windows_sys::Win32::{
-    Foundation::{ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE},
+    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE},
     NetworkManagement::{
         IpHelper::*,
         Ndis::{NET_IF_ADMIN_STATUS_UP, NET_LUID_LH},
@@ -49,22 +49,51 @@ impl Drop for MibTable {
     }
 }
 fn check_addresses(luid: NET_LUID_LH) -> Result<()> {
+    crate::windows_radmin::prepare_addresses(
+        unsafe { luid.Value },
+        interface_addresses,
+        crate::windows_radmin::recover,
+        || std::thread::sleep(std::time::Duration::from_millis(250)),
+    )
+}
+
+fn interface_addresses() -> Result<Vec<crate::windows_radmin::Address>> {
     let mut table = std::ptr::null_mut();
     // SAFETY: OS allocates table; RAII guard frees after inspection.
     windows_io::status(unsafe { GetUnicastIpAddressTable(AF_INET, &mut table) })?;
     let _guard = MibTable(table.cast());
+    let mut addresses = Vec::new();
     unsafe {
         let rows =
             std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
         for row in rows {
             let ip = Ipv4Addr::from(row.Address.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes());
-            ensure!(ip.octets()[0] != 26, "An existing 26.0.0.0/8 address conflicts with OpenRad; disconnect other VPNs and clear stale OpenRad addresses (docs/windows.md)");
-            if row.InterfaceLuid.Value == luid.Value {
-                ensure!(ip.is_link_local() || ip.is_unspecified(), "The OpenRad adapter already has a configured IPv4 address; use a dedicated adapter with no static address");
+            let mut link = MIB_IF_ROW2 {
+                InterfaceLuid: row.InterfaceLuid,
+                ..Default::default()
+            };
+            let status = GetIfEntry2(&mut link);
+            // The adapter may disappear between the table snapshot and this
+            // lookup, especially just after the SYSTEM worker disables it.
+            if status == ERROR_FILE_NOT_FOUND {
+                continue;
             }
+            windows_io::status(status)?;
+            let end = link
+                .Description
+                .iter()
+                .position(|c| *c == 0)
+                .context("Invalid network adapter description")?;
+            addresses.push(crate::windows_radmin::Address {
+                interface: row.InterfaceLuid.Value,
+                index: link.InterfaceIndex,
+                description: String::from_utf16(&link.Description[..end])?,
+                enabled: link.AdminStatus == NET_IF_ADMIN_STATUS_UP,
+                ip,
+            });
         }
     }
-    Ok(())
+    Ok(addresses)
 }
 
 pub struct Tap {

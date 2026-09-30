@@ -34,7 +34,8 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-The 0.9.0 release provides Linux x86-64 and experimental Windows x64 packages.
+The 0.9.5 release adds automatic recovery from official Radmin VPN adapter
+conflicts on Windows and includes the unchanged 0.9.0 Linux x86-64 package.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).

@@ -3288,5 +3288,35 @@
     "É necessária a autorização de administrador do Windows para abrir o OpenRad: {detail}",
     "Для открытия OpenRad требуется разрешение администратора Windows: {detail}",
     "Cần quyền quản trị Windows để mở OpenRad: {detail}"
+  ],
+  "Invalid network adapter description": [
+    "Descrição do adaptador de rede inválida",
+    "Недопустимое описание сетевого адаптера",
+    "Mô tả bộ điều hợp mạng không hợp lệ"
+  ],
+  "The official Radmin VPN adapter is still active after SYSTEM recovery; close Radmin VPN and retry the OpenRad connection (docs/windows.md)": [
+    "O adaptador oficial do Radmin VPN continua ativo após a recuperação como SYSTEM; feche o Radmin VPN e tente conectar o OpenRad novamente (docs/windows.md)",
+    "Официальный адаптер Radmin VPN остаётся активным после восстановления от имени SYSTEM; закройте Radmin VPN и повторите подключение OpenRad (docs/windows.md)",
+    "Bộ điều hợp Radmin VPN chính thức vẫn hoạt động sau khi khôi phục bằng SYSTEM; đóng Radmin VPN rồi thử kết nối OpenRad lại (docs/windows.md)"
+  ],
+  "Run OpenRad as administrator to disable the conflicting official Radmin VPN adapter": [
+    "Execute o OpenRad como administrador para desativar o adaptador oficial do Radmin VPN que está em conflito",
+    "Запустите OpenRad от имени администратора, чтобы отключить конфликтующий официальный адаптер Radmin VPN",
+    "Chạy OpenRad với quyền quản trị viên để tắt bộ điều hợp Radmin VPN chính thức gây xung đột"
+  ],
+  "Windows system directory is unavailable": [
+    "O diretório de sistema do Windows está indisponível",
+    "Системный каталог Windows недоступен",
+    "Thư mục hệ thống Windows không khả dụng"
+  ],
+  "Cannot start SYSTEM recovery for the official Radmin VPN adapter": [
+    "Não foi possível iniciar a recuperação como SYSTEM do adaptador oficial do Radmin VPN",
+    "Не удалось запустить восстановление официального адаптера Radmin VPN от имени SYSTEM",
+    "Không thể bắt đầu khôi phục bộ điều hợp Radmin VPN chính thức bằng SYSTEM"
+  ],
+  "Cannot stop RvControlSvc.exe/disable the official Radmin VPN adapter with SYSTEM permissions: {0}": [
+    "Não foi possível parar RvControlSvc.exe/desativar o adaptador oficial do Radmin VPN com permissões SYSTEM: {0}",
+    "Не удалось остановить RvControlSvc.exe/отключить официальный адаптер Radmin VPN с правами SYSTEM: {0}",
+    "Không thể dừng RvControlSvc.exe/tắt bộ điều hợp Radmin VPN chính thức với quyền SYSTEM: {0}"
   ]
 }

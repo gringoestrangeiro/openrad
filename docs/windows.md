@@ -1,6 +1,6 @@
 # Windows with TAP-Windows6
 
-OpenRad **0.9.0** includes **experimental Windows x64 support**. Windows has
+OpenRad **0.9.5** includes **experimental Windows x64 support**. Windows has
 been tested only on **Windows 10** so far; the tester reports it working perfectly
 in that setup after the native Direct3D/WARP startup fix. Windows 11 and other
 Windows environments still need validation. Please [open an issue](https://github.com/gringoestrangeiro/openrad/issues/new)
@@ -13,7 +13,7 @@ No Radmin driver, Wintun driver, OpenVPN service, or vendor VPN runtime is used.
 
 The published binaries were built on Linux; no Windows runtime was executed by
 the release builder. The Windows 10 success and performance figures are
-user-provided test feedback. [Release details](releases/0.9.0.md) distinguish this
+user-provided test feedback. [Release details](releases/0.9.5.md) distinguish this
 feedback from Linux verification and list the remaining validation work.
 
 [Windows settings UI preview](screenshots/windows-settings-linux-preview.png) was
@@ -81,8 +81,9 @@ Use your usual account's UAC elevation. Elevating with another account selects
 that account's profile and Windows Credential Manager identity. The desktop
 requests elevation automatically on ordinary GUI startup; `--help`, `--version`
 and headless test harnesses remain unprivileged. This build still elevates the
-whole VPN application; its setup worker is short-lived, not a persistent
-privileged networking service. Linux's separate TAP helper is unchanged.
+whole VPN application. A conflicting official Radmin VPN adapter triggers a
+temporary SYSTEM recovery task as described below. Linux's separate TAP helper
+is unchanged.
 
 Launch **OpenRad Desktop** or **OpenRad CLI** from the Start menu afterward. The
 CLI shortcut opens an elevated PowerShell in the installation folder:
@@ -112,6 +113,43 @@ and stop CLI background processes before repair, upgrade or uninstall. Use
 only an adapter created by this setup. Shared TAP driver packages, manually
 adopted adapters, profile files and stored identities are retained. Unknown files
 added to the application directory are retained as well.
+
+## Switching from official Radmin VPN
+
+Both clients use addresses in `26.0.0.0/8`. Starting with 0.9.5, a desktop or CLI
+connection detects an enabled **Famatech Radmin VPN Ethernet Adapter** with a
+`26.x.x.x` address and automatically resolves that conflict before configuring
+OpenRad's TAP interface. The adapter's display name may have been renamed;
+recovery identifies the official driver description and selected interface.
+
+Using the application's existing administrator elevation, OpenRad registers a
+temporary local Task Scheduler task as SYSTEM. Its embedded worker stops the
+service whose executable is `RvControlSvc.exe`, force-terminates any remaining
+`RvControlSvc.exe` processes, then disables the selected official adapter. This
+order prevents the running service from immediately reenabling the driver.
+OpenRad waits for the worker, removes the task, and rechecks all active adapter
+addresses for up to ten seconds before continuing the same connection attempt.
+The worker has a thirty-second execution limit; scheduler completion is awaited
+for up to forty seconds. A failed recovery leaves the connection failed and
+records an error in the usual connection/startup logs.
+
+This recovery is offline and uses built-in Windows PowerShell and Task Scheduler.
+Microsoft documents [SYSTEM task principals](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal),
+[service stop results](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/stopservice-method-in-class-win32-service),
+and [adapter disabling](https://learn.microsoft.com/en-us/powershell/module/netadapter/disable-netadapter).
+The VPN application keeps the ordinary user's profile and credentials. There is
+no PsExec download, SYSTEM application launch, driver removal, or permanent
+change to the Radmin service's startup setting. OpenRad leaves the official
+adapter disabled and its service stopped when disconnecting. To switch back,
+disconnect/close OpenRad, enable **Radmin VPN** in Windows network settings, and
+start its service or restart Windows. Starting official Radmin while OpenRad is
+connected can recreate a routing conflict.
+
+Other adapters using `26.x.x.x`, and stale/static addresses on the OpenRad TAP,
+still report a conflict. The automatic recovery is limited to the official
+Famatech adapter. Disabled adapters' retained addresses are ignored. The new
+SYSTEM recovery has synthetic regression coverage and cross-build validation;
+it still needs a real Windows migration test with official Radmin installed.
 
 ## Graphics compatibility
 
@@ -244,8 +282,9 @@ before address assignment leaves the idle adapter without a VPN address.
 ## Explicit SYSTEM diagnostic mode
 
 Normal setup remains offline and starts the ordinary administrator desktop.
-SYSTEM is opt-in. The Diagnostics shortcut opens an elevated CLI with the normal
-profile. From the ZIP or installed directory, use:
+Launching the whole application as SYSTEM is opt-in and separate from the
+automatic adapter recovery above. The Diagnostics shortcut opens an elevated
+CLI with the normal profile. From the ZIP or installed directory, use:
 
 ```bat
 Debug-OpenRad.cmd -System
@@ -493,6 +532,7 @@ Additional Linux installer regressions, with PowerShell and Wine available:
 
 ```sh
 pwsh -NoLogo -NoProfile -File packaging/windows/Test-SetupLogic.ps1
+pwsh -NoLogo -NoProfile -File packaging/windows/Test-RadminRecovery.ps1
 python3 scripts/test-windows-installer-flow.py
 ```
 

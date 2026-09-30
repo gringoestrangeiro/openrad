@@ -78,6 +78,10 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         ("linux", include_str!("../src/platform/linux.rs")),
         ("windows", include_str!("../src/platform/windows.rs")),
         (
+            "windows_radmin",
+            include_str!("../src/platform/windows_radmin.rs"),
+        ),
+        (
             "tap_windows_contract",
             include_str!("../src/platform/tap_windows_contract.rs"),
         ),
@@ -114,6 +118,11 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         "OpenRad · TAP-Windows6 · MTU 1500",
         "{0}: {error}",
         " · Retry",
+        "Famatech Radmin VPN Ethernet Adapter",
+        "WindowsPowerShell/v1.0/powershell.exe",
+        "{0}\nInvoke-OpenRadRadminRecovery -InterfaceIndex @({indices})",
+        "Official Radmin VPN conflict; starting temporary SYSTEM recovery",
+        "Official Radmin VPN SYSTEM recovery finished; retrying interface address check",
     ];
     let mut missing = Vec::new();
     for (file, source) in sources {

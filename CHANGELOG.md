@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.5 — 2026-09-30
+
+### Windows Radmin VPN migration
+
+- Automatically recover when the enabled official Famatech Radmin VPN adapter occupies `26.0.0.0/8`: run a temporary local SYSTEM task, stop the `RvControlSvc.exe` service, terminate remaining `RvControlSvc.exe` processes, and disable only the selected official adapter.
+- Recheck active interfaces and continue the same desktop/CLI connection attempt. Bound recovery waits and remove the temporary task on success or failure. Keep unrelated VPN and stale OpenRad conflicts as errors; ignore addresses retained on administratively disabled interfaces.
+- Use an immutable embedded worker and Windows' built-in PowerShell/Task Scheduler. Keep the application's existing user profile, leave Radmin's startup setting unchanged, and document how to switch back.
+- Add synthetic Rust and PowerShell recovery regressions. Publish newly compiled Windows x64 applications/installer and reuse the exact 0.9.0 Linux archive; its Linux binaries continue reporting 0.9.0.
+
 ## 0.9.0 — 2026-09-30
 
 ### Experimental Windows support

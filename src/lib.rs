@@ -27,6 +27,9 @@ mod windows_crash;
 #[doc(hidden)]
 #[path = "platform/windows_io.rs"]
 pub mod windows_io;
+#[cfg(any(windows, test))]
+#[path = "platform/windows_radmin.rs"]
+mod windows_radmin;
 #[cfg(windows)]
 #[doc(hidden)]
 #[path = "platform/windows_security.rs"]
