@@ -1,10 +1,16 @@
 //! Commands for the persistent per-user VPN service.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod daemon;
 
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use openrad::{output::ReportDirectory, session::Session, tap};
+use openrad::{
+    early_log::{self, Stage},
+    i18n::{self, Language, LanguagePreference},
+    output::ReportDirectory,
+    session::Session,
+    tap,
+};
 use serde_json::{json, Value};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -23,7 +29,10 @@ use zeroize::Zeroizing;
     about = "OpenRad VPN: one persistent connection, simple local commands"
 )]
 struct Cli {
-    /// Profile directory (default: $XDG_STATE_HOME/openrad or ~/.local/state/openrad).
+    /// Display language: system, en, pt, ru or vi.
+    #[arg(long, global = true, default_value = "system")]
+    language: LanguagePreference,
+    /// Profile directory (Windows: %LOCALAPPDATA%/openrad; Unix: $XDG_STATE_HOME/openrad).
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
     /// Print machine-readable JSON.
@@ -107,7 +116,7 @@ enum Command {
     RevokeAdmin { network: String, member: u64 },
     /// Retry failed peer channels now.
     RetryPeers,
-    /// Retry TAP creation after making sudo authorization available.
+    /// Retry interface setup after fixing driver or privilege requirements.
     RetryInterface,
     #[command(name = "__daemon", hide = true)]
     __Daemon {
@@ -127,6 +136,31 @@ enum Command {
     },
 }
 
+impl Command {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Init { .. } => "init",
+            Self::Start { .. } => "start",
+            Self::Status => "status",
+            Self::Stop => "stop",
+            Self::Networks => "networks",
+            Self::Peers => "peers",
+            Self::Search { .. } => "search",
+            Self::Join { .. } => "join",
+            Self::Create { .. } => "create",
+            Self::Leave { .. } => "leave",
+            Self::Delete { .. } => "delete",
+            Self::Kick { .. } => "kick",
+            Self::GrantAdmin { .. } => "grant_admin",
+            Self::RevokeAdmin { .. } => "revoke_admin",
+            Self::RetryPeers => "retry_peers",
+            Self::RetryInterface => "retry_interface",
+            Self::__Daemon { .. } => "daemon",
+            Self::TapHelper { .. } => "tap_helper",
+        }
+    }
+}
+
 fn password_file(path: &Path) -> Result<Zeroizing<String>> {
     let mut contents = Zeroizing::new(String::new());
     fs::File::open(path)?
@@ -143,7 +177,7 @@ fn password_file(path: &Path) -> Result<Zeroizing<String>> {
     Ok(contents)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn initialize(
     dir: &daemon::DataDir,
     name: Option<String>,
@@ -168,11 +202,11 @@ fn initialize(
     };
     let reports = ReportDirectory::new(&dir.path.join("profile"))?;
     if let Some(modulus) = &modulus {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(dir.modulus())?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(dir.modulus())?;
         file.write_all(modulus)?;
     }
     let identity = match source {
@@ -195,10 +229,12 @@ fn initialize(
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn run_command(cli: Cli) -> Result<daemon::Reply> {
     use daemon::{MemberActionWire, Request};
+    early_log::checkpoint(Stage::ProfileOpen);
     let dir = daemon::DataDir::open(cli.data_dir)?;
+    early_log::checkpoint(Stage::ProfileReady);
     Ok(match cli.command {
         Command::Init {
             node_name,
@@ -225,7 +261,7 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         }
         Command::Status => match daemon::request(&dir, &Request::Status) {
             Ok(reply) => reply,
-            Err(_) if !dir.socket().exists() => daemon::Reply {
+            Err(_) if !dir.endpoint_exists() => daemon::Reply {
                 ok: true,
                 message: "Service stopped".into(),
                 data: json!({"phase":"stopped"}),
@@ -235,12 +271,12 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         Command::Stop => match daemon::request(&dir, &Request::Stop) {
             Ok(reply) => {
                 let until = Instant::now() + Duration::from_secs(10);
-                while dir.socket().exists() && Instant::now() < until {
+                while dir.endpoint_exists() && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 reply
             }
-            Err(_) if !dir.socket().exists() => daemon::Reply {
+            Err(_) if !dir.endpoint_exists() => daemon::Reply {
                 ok: true,
                 message: "Service already stopped".into(),
                 data: Value::Null,
@@ -321,40 +357,63 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
     })
 }
 
-#[cfg(unix)]
-fn print_reply(reply: &daemon::Reply, machine: bool) -> Result<()> {
+#[cfg(any(unix, windows))]
+fn print_reply(reply: &daemon::Reply, machine: bool, language: Language) -> Result<()> {
     if machine {
         println!("{}", serde_json::to_string(reply)?);
     } else if !reply.ok {
-        eprintln!("openrad: {}", reply.message);
-    } else if let Some(phase) = reply.data.get("phase").and_then(Value::as_str) {
+        eprintln!("openrad: {}", language.message(&reply.message));
+    } else {
+        println!("{}", human_reply(reply, language));
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+fn human_reply(reply: &daemon::Reply, language: Language) -> String {
+    let mut lines = Vec::new();
+    if let Some(phase) = reply.data.get("phase").and_then(Value::as_str) {
         if reply.data["start_command"] == true {
-            println!("{}", reply.message);
+            lines.push(language.message(&reply.message));
         }
-        println!("Service: {phase}");
+        lines.push(language.format("Service: {phase}", &[("phase", language.text(phase))]));
         if let Some(rid) = reply.data.get("rid") {
-            println!(
-                "Device: {} (RID {rid})",
-                reply.data["node_name"].as_str().unwrap_or("unknown")
+            lines.push(
+                language.format(
+                    "Device: {0} (RID {rid})",
+                    &[
+                        (
+                            "0",
+                            reply.data["node_name"]
+                                .as_str()
+                                .unwrap_or(language.text("unknown")),
+                        ),
+                        ("rid", &rid.to_string()),
+                    ],
+                ),
             );
         }
         if let Some(snapshot) = reply.data.get("snapshot").filter(|v| !v.is_null()) {
-            println!(
-                "VPN address: {}",
-                snapshot["vip"].as_str().unwrap_or("unknown")
-            );
-            println!(
-                "Interface: {}",
-                if reply.data["interface_disabled"] == true {
-                    "disabled"
-                } else if snapshot["interface_ready"] == true {
-                    "ready"
-                } else {
-                    "unavailable"
-                }
-            );
+            lines.push(language.format(
+                "VPN address: {0}",
+                &[(
+                    "0",
+                    snapshot["vip"].as_str().unwrap_or(language.text("unknown")),
+                )],
+            ));
+            let interface = if reply.data["interface_disabled"] == true {
+                "disabled"
+            } else if snapshot["interface_ready"] == true {
+                "ready"
+            } else {
+                "unavailable"
+            };
+            lines.push(language.format("Interface: {0}", &[("0", language.text(interface))]));
             if let Some(error) = snapshot["interface_error"].as_str() {
-                println!("Interface error: {error}");
+                lines.push(language.format(
+                    "Interface error: {error}",
+                    &[("error", &language.message(error))],
+                ));
             }
             let connected = snapshot["peers"]
                 .as_object()
@@ -365,17 +424,31 @@ fn print_reply(reply: &daemon::Reply, machine: bool) -> Result<()> {
                         .count()
                 })
                 .unwrap_or(0);
-            println!(
-                "Networks: {} · Peers connected: {connected}",
-                snapshot["networks"].as_array().map_or(0, Vec::len)
+            lines.push(
+                language.format(
+                    "Networks: {0} · Peers connected: {connected}",
+                    &[
+                        (
+                            "0",
+                            &snapshot["networks"]
+                                .as_array()
+                                .map_or(0, Vec::len)
+                                .to_string(),
+                        ),
+                        ("connected", &connected.to_string()),
+                    ],
+                ),
             );
         }
         if let Some(error) = reply.data["error"].as_str() {
-            println!("Last error: {error}");
+            lines.push(language.format(
+                "Last error: {error}",
+                &[("error", &language.message(error))],
+            ));
         }
     } else if let Some(networks) = reply.data.as_array() {
         if networks.is_empty() {
-            println!("No joined networks. Use `openrad join NAME` or `openrad create NAME --password-file FILE`.");
+            lines.push(language.text("No joined networks. Use `openrad join NAME` or `openrad create NAME --password-file FILE`.").to_owned());
         }
         for network in networks {
             let role = match network["role"].as_u64() {
@@ -384,54 +457,67 @@ fn print_reply(reply: &daemon::Reply, machine: bool) -> Result<()> {
                 Some(2) => "admin",
                 _ => "unknown",
             };
-            println!(
-                "{}  [{}]  {role}",
+            lines.push(format!(
+                "{}  [{}]  {}",
                 network["name"].as_str().unwrap_or("?"),
-                network["id"].as_str().unwrap_or("?")
-            );
+                network["id"].as_str().unwrap_or("?"),
+                language.text(role),
+            ));
         }
     } else if reply.data.get("id").is_some() {
-        println!("{}", reply.message);
-    } else if let Some(peers) = reply.data.as_object() {
-        if let Some(networks) = peers.get("networks").and_then(Value::as_array) {
+        lines.push(language.message(&reply.message));
+    } else if let Some(data) = reply.data.as_object() {
+        if let Some(networks) = data.get("networks").and_then(Value::as_array) {
             if networks.is_empty() {
-                println!("No public networks found.");
+                lines.push(language.text("No public networks found.").to_owned());
             }
             for network in networks {
-                println!(
-                    "{}  ({} members reported)",
-                    network["name"].as_str().unwrap_or("?"),
-                    network["reported_count"].as_u64().unwrap_or(0)
-                );
+                lines.push(language.format(
+                    "{0}  ({1} members reported)",
+                    &[
+                        ("0", network["name"].as_str().unwrap_or("?")),
+                        (
+                            "1",
+                            &network["reported_count"].as_u64().unwrap_or(0).to_string(),
+                        ),
+                    ],
+                ));
             }
-            if peers["cursor"] != 0 {
-                println!("Next page: --cursor {}", peers["cursor"]);
+            if data["cursor"] != 0 {
+                lines.push(language.format(
+                    "Next page: --cursor {0}",
+                    &[("0", &data["cursor"].to_string())],
+                ));
             }
+        } else if data.contains_key("identity") {
+            lines.push(language.message(&reply.message));
+            lines.push(language.format(
+                "Identity: {path}",
+                &[("path", &data["identity"].to_string())],
+            ));
         } else {
-            if peers.is_empty() {
-                println!("No peers in joined networks yet.");
+            if data.is_empty() {
+                lines.push(language.text("No peers in joined networks yet.").to_owned());
             }
-            for (rid, peer) in peers {
-                println!(
+            for (rid, peer) in data {
+                lines.push(format!(
                     "{rid}  {}  {}  {}  {}",
                     peer["peer"]["name"].as_str().unwrap_or("?"),
                     peer["peer"]["vip"].as_str().unwrap_or("?"),
-                    peer["status"].as_str().unwrap_or("?"),
-                    peer["detail"].as_str().unwrap_or("")
-                );
+                    language.text(peer["status"].as_str().unwrap_or("?")),
+                    language.message(peer["detail"].as_str().unwrap_or("")),
+                ));
             }
         }
     } else {
-        println!("{}", reply.message);
-        if let Some(path) = reply.data.get("identity") {
-            println!("Identity: {path}");
-        }
+        lines.push(language.message(&reply.message));
     }
-    Ok(())
+    lines.join("\n")
 }
 
 fn execute() -> Result<()> {
-    let cli = Cli::parse();
+    let (cli, language) = i18n::parse_localized::<Cli>(LanguagePreference::System);
+    early_log::command(cli.command.kind());
     if let Command::TapHelper {
         vip,
         owner,
@@ -445,27 +531,37 @@ fn execute() -> Result<()> {
         !tap::is_privileged(),
         "run OpenRad as your normal user; only the TAP helper uses sudo"
     );
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         let machine = cli.json;
         let reply = run_command(cli)?;
-        print_reply(&reply, machine)?;
+        early_log::reply(reply.ok, reply.data["error"].as_str());
+        print_reply(&reply, machine, language)?;
         if !reply.ok {
             std::process::exit(1);
         }
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         anyhow::bail!("persistent CLI service currently requires Unix")
     }
 }
 
 fn main() {
+    let args: Vec<_> = std::env::args_os().collect();
+    early_log::init(if args.iter().any(|arg| arg == "__daemon") {
+        "cli-daemon"
+    } else {
+        "cli"
+    });
+    let language = i18n::language_for_args(&args, LanguagePreference::System);
     if let Err(error) = execute() {
-        eprintln!("openrad: {error:#}");
+        early_log::fatal_error(&error);
+        eprintln!("openrad: {}", language.message(&format!("{error:#}")));
         std::process::exit(1);
     }
+    early_log::checkpoint(Stage::ProcessReturned);
 }
 
 #[cfg(test)]

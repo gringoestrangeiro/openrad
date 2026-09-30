@@ -229,7 +229,12 @@ impl Framed {
             )?
         };
         #[cfg(not(target_os = "linux"))]
-        let ready = self.ready(timeout_ms.min(50))?;
+        let ready = {
+            if wake.is_pending() {
+                return Ok(false);
+            }
+            self.ready(timeout_ms.min(50))?
+        };
         self.check_cancelled()?;
         Ok(ready)
     }

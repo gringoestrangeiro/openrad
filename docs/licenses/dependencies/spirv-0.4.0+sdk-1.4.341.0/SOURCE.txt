@@ -1,0 +1,4 @@
+Verbatim upstream Apache-2.0 license for spirv 0.4.0+sdk-1.4.341.0.
+Crate .cargo_vcs_info.json identifies gfx-rs/rspirv commit 8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4, path spirv.
+Source: https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE
+SHA-256: cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30

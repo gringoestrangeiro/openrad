@@ -1,6 +1,9 @@
 use crate::storage::{self, Paths, Settings};
 use anyhow::{ensure, Result};
-use openrad::{output::ReportDirectory, protocol::Identity, runtime, session::Session};
+use openrad::{
+    i18n::LanguagePreference, output::ReportDirectory, protocol::Identity, runtime,
+    session::Session,
+};
 use std::{
     collections::VecDeque,
     path::PathBuf,
@@ -24,6 +27,20 @@ pub enum Phase {
     Connected,
     Disconnecting,
     Error,
+}
+impl Phase {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Loading => "Loading",
+            Self::Disconnected => "Disconnected",
+            Self::Provisioning => "Provisioning",
+            Self::Resetting => "Resetting",
+            Self::Connecting => "Connecting",
+            Self::Connected => "Connected",
+            Self::Disconnecting => "Disconnecting",
+            Self::Error => "Error",
+        }
+    }
 }
 #[derive(Clone)]
 pub enum Notice {
@@ -70,9 +87,19 @@ pub struct Backend {
     stop: Arc<AtomicBool>,
 }
 impl Backend {
+    #[cfg(test)]
+    pub fn fixture() -> Self {
+        let (sender, _) = mpsc::channel();
+        Self {
+            sender,
+            notices: Notices::default(),
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
     pub fn spawn(
         paths: Paths,
         import: Option<PathBuf>,
+        language_override: Option<LanguagePreference>,
         options: runtime::Options,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -90,7 +117,15 @@ impl Backend {
                     wake();
                 }
             };
-            manager(paths, import, options, actions, cancel, Arc::new(report));
+            manager(
+                paths,
+                import,
+                language_override,
+                options,
+                actions,
+                cancel,
+                Arc::new(report),
+            );
         });
         Self {
             sender,
@@ -125,6 +160,7 @@ fn reconnect_delay(settings: &Settings, attempt: u32) -> Duration {
 fn manager(
     paths: Paths,
     import: Option<PathBuf>,
+    language_override: Option<LanguagePreference>,
     mut options: runtime::Options,
     actions: Receiver<Action>,
     stop: Arc<AtomicBool>,
@@ -139,6 +175,7 @@ fn manager(
     }
     let mut identity: Option<Identity> = None;
     let mut persisted = false;
+    crate::startup_log::checkpoint(crate::startup_log::Stage::BackendSettings);
     let mut settings = match paths.settings() {
         Ok(s) => s,
         Err(_) => {
@@ -150,10 +187,16 @@ fn manager(
             return;
         }
     };
+    if let Some(language) = language_override {
+        settings.language = language;
+    }
     report(Notice::Settings(settings.clone()));
     let load_result = (|| -> Result<()> {
+        crate::startup_log::checkpoint(crate::startup_log::Stage::BackendVault);
         let vault = paths.entry()?;
+        crate::startup_log::checkpoint(crate::startup_log::Stage::BackendIdentity);
         identity = storage::load(&vault)?;
+        crate::startup_log::checkpoint(crate::startup_log::Stage::BackendIdentityReady);
         if let Some(path) = import {
             let imported = Identity::load(&path)?;
             ensure!(identity.as_ref().is_none_or(|i| i.rid == imported.rid), "This profile already has an identity; use another data directory to import a different one");
@@ -163,6 +206,10 @@ fn manager(
         persisted = identity.is_some();
         Ok(())
     })();
+    if let Err(error) = &load_result {
+        crate::startup_log::fatal_error(error);
+    }
+    crate::startup_log::checkpoint(crate::startup_log::Stage::BackendReady);
     let mut want_connect = settings.auto_connect && load_result.is_ok();
     match load_result {
         Ok(()) => report(Notice::Phase(
@@ -323,7 +370,7 @@ fn manager(
                         "consecutive_failures": retries,
                         "delay_ms": if can_retry { Some(retry_at.saturating_duration_since(Instant::now()).as_millis()) } else { None },
                     }));
-                    report(Notice::Phase(Phase::Error, format!("{e:#}.{suffix}")));
+                    report(Notice::Phase(Phase::Error, format!("{e:#}{suffix}")));
                 }
                 _ => {}
             }

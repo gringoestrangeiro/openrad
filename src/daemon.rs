@@ -1,23 +1,29 @@
 //! Per-user CLI service and bounded local control protocol.
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
+#[cfg(windows)]
+#[path = "platform/windows_pipe.rs"]
+mod windows_pipe;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use openrad::{
     diagnostics::Diagnostics,
+    early_log::{self, Stage},
     network::{MemberAction, NetworkPassword, NetworkRequest},
     protocol::Identity,
     runtime::{self, Command, Snapshot, Update},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::{
+    fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    net::{UnixListener, UnixStream},
+};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    os::unix::{
-        fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-        net::{UnixListener, UnixStream},
-    },
     path::PathBuf,
     process::{Child, Command as ProcessCommand, Stdio},
     sync::{
@@ -31,6 +37,7 @@ use std::{
 
 const REQUEST_LIMIT: u64 = 64 * 1024;
 const REPLY_LIMIT: u64 = 8 * 1024 * 1024;
+#[cfg(unix)]
 const SOCKET: &str = "control.sock";
 
 #[derive(Clone)]
@@ -42,6 +49,7 @@ impl DataDir {
         let path = match override_path {
             Some(path) => path,
             None => {
+                #[cfg(unix)]
                 let base = std::env::var_os("XDG_STATE_HOME")
                     .map(PathBuf::from)
                     .or_else(|| {
@@ -49,6 +57,10 @@ impl DataDir {
                             .map(|home| PathBuf::from(home).join(".local/state"))
                     })
                     .context("Set HOME or use --data-dir")?;
+                #[cfg(windows)]
+                let base = std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .context("Set LOCALAPPDATA or use --data-dir")?;
                 base.join("openrad")
             }
         };
@@ -58,28 +70,45 @@ impl DataDir {
             std::env::current_dir()?.join(path)
         };
         let mut builder = fs::DirBuilder::new();
-        builder.recursive(true).mode(0o700);
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
         builder.create(&path)?;
         let path = path.canonicalize()?;
         let meta = fs::metadata(&path)?;
         ensure!(meta.is_dir(), "data path is not a directory");
+        #[cfg(unix)]
         ensure!(
             meta.uid() == unsafe { libc::getuid() },
             "data directory must be owned by the current user"
         );
+        #[cfg(unix)]
         ensure!(
             meta.mode() & 0o077 == 0,
             "data directory must have mode 0700: {}",
             path.display()
         );
+        #[cfg(unix)]
         ensure!(
             path.join(SOCKET).as_os_str().len() < 100,
             "data directory path is too long for a Unix socket"
         );
+        openrad::output::secure_directory(&path)?;
         Ok(Self { path })
     }
+    #[cfg(unix)]
     pub fn socket(&self) -> PathBuf {
         self.path.join(SOCKET)
+    }
+    pub fn endpoint_exists(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.socket().exists()
+        }
+        #[cfg(windows)]
+        {
+            windows_pipe::exists(&self.path)
+        }
     }
     pub fn identity(&self) -> PathBuf {
         self.path.join("profile/identity.json")
@@ -88,13 +117,13 @@ impl DataDir {
         self.path.join("profile/modulus.bin")
     }
     fn lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(self.path.join("service.lock"))?;
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let file = options.open(self.path.join("service.lock"))?;
         file.try_lock()
             .context("OpenRad service is already running for this profile")?;
         Ok(file)
@@ -192,6 +221,7 @@ impl Reply {
         }
     }
 }
+#[cfg(unix)]
 fn read_bounded(stream: &mut UnixStream, limit: u64) -> Result<Vec<u8>> {
     let mut data = Vec::new();
     stream.take(limit + 1).read_to_end(&mut data)?;
@@ -201,6 +231,7 @@ fn read_bounded(stream: &mut UnixStream, limit: u64) -> Result<Vec<u8>> {
     );
     Ok(data)
 }
+#[cfg(unix)]
 pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
     let mut stream = UnixStream::connect(dir.socket())
         .context("Service is stopped. Run `openrad start` first")?;
@@ -210,6 +241,21 @@ pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
     stream.shutdown(std::net::Shutdown::Write)?;
     let bytes = read_bounded(&mut stream, REPLY_LIMIT)?;
     ensure!(!bytes.is_empty(), "service closed the control connection");
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[cfg(windows)]
+pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
+    let mut stream = windows_pipe::Connection::connect(&dir.path)
+        .context("Service is stopped. Run `openrad start` first")?;
+    let payload = serde_json::to_vec(command)?;
+    ensure!(
+        payload.len() as u64 <= REQUEST_LIMIT,
+        "local control message too large"
+    );
+    stream.write_message(&payload, Duration::from_secs(5))?;
+    let bytes = stream.read_message(REPLY_LIMIT, Duration::from_secs(35))?;
+    stream.acknowledge()?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
@@ -480,6 +526,7 @@ fn supervisor(
     disable_interface: bool,
 ) {
     let diagnostics = Diagnostics::open(&dir.path.join("diagnostics")).unwrap_or_default();
+    early_log::checkpoint(Stage::SessionStarting);
     let mut failures = 0u32;
     while !shared.shutdown.load(Ordering::Relaxed) {
         let (tx, rx) = mpsc::channel();
@@ -509,6 +556,9 @@ fn supervisor(
         if shared.shutdown.load(Ordering::Relaxed) {
             break;
         }
+        if let Err(error) = &outcome {
+            early_log::fatal_error(error);
+        }
         let error = outcome
             .err()
             .map(|e| format!("{e:#}"))
@@ -527,6 +577,7 @@ fn supervisor(
     shared.disconnected("Service stopped".into());
 }
 
+#[cfg(unix)]
 fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -547,9 +598,12 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
+    early_log::checkpoint(Stage::ServiceProfileLoading);
     let identity = dir.load_identity()?;
     let modulus = dir.load_modulus()?;
+    early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let socket = dir.socket();
     match fs::symlink_metadata(&socket) {
@@ -594,46 +648,116 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn serve_connection(mut stream: windows_pipe::Connection, shared: Arc<Shared>) -> Result<()> {
+    let bytes = stream.read_message(REQUEST_LIMIT, Duration::from_secs(5))?;
+    let command: Request = serde_json::from_slice(&bytes)?;
+    let stopping = matches!(&command, Request::Stop);
+    let payload = serde_json::to_vec(&shared.handle(command))?;
+    ensure!(
+        payload.len() as u64 <= REPLY_LIMIT,
+        "control reply too large"
+    );
+    stream.write_message(&payload, Duration::from_secs(5))?;
+    let acknowledged = stream.wait_for_acknowledgement();
+    if stopping {
+        shared.stop();
+    }
+    acknowledged?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
+    early_log::checkpoint(Stage::ServiceProfileLoading);
+    let identity = dir.load_identity()?;
+    let modulus = dir.load_modulus()?;
+    early_log::checkpoint(Stage::ServiceLock);
+    let _lock = dir.lock()?;
+    let mut listener = windows_pipe::Listener::bind(&dir.path)?;
+    early_log::checkpoint(Stage::ServiceListening);
+    let shared = Arc::new(Shared::new(&identity, disable_interface));
+    let worker_shared = shared.clone();
+    let worker =
+        thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
+    let result = (|| -> Result<()> {
+        while !shared.shutdown.load(Ordering::Relaxed) {
+            if let Some(stream) = listener.accept()? {
+                let shared = shared.clone();
+                thread::spawn(move || {
+                    let _ = serve_connection(stream, shared);
+                });
+            } else {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        Ok(())
+    })();
+    shared.stop();
+    worker
+        .join()
+        .map_err(|_| anyhow!("service supervisor panicked"))?;
+    result
+}
+
 pub fn spawn(dir: &DataDir, disable_interface: bool) -> Result<bool> {
+    early_log::checkpoint(Stage::ServiceStarting);
     dir.load_identity()?;
     if request(dir, &Request::Status).is_ok() {
         return Ok(false);
     }
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(dir.path.join("service.log"))?;
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let log = options.open(dir.path.join("service.log"))?;
     let mut command = ProcessCommand::new(std::env::current_exe()?);
     command.arg("--data-dir").arg(&dir.path).arg("__daemon");
     if disable_interface {
         command.arg("--no-tap");
     }
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
     let mut child: Child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log))
         .spawn()?;
+    early_log::child_started(child.id());
     let until = Instant::now() + Duration::from_secs(5);
     loop {
         if request(dir, &Request::Status).is_ok() {
+            early_log::checkpoint(Stage::ServiceReady);
             return Ok(true);
         }
         if let Some(status) = child.try_wait()? {
+            early_log::child_exited(status);
+            early_log::checkpoint(Stage::ServiceExited);
             bail!(
                 "service exited with {status}; see {}",
                 dir.path.join("service.log").display()
             );
+        }
+        if Instant::now() >= until {
+            early_log::checkpoint(Stage::ServiceTimeout);
         }
         ensure!(
             Instant::now() < until,

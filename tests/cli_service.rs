@@ -1,9 +1,10 @@
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use serde_json::Value;
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::{
     fs,
-    os::unix::fs::{FileTypeExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -57,6 +58,7 @@ fn detached_service_survives_cli_exit_rejects_commands_offline_and_stops_cleanly
     let imported = harness.ok(&["init", "--identity", identity.to_str().unwrap()]);
     assert_eq!(imported["data"]["rid"], 123);
     assert!(Path::new(imported["data"]["identity"].as_str().unwrap()).exists());
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(harness.dir.join("state"))
             .unwrap()
@@ -67,6 +69,7 @@ fn detached_service_survives_cli_exit_rejects_commands_offline_and_stops_cleanly
     );
 
     harness.ok(&["start", "--no-tap"]);
+    #[cfg(unix)]
     assert!(fs::symlink_metadata(harness.dir.join("state/control.sock"))
         .unwrap()
         .file_type()
@@ -84,6 +87,7 @@ fn detached_service_survives_cli_exit_rejects_commands_offline_and_stops_cleanly
     assert_eq!(join_reply["ok"], false);
 
     harness.ok(&["stop"]);
+    #[cfg(unix)]
     assert!(!harness.dir.join("state/control.sock").exists());
     assert_eq!(harness.ok(&["status"])["data"]["phase"], "stopped");
 }

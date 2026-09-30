@@ -13,12 +13,12 @@ OpenRad is a Cargo workspace with a reusable library (`openrad`), a CLI (`openra
 | `incoming` | Bounded incoming offers, candidate setup, and acceptor authentication |
 | `udp` | UDP endpoint discovery, rendezvous, and reliable datagrams |
 | `tunnel` | Ethernet envelopes, address checks, and forwarding rules |
-| `tap` / `platform` | Linux interface setup and descriptor lifecycle |
+| `tap` / `platform` | Linux TAP descriptor lifecycle and Windows TAP-Windows6 overlapped I/O, IP configuration and cleanup |
 | `runtime` | Long-lived engine shared by the desktop and CLI service, with live snapshots |
 | `wake` | Private, coalesced queue/cancellation notifications for socket and TAP waits |
 | `client` | Bounded diagnostic sessions retained in the library |
 | `output` | Private JSON reports and explicit identity persistence |
-| `src/daemon.rs` | Per-user CLI service, Unix-socket commands, reconnection supervisor, and profile isolation |
+| `src/daemon.rs` | Per-user CLI service, Unix-socket/Windows named-pipe commands, reconnection supervisor, and profile isolation |
 
 ## Peer transport lifecycle
 
@@ -34,7 +34,7 @@ A path reported as Direct TCP or Direct UDP identifies the selected peer socket.
 
 The engine validates each outbound Ethernet frame once. A virtual-IP index selects unicast and directed ARP recipients; group traffic visits eligible members in RID order. Workers still check membership, traffic policy, authentication, and the destination MAC before queueing. Immutable frames are shared across bounded peer queues. Each peer reuses its own envelope/encryption buffer, and received encrypted records are decrypted in their owned transport buffer.
 
-On Linux, established workers wait on their socket and a coalesced `eventfd` notification. Queued frames and cancellation wake the same wait; reliable UDP retransmission and keepalive deadlines bound it. The engine similarly waits for TAP readiness and peer/control events. External command and cancellation checks remain bounded by 50 ms. Other supported control-only platforms use a condition-variable notification fallback. These notifications are local and add no network bytes.
+On Linux, established workers wait on their socket and a coalesced `eventfd` notification. Queued frames and cancellation wake the same wait; reliable UDP retransmission and keepalive deadlines bound it. The engine similarly waits for TAP readiness and peer/control events. Windows uses manual-reset events for local notifications and TAP overlapped-read completion, with `WaitForMultipleObjects` in the engine; established socket workers retain bounded portable polling. External command and cancellation checks remain bounded by 50 ms outside interface setup. Other control-only platforms use a condition-variable notification fallback. These notifications are local and add no network bytes.
 
 Desktop peer lists borrow the current snapshot. Consecutive queued state snapshots are coalesced, preserving phase transitions and operation results as ordered barriers. See [performance](performance.md) for isolated measurements and validation scope.
 
@@ -44,12 +44,16 @@ The CLI and desktop use the same `NetworkOperation` state machine for creation, 
 
 Network passwords use masked desktop fields or a CLI password file, are redacted from command debugging, and are not stored in settings or operational reports. A timeout leaves a mutation's outcome unknown; the desktop disconnects and reloads service state before accepting further operations.
 
-The application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
+On Linux the application runs unprivileged. The Linux adapter invokes a short-lived helper through `sudo` to create a nonpersistent TAP interface, configure it, and pass its file descriptor back over a Unix socket. Closing the last descriptor removes the interface and associated routes. Existing interfaces are not replaced.
 
-The desktop stores identities in the platform credential store and settings in its profile directory. Provisioning and reset logic are isolated from the GUI; tests use an in-memory vault. The CLI saves a provisioned or imported identity under its private data directory. A per-user Unix socket accepts bounded local commands; a lock prevents a second service for the same profile. The service reuses the desktop engine to keep peer channels and TAP alive between commands and reconnects to the server after failures.
+Windows requires an elevated application and an installed, dedicated TAP-Windows6 adapter named `OpenRad`. SetupAPI device software keys verify the `tap0901` component and obtain its GUID without scanning protected unrelated registry children; an exclusive overlapped handle opens the documented `.tap` device. The backend reads the driver version/MAC/MTU, uses its media-status IOCTL, and retains Layer 2 mode. Ethernet/IPv4 ARP header MAC translation adapts the installed adapter MAC to the protocol's deterministic VPN MAC. IP Helper APIs add the session's IPv4 address and on-link routes. Cleanup cancels and completes pending I/O, removes only addresses/routes created by this instance, restores adjusted interface/group-route metrics, and disconnects media. The installed adapter remains. Forced termination can leave ActiveStore configuration and temporary metrics; see [Windows recovery and validation](windows.md).
+
+The offline Windows setup embeds application files and the signed TAP package with its corresponding source and licenses. A short-lived native worker stages the INF through SetupAPI and installs one dedicated root-enumerated device. Adapter selection, payload hashes and ownership records make repeated setup reuse or repair the installation. The NSIS launcher checks registration, opens/focuses the desktop by default and accepts `--no-launch` for CLI use. Uninstall removes only the recorded adapter created by setup. GUI startup requests UAC automatically; this build has no persistent privileged networking service.
+
+The desktop stores identities in the platform credential store (Windows Credential Manager or Linux Secret Service) and settings in its profile directory. Provisioning and reset logic are isolated from the GUI; tests use an in-memory vault. The CLI saves a provisioned or imported identity under its private data directory. A per-user Unix socket or Windows named pipe accepts bounded local commands; a lock prevents a second service for the same profile. Windows profile ACLs and pipe ACLs grant access to the current user and SYSTEM, pipe clients use identification-level SQOS, and the pipe rejects remote clients. Windows control messages are length-prefixed and acknowledge replies; reads/writes have bounded deadlines. The service reuses the desktop engine to keep peer channels and TAP alive between commands and reconnects to the server after failures.
 
 Operational reporting does not log session keys, authentication passwords, handshake secrets, or Ethernet payloads. Synthetic fixtures exercise protocol and cryptographic behavior without real accounts or live recordings.
 
 ## Current scope
 
-Linux is the implemented TAP platform. Relay is a valid outcome for peers that cannot establish a direct channel. Difficult NAT combinations, long-running recovery behavior, and other operating-system data planes remain areas for further work. Protocol compatibility is not a claim of a completed security audit.
+Linux TAP is runtime-tested. Windows TAP-Windows6 is experimental and cross-built on Linux. The tester reports successful operation on Windows 10; other Windows versions and broader networking configurations still need validation. Windows dual-stack TCP/UDP listeners explicitly permit IPv4-mapped traffic, and interface inventory uses `GetAdaptersAddresses`. Relay is a valid outcome for peers that cannot establish a direct channel. Difficult NAT combinations, long-running recovery behavior, Windows deployment, and other operating-system data planes remain areas for further testing/work. Protocol compatibility is not a claim of a completed security audit.

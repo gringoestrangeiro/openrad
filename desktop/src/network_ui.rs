@@ -1,6 +1,9 @@
 //! Private-network forms; credentials stay in memory and are cleared on dismissal.
 use eframe::egui::{self, Color32, RichText};
-use openrad::network::{validate_name, MemberAction, NetworkPassword, NetworkRequest};
+use openrad::{
+    i18n::Language,
+    network::{validate_name, MemberAction, NetworkPassword, NetworkRequest},
+};
 use zeroize::Zeroizing;
 
 fn show_modal(ctx: &egui::Context, id: &str, contents: impl FnOnce(&mut egui::Ui)) {
@@ -60,22 +63,31 @@ impl NetworkForm {
             },
         })
     }
-    pub fn show(&mut self, ctx: &egui::Context, enabled: bool) -> Option<FormEvent> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        enabled: bool,
+        language: Language,
+    ) -> Option<FormEvent> {
         let mut event = None;
         show_modal(ctx, "private-network-form", |ui| {
             ui.heading(if self.mode == Mode::Create {
-                "Create a private network"
+                language.text("Create a private network")
             } else {
-                "Join a private network"
+                language.text("Join a private network")
             });
             ui.add_space(10.);
             ui.label(if self.mode == Mode::Create {
-                "Share the exact network name and password with the people you want to join."
+                language.text(
+                    "Share the exact network name and password with the people you want to join.",
+                )
             } else {
-                "Enter the exact network name and the password shared by its administrator."
+                language.text(
+                    "Enter the exact network name and the password shared by its administrator.",
+                )
             });
             ui.add_space(12.);
-            let label = ui.label("Network name");
+            let label = ui.label(language.text("Network name"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.name)
                     .desired_width(f32::INFINITY)
@@ -83,7 +95,7 @@ impl NetworkForm {
             )
             .labelled_by(label.id);
             ui.add_space(8.);
-            let label = ui.label("Password");
+            let label = ui.label(language.text("Password"));
             ui.add(
                 egui::TextEdit::singleline(&mut *self.password)
                     .password(!self.show_password)
@@ -93,7 +105,7 @@ impl NetworkForm {
             .labelled_by(label.id);
             if self.mode == Mode::Create {
                 ui.add_space(8.);
-                let label = ui.label("Confirm password");
+                let label = ui.label(language.text("Confirm password"));
                 ui.add(
                     egui::TextEdit::singleline(&mut *self.confirmation)
                         .password(!self.show_password)
@@ -102,13 +114,19 @@ impl NetworkForm {
                 )
                 .labelled_by(label.id);
             }
-            ui.checkbox(&mut self.show_password, "Show password");
-            ui.small("Use at least 6 characters. The password is not saved in your profile.");
+            ui.checkbox(&mut self.show_password, language.text("Show password"));
+            ui.small(
+                language
+                    .text("Use at least 6 characters. The password is not saved in your profile."),
+            );
             if let Some(error) = &self.error {
-                ui.label(RichText::new(error).color(Color32::LIGHT_RED));
+                ui.label(RichText::new(language.message(error)).color(Color32::LIGHT_RED));
             }
             if !enabled {
-                ui.label("Connect your device and wait for the current operation to finish.");
+                ui.label(
+                    language
+                        .text("Connect your device and wait for the current operation to finish."),
+                );
             }
             ui.add_space(12.);
             ui.horizontal(|ui| {
@@ -116,9 +134,9 @@ impl NetworkForm {
                     .add_enabled(
                         enabled,
                         egui::Button::new(if self.mode == Mode::Create {
-                            "Create network"
+                            language.text("Create network")
                         } else {
-                            "Join network"
+                            language.text("Join network")
                         }),
                     )
                     .clicked()
@@ -128,7 +146,7 @@ impl NetworkForm {
                         Err(error) => self.error = Some(error.to_string()),
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(language.text("Cancel")).clicked() {
                     event = Some(FormEvent::Close);
                 }
             });
@@ -162,26 +180,34 @@ impl MemberConfirmation {
                 MemberAction::Kick => true,
             }
     }
-    pub fn show(&self, ctx: &egui::Context, enabled: bool) -> Option<FormEvent> {
+    pub fn show(
+        &self,
+        ctx: &egui::Context,
+        enabled: bool,
+        language: Language,
+    ) -> Option<FormEvent> {
         let mut event = None;
         show_modal(ctx, "member-management-confirmation", |ui| {
-            ui.heading(self.action.label());
+            ui.heading(language.text(self.action.label()));
             ui.add_space(10.);
             ui.label(format!("{} · {}", self.member_name, self.member));
-            ui.label(format!("Network: {}", self.network_name));
+            ui.label(language.message(&format!("Network: {}", self.network_name)));
             ui.add_space(10.);
             ui.label(match self.action {
-                MemberAction::Kick => "Remove this member from this network? They can rejoin if they know its password.",
-                MemberAction::GrantAdmin => "Give this member permission to manage this network and its members?",
-                MemberAction::RevokeAdmin => "Remove this member's administration permissions? They will remain a network member.",
+                MemberAction::Kick => language.text("Remove this member from this network? They can rejoin if they know its password."),
+                MemberAction::GrantAdmin => language.text("Give this member permission to manage this network and its members?"),
+                MemberAction::RevokeAdmin => language.text("Remove this member's administration permissions? They will remain a network member."),
             });
             if !enabled {
-                ui.label("This member or your administration permissions have changed. Close this dialog to refresh your selection.");
+                ui.label(language.text("This member or your administration permissions have changed. Close this dialog to refresh your selection."));
             }
             ui.add_space(12.);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(enabled, egui::Button::new(self.action.label()))
+                    .add_enabled(
+                        enabled,
+                        egui::Button::new(language.text(self.action.label())),
+                    )
                     .clicked()
                 {
                     event = Some(FormEvent::Submit(NetworkRequest::Member {
@@ -190,7 +216,7 @@ impl MemberConfirmation {
                         action: self.action,
                     }));
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(language.text("Cancel")).clicked() {
                     event = Some(FormEvent::Close);
                 }
             });
@@ -217,26 +243,34 @@ impl DeleteConfirmation {
                 .and_then(|roles| roles.get(&own))
                 == Some(&2)
     }
-    pub fn show(&self, ctx: &egui::Context, enabled: bool) -> Option<FormEvent> {
+    pub fn show(
+        &self,
+        ctx: &egui::Context,
+        enabled: bool,
+        language: Language,
+    ) -> Option<FormEvent> {
         let mut event = None;
         show_modal(ctx, "delete-network-confirmation", |ui| {
-            ui.heading("Delete network?");
+            ui.heading(language.text("Delete network?"));
             ui.label(RichText::new(&self.name).strong());
             ui.add_space(10.);
-            ui.label("This permanently deletes the network and removes every member. This cannot be undone.");
+            ui.label(language.text("This permanently deletes the network and removes every member. This cannot be undone."));
             if !enabled {
-                ui.label("Connect and check that you still administer this network.");
+                ui.label(
+                    language.text("Connect and check that you still administer this network."),
+                );
             }
             ui.add_space(12.);
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(language.text("Cancel")).clicked() {
                     event = Some(FormEvent::Close);
                 }
                 if ui
                     .add_enabled(
                         enabled,
                         egui::Button::new(
-                            RichText::new("Delete for everyone").color(Color32::LIGHT_RED),
+                            RichText::new(language.text("Delete for everyone"))
+                                .color(Color32::LIGHT_RED),
                         ),
                     )
                     .clicked()
@@ -253,12 +287,12 @@ impl DeleteConfirmation {
         event
     }
 }
-pub fn role_label(role: Option<u32>) -> &'static str {
+pub fn role_label(role: Option<u32>, language: Language) -> &'static str {
     match role {
-        Some(0) => "Pending approval",
-        Some(1) => "Member",
-        Some(2) => "Admin",
-        _ => "Role unavailable",
+        Some(0) => language.text("Pending approval"),
+        Some(1) => language.text("Member"),
+        Some(2) => language.text("Admin"),
+        _ => language.text("Role unavailable"),
     }
 }
 
@@ -322,6 +356,7 @@ mod interaction_tests {
         show: &mut impl FnMut(&egui::Context) -> Option<FormEvent>,
     ) -> Option<FormEvent> {
         let ctx = egui::Context::default();
+        crate::app::configure(&ctx);
         ctx.enable_accesskit();
         frame(&ctx, vec![], show);
         let (out, event) = frame(&ctx, vec![], show);
@@ -369,37 +404,46 @@ mod interaction_tests {
     }
     #[test]
     fn private_form_buttons_submit_shared_requests_and_respect_disabled_state() {
-        for mode in [Mode::Create, Mode::Join] {
-            let mut form = NetworkForm::new(mode);
-            form.name = "Synthetic network".into();
-            *form.password = "synthetic password".into();
-            *form.confirmation = "synthetic password".into();
-            let button = if mode == Mode::Create {
-                "Create network"
-            } else {
-                "Join network"
-            };
-            assert!(click(button, &mut |ctx| form.show(ctx, false)).is_none());
-            let event = click(button, &mut |ctx| form.show(ctx, true)).unwrap();
-            assert!(matches!(
-                (mode, event),
-                (
-                    Mode::Create,
-                    FormEvent::Submit(NetworkRequest::Create { .. })
-                ) | (
-                    Mode::Join,
-                    FormEvent::Submit(NetworkRequest::Join {
-                        password: Some(_),
-                        ..
-                    })
-                )
-            ));
-            assert!(matches!(
-                click("Cancel", &mut |ctx| form.show(ctx, true)),
-                Some(FormEvent::Close)
-            ));
+        for language in Language::ALL {
+            for mode in [Mode::Create, Mode::Join] {
+                let mut form = NetworkForm::new(mode);
+                form.name = "Synthetic network".into();
+                *form.password = "synthetic password".into();
+                *form.confirmation = "synthetic password".into();
+                let button = if mode == Mode::Create {
+                    "Create network"
+                } else {
+                    "Join network"
+                };
+                assert!(click(language.text(button), &mut |ctx| form
+                    .show(ctx, false, language))
+                .is_none());
+                let event = click(language.text(button), &mut |ctx| {
+                    form.show(ctx, true, language)
+                })
+                .unwrap();
+                assert!(matches!(
+                    (mode, event),
+                    (
+                        Mode::Create,
+                        FormEvent::Submit(NetworkRequest::Create { .. })
+                    ) | (
+                        Mode::Join,
+                        FormEvent::Submit(NetworkRequest::Join {
+                            password: Some(_),
+                            ..
+                        })
+                    )
+                ));
+                assert!(matches!(
+                    click(language.text("Cancel"), &mut |ctx| form
+                        .show(ctx, true, language)),
+                    Some(FormEvent::Close)
+                ));
+            }
         }
     }
+
     fn snapshot() -> Snapshot {
         let mut snapshot = Snapshot::default();
         snapshot.networks.push(Network {
@@ -429,56 +473,68 @@ mod interaction_tests {
     }
     #[test]
     fn member_dialog_confirms_exact_member_and_blocks_stale_permissions() {
-        let mut state = snapshot();
-        for action in [
-            MemberAction::Kick,
-            MemberAction::GrantAdmin,
-            MemberAction::RevokeAdmin,
-        ] {
-            state.roles.get_mut("network").unwrap().insert(
-                2,
-                if action == MemberAction::RevokeAdmin {
-                    2
-                } else {
-                    1
-                },
-            );
-            let dialog = MemberConfirmation {
+        for language in Language::ALL {
+            let mut state = snapshot();
+            for action in [
+                MemberAction::Kick,
+                MemberAction::GrantAdmin,
+                MemberAction::RevokeAdmin,
+            ] {
+                state.roles.get_mut("network").unwrap().insert(
+                    2,
+                    if action == MemberAction::RevokeAdmin {
+                        2
+                    } else {
+                        1
+                    },
+                );
+                let dialog = MemberConfirmation {
+                    network: "network".into(),
+                    network_name: "Test".into(),
+                    member: 2,
+                    member_name: "Test member".into(),
+                    action,
+                };
+                assert!(dialog.allowed(&state, 1));
+                assert!(!dialog.allowed(&state, 2));
+                assert!(click(language.text(action.label()), &mut |ctx| dialog
+                    .show(ctx, false, language))
+                .is_none());
+                assert!(
+                    matches!(click(language.text(action.label()), &mut |ctx| dialog.show(ctx, true, language)), Some(FormEvent::Submit(NetworkRequest::Member { member: 2, action: actual, .. })) if actual == action)
+                );
+                state.roles.get_mut("network").unwrap().insert(1, 1);
+                assert!(!dialog.allowed(&state, 1));
+                state.roles.get_mut("network").unwrap().insert(1, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn delete_dialog_requires_current_admin_and_explicit_confirmation() {
+        for language in Language::ALL {
+            let mut state = snapshot();
+            let dialog = DeleteConfirmation {
                 network: "network".into(),
-                network_name: "Test".into(),
-                member: 2,
-                member_name: "Test member".into(),
-                action,
+                name: "Test".into(),
             };
             assert!(dialog.allowed(&state, 1));
             assert!(!dialog.allowed(&state, 2));
-            assert!(click(action.label(), &mut |ctx| dialog.show(ctx, false)).is_none());
             assert!(
-                matches!(click(action.label(), &mut |ctx| dialog.show(ctx, true)), Some(FormEvent::Submit(NetworkRequest::Member { member: 2, action: actual, .. })) if actual == action)
+                click(language.text("Delete for everyone"), &mut |ctx| dialog
+                    .show(ctx, false, language))
+                .is_none()
             );
-            state.roles.get_mut("network").unwrap().insert(1, 1);
+            assert!(matches!(
+                click(language.text("Cancel"), &mut |ctx| dialog
+                    .show(ctx, true, language)),
+                Some(FormEvent::Close)
+            ));
+            assert!(
+                matches!(click(language.text("Delete for everyone"), &mut |ctx| dialog.show(ctx, true, language)), Some(FormEvent::Submit(NetworkRequest::Delete { network })) if network == "network")
+            );
+            state.networks.clear();
             assert!(!dialog.allowed(&state, 1));
-            state.roles.get_mut("network").unwrap().insert(1, 2);
         }
-    }
-    #[test]
-    fn delete_dialog_requires_current_admin_and_explicit_confirmation() {
-        let mut state = snapshot();
-        let dialog = DeleteConfirmation {
-            network: "network".into(),
-            name: "Test".into(),
-        };
-        assert!(dialog.allowed(&state, 1));
-        assert!(!dialog.allowed(&state, 2));
-        assert!(click("Delete for everyone", &mut |ctx| dialog.show(ctx, false)).is_none());
-        assert!(matches!(
-            click("Cancel", &mut |ctx| dialog.show(ctx, true)),
-            Some(FormEvent::Close)
-        ));
-        assert!(
-            matches!(click("Delete for everyone", &mut |ctx| dialog.show(ctx, true)), Some(FormEvent::Submit(NetworkRequest::Delete { network })) if network == "network")
-        );
-        state.networks.clear();
-        assert!(!dialog.allowed(&state, 1));
     }
 }

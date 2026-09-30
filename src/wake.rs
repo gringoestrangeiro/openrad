@@ -1,7 +1,9 @@
 //! Coalesced local notifications for socket/queue waits. No network bytes.
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
+#[cfg(not(any(target_os = "linux", windows)))]
 use std::sync::{Condvar, Mutex};
 use std::{
     io,
@@ -9,11 +11,18 @@ use std::{
     time::Duration,
 };
 
+#[cfg(windows)]
+pub(crate) type WaitSource = std::os::windows::io::RawHandle;
+#[cfg(not(windows))]
+pub(crate) type WaitSource = i32;
+
 pub(crate) struct Wake {
     pending: AtomicBool,
     #[cfg(target_os = "linux")]
     fd: OwnedFd,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    event: OwnedHandle,
+    #[cfg(not(any(target_os = "linux", windows)))]
     parked: (Mutex<()>, Condvar),
 }
 impl Wake {
@@ -31,7 +40,9 @@ impl Wake {
             pending: AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             fd,
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(windows)]
+            event: crate::windows_io::event()?,
+            #[cfg(not(any(target_os = "linux", windows)))]
             parked: (Mutex::new(()), Condvar::new()),
         })
     }
@@ -52,7 +63,14 @@ impl Wake {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            // SAFETY: owned manual-reset event remains live for this call.
+            unsafe {
+                windows_sys::Win32::System::Threading::SetEvent(self.event.as_raw_handle());
+            }
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _guard = self.parked.0.lock().unwrap();
             self.parked.1.notify_one();
@@ -74,13 +92,17 @@ impl Wake {
                 }
             }
         }
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::System::Threading::ResetEvent(self.event.as_raw_handle());
+        }
     }
     pub fn is_pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
     /// Wait for the local notification and, optionally, a socket/TAP descriptor.
     /// Returns true only for network/interface readiness; local work wakes false.
-    pub fn wait(&self, network_fd: Option<i32>, timeout: Duration) -> io::Result<bool> {
+    pub fn wait(&self, network_fd: Option<WaitSource>, timeout: Duration) -> io::Result<bool> {
         if self.is_pending() {
             return Ok(false);
         }
@@ -109,7 +131,33 @@ impl Wake {
             }
             Ok(fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::{
+                Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+                System::Threading::WaitForMultipleObjects,
+            };
+            let handles = [
+                self.event.as_raw_handle(),
+                network_fd.unwrap_or(self.event.as_raw_handle()),
+            ];
+            let count = if network_fd.is_some() { 2 } else { 1 };
+            let milliseconds = timeout
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min((u32::MAX - 1) as u128) as u32;
+            // SAFETY: all handles stay alive throughout this bounded wait.
+            let result =
+                unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, milliseconds) };
+            if result == WAIT_OBJECT_0 + 1 {
+                Ok(true)
+            } else if result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT {
+                Ok(false)
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = network_fd;
             let guard = self.parked.0.lock().unwrap();

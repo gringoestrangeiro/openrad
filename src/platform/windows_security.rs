@@ -1,0 +1,178 @@
+//! Current-user-only ACLs for profile directories and local control pipes.
+use crate::windows_io;
+use std::{
+    io,
+    os::windows::{ffi::OsStrExt, io::AsRawHandle},
+    path::Path,
+};
+use windows_sys::Win32::{
+    Foundation::LocalFree,
+    Security::{
+        Authorization::{
+            ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            SetNamedSecurityInfoW, SE_FILE_OBJECT,
+        },
+        GetSecurityDescriptorDacl, GetTokenInformation, TokenElevation, TokenUser,
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES,
+        TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
+    },
+    System::Threading::{GetCurrentProcess, OpenProcessToken},
+};
+
+struct LocalAllocation(*mut std::ffi::c_void);
+impl Drop for LocalAllocation {
+    fn drop(&mut self) {
+        unsafe {
+            LocalFree(self.0);
+        }
+    }
+}
+pub struct Security {
+    descriptor: LocalAllocation,
+}
+pub fn token_is_elevated() -> io::Result<bool> {
+    let mut raw = std::ptr::null_mut();
+    // SAFETY: borrowed process pseudo-handle and immediately owned token.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = unsafe { windows_io::owned(raw) }?;
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut size = 0;
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(elevation.TokenIsElevated != 0)
+}
+pub fn user_sid() -> io::Result<String> {
+    let mut raw = std::ptr::null_mut();
+    // SAFETY: borrowed process pseudo-handle; token output owned immediately.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = unsafe { windows_io::owned(raw) }?;
+    let mut size = 0;
+    unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut size,
+        );
+    }
+    if size == 0 || size > 65536 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            size,
+            &mut size,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let mut text = std::ptr::null_mut();
+    // SAFETY: TOKEN_USER and its SID reside in the live, aligned token buffer.
+    if unsafe {
+        ConvertSidToStringSidW(
+            (*(buffer.as_ptr().cast::<TOKEN_USER>())).User.Sid,
+            &mut text,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let _allocation = LocalAllocation(text.cast());
+    let mut len = 0;
+    unsafe {
+        while *text.add(len) != 0 {
+            len += 1;
+        }
+    }
+    String::from_utf16(unsafe { std::slice::from_raw_parts(text, len) })
+        .map_err(|_| io::ErrorKind::InvalidData.into())
+}
+impl Security {
+    pub fn new(inherit: bool) -> io::Result<Self> {
+        let inheritance = if inherit { "OICI" } else { "" };
+        let sid = user_sid()?;
+        // Opt-in SYSTEM diagnostics have their own profile. Administrators
+        // need to read its logs; ordinary per-user profile ACLs stay private.
+        let administrators = if sid == "S-1-5-18" {
+            format!("(A;{inheritance};GA;;;BA)")
+        } else {
+            String::new()
+        };
+        let sddl = windows_io::wide(&format!(
+            "D:P(A;{inheritance};GA;;;{sid})(A;{inheritance};GA;;;SY){administrators}"
+        ));
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: conversion allocates a self-relative security descriptor.
+        if unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                1,
+                &mut raw,
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self {
+            descriptor: LocalAllocation(raw),
+        })
+    }
+    pub fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.descriptor.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+pub fn private_directory(path: &Path) -> io::Result<()> {
+    let security = Security::new(true)?;
+    let mut dacl = std::ptr::null_mut();
+    let mut present = 0;
+    let mut defaulted = 0;
+    // SAFETY: descriptor/ACL remain alive for both calls; API copies the ACL.
+    if unsafe {
+        GetSecurityDescriptorDacl(
+            security.descriptor.0,
+            &mut present,
+            &mut dacl,
+            &mut defaulted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let mut path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    windows_io::status(unsafe {
+        SetNamedSecurityInfoW(
+            path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            dacl,
+            std::ptr::null(),
+        )
+    })
+}

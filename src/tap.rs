@@ -2,10 +2,17 @@
 #[cfg(target_os = "linux")]
 #[path = "platform/linux.rs"]
 mod implementation;
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+#[path = "platform/windows.rs"]
+mod implementation;
+#[cfg(not(any(target_os = "linux", windows)))]
 #[path = "platform/unsupported.rs"]
 mod implementation;
 pub use implementation::*;
+
+#[cfg(any(windows, test))]
+#[path = "platform/tap_windows_contract.rs"]
+mod windows_contract;
 
 pub fn is_privileged() -> bool {
     #[cfg(unix)]

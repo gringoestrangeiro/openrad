@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 — 2026-09-30
+
+### Experimental Windows support
+
+- Add Windows x64 desktop and persistent CLI support through the shared VPN engine and the official TAP-Windows6 Layer 2 driver. Use exclusive overlapped packet I/O, driver MAC translation, media controls and IP Helper session-address/route cleanup; preserve Linux's short-lived sudo helper.
+- Add an offline setup EXE with both applications, the unchanged signed TAP-Windows6 9.27.0 package, complete corresponding driver source/notices and shortcuts. Create/repair the dedicated adapter, reuse ready installations, open the desktop automatically, and support `--no-launch` for CLI use.
+- Fix adapter GUID comparisons for Windows NetAdapter string values and use device-specific SetupAPI driver keys instead of scanning protected unrelated registry keys. Persistent CLI control uses current-user protected named pipes and profiles.
+- Prefer native Direct3D 12 hardware rendering, then Windows WARP CPU rendering, then OpenGL. Preserve explicit renderer selection and prevent graphics retries after App creation from starting a second VPN backend. Use Windows' system FXC compiler without additional graphics DLL bundles.
+- Add early desktop/CLI/daemon diagnostics, a desktop child crash monitor, Rust panic backtraces, best-effort native exception module/address logging, backend credential-store checkpoints and individual TAP setup stages. Keep credentials and packet contents out of logs.
+- Add an explicit local SYSTEM diagnostic launcher with isolated profiles; verify the official Microsoft PsExec signature and present its license. Normal setup stays offline and ordinary administrator startup remains the default.
+- Windows support is experimental. It has been tested only on Windows 10 so far, where the tester reports it working perfectly in their setup. Windows 11 and more hardware/network combinations need testing and issue reports before stable Windows support in 1.0.0.
+
+### Four-language desktop and CLI
+
+- Add complete English, Portuguese, Russian and Vietnamese catalogs, automatic system-language detection, saved desktop language preferences and `--language` overrides for both binaries.
+- Translate dialogs, validation, peer/transport states, retained activity, command help and CLI output while preserving names, paths, protocol values and machine-readable JSON.
+- Embed Noto Sans for Cyrillic and Vietnamese accents; include the font's SIL Open Font License.
+
+### Documentation and releases
+
+- Publish separate Linux x86-64 and experimental Windows x64 packages, an offline Windows setup EXE, source/license notices and SHA-256 checksums.
+- Add native Linux and Windows build instructions to the README, Windows diagnostic/issue-report guidance for 1.0.0 and a macOS roadmap note: support is planned, but development has not started.
+- Record the tester's Windows 10 comparison on the same network with 76 peers: official Radmin VPN 176 MB GUI + 23 MB service (199 MB total), OpenRad 41 MB client; idle CPU 1–4% versus 0–3%. These are observations from that setup; further CPU/memory improvements are planned.
+
 ## 0.8.0 — 2026-09-29
 
 ### CPU and forwarding

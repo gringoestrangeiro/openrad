@@ -21,7 +21,8 @@ impl ReportDirectory {
         let mut builder = DirBuilder::new();
         #[cfg(unix)]
         builder.mode(0o700);
-        builder.create(path)?;
+        builder.recursive(false).create(path)?;
+        secure_directory(path)?;
         Ok(Self {
             directory: path.to_path_buf(),
             enabled: true,
@@ -72,6 +73,16 @@ impl ReportDirectory {
         let f = options.open(self.directory.join(name))?;
         Ok(EventLog(Some(Arc::new(Mutex::new(f)))))
     }
+}
+
+/// Apply Windows profile ACLs. Unix callers create private directories with
+/// mode 0700; Windows grants inherited access only to this user and SYSTEM.
+pub fn secure_directory(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    crate::windows_security::private_directory(path)?;
+    #[cfg(not(windows))]
+    let _ = path;
+    Ok(())
 }
 #[derive(Clone)]
 pub struct EventLog(Option<Arc<Mutex<File>>>);

@@ -1,0 +1,3292 @@
+{
+  "System language (automatic)": [
+    "Idioma do sistema (automático)",
+    "Язык системы (автоматически)",
+    "Ngôn ngữ hệ thống (tự động)"
+  ],
+  "Language": [
+    "Idioma",
+    "Язык",
+    "Ngôn ngữ"
+  ],
+  "Detected system language: {name}": [
+    "Idioma detectado no sistema: {name}",
+    "Определённый язык системы: {name}",
+    "Ngôn ngữ hệ thống đã phát hiện: {name}"
+  ],
+  "YOUR NETWORK, CLOSER": [
+    "SUA REDE, MAIS PERTO",
+    "ВАША СЕТЬ СТАЛА БЛИЖЕ",
+    "MẠNG CỦA BẠN, GẦN HƠN"
+  ],
+  "My networks": [
+    "Minhas redes",
+    "Мои сети",
+    "Mạng của tôi"
+  ],
+  "Discover": [
+    "Descobrir",
+    "Обзор сетей",
+    "Khám phá"
+  ],
+  "Settings": [
+    "Configurações",
+    "Настройки",
+    "Cài đặt"
+  ],
+  "MEMBERSHIPS": [
+    "PARTICIPAÇÕES",
+    "УЧАСТИЕ В СЕТЯХ",
+    "MẠNG ĐÃ THAM GIA"
+  ],
+  "No networks yet": [
+    "Nenhuma rede ainda",
+    "Пока нет сетей",
+    "Chưa có mạng nào"
+  ],
+  "Native Linux · v{0}": [
+    "Linux nativo · v{0}",
+    "Приложение для Linux · v{0}",
+    "Ứng dụng Linux · v{0}"
+  ],
+  "radminvpn0 active": [
+    "radminvpn0 ativo",
+    "radminvpn0 активен",
+    "radminvpn0 đang hoạt động"
+  ],
+  "Interface offline": [
+    "Interface desconectada",
+    "Интерфейс отключён",
+    "Giao diện mạng ngoại tuyến"
+  ],
+  "This device": [
+    "Este dispositivo",
+    "Это устройство",
+    "Thiết bị này"
+  ],
+  "Getting ready": [
+    "Preparando",
+    "Подготовка",
+    "Đang chuẩn bị"
+  ],
+  "Opening your saved identity": [
+    "Abrindo sua identidade salva",
+    "Загрузка сохранённых данных устройства",
+    "Đang mở danh tính đã lưu"
+  ],
+  "Creating your identity": [
+    "Criando sua identidade",
+    "Создание данных устройства",
+    "Đang tạo danh tính của bạn"
+  ],
+  "One private identity, saved for your next connection": [
+    "Uma identidade privada, salva para a próxima conexão",
+    "Личные данные устройства сохраняются для следующего подключения",
+    "Danh tính riêng được lưu cho lần kết nối tiếp theo"
+  ],
+  "Resetting your identity": [
+    "Redefinindo sua identidade",
+    "Сброс данных устройства",
+    "Đang đặt lại danh tính của bạn"
+  ],
+  "Disconnecting, provisioning and saving your replacement": [
+    "Desconectando, criando e salvando a nova identidade",
+    "Отключение, создание и сохранение новых данных устройства",
+    "Đang ngắt kết nối, tạo và lưu danh tính thay thế"
+  ],
+  "Connecting": [
+    "Conectando",
+    "Подключение",
+    "Đang kết nối"
+  ],
+  "Authenticating with the network": [
+    "Autenticando na rede",
+    "Аутентификация в сети",
+    "Đang xác thực với mạng"
+  ],
+  "Interface needs attention": [
+    "A interface precisa de atenção",
+    "Требуется проверка интерфейса",
+    "Giao diện mạng cần được kiểm tra"
+  ],
+  "Your account is connected; application traffic is paused": [
+    "Sua conta está conectada; o tráfego dos aplicativos está pausado",
+    "Учётная запись подключена; трафик приложений приостановлен",
+    "Tài khoản đã kết nối; lưu lượng ứng dụng đang tạm dừng"
+  ],
+  "Preparing your interface": [
+    "Preparando sua interface",
+    "Подготовка интерфейса",
+    "Đang chuẩn bị giao diện mạng"
+  ],
+  "Your account is connected": [
+    "Sua conta está conectada",
+    "Учётная запись подключена",
+    "Tài khoản của bạn đã kết nối"
+  ],
+  "You’re connected": [
+    "Você está conectado",
+    "Вы подключены",
+    "Bạn đã kết nối"
+  ],
+  "Your devices are within reach": [
+    "Seus dispositivos estão ao alcance",
+    "Ваши устройства доступны",
+    "Các thiết bị của bạn đã sẵn sàng kết nối"
+  ],
+  "Disconnecting": [
+    "Desconectando",
+    "Отключение",
+    "Đang ngắt kết nối"
+  ],
+  "Closing channels and removing the interface": [
+    "Fechando canais e removendo a interface",
+    "Закрытие каналов и удаление интерфейса",
+    "Đang đóng kênh và xóa giao diện mạng"
+  ],
+  "Connection needs attention": [
+    "A conexão precisa de atenção",
+    "Требуется проверка подключения",
+    "Kết nối cần được kiểm tra"
+  ],
+  "Your saved identity is kept safe": [
+    "Sua identidade salva está protegida",
+    "Сохранённые данные устройства в безопасности",
+    "Danh tính đã lưu của bạn vẫn an toàn"
+  ],
+  "Ready to connect": [
+    "Pronto para conectar",
+    "Готово к подключению",
+    "Sẵn sàng kết nối"
+  ],
+  "Bring your devices onto the same network": [
+    "Coloque seus dispositivos na mesma rede",
+    "Объедините устройства в одну сеть",
+    "Đưa các thiết bị của bạn vào cùng một mạng"
+  ],
+  "Disconnect": [
+    "Desconectar",
+    "Отключиться",
+    "Ngắt kết nối"
+  ],
+  "Connect": [
+    "Conectar",
+    "Подключиться",
+    "Kết nối"
+  ],
+  "VPN ADDRESS": [
+    "ENDEREÇO VPN",
+    "АДРЕС VPN",
+    "ĐỊA CHỈ VPN"
+  ],
+  "Awaiting assignment": [
+    "Aguardando atribuição",
+    "Ожидание назначения",
+    "Đang chờ cấp địa chỉ"
+  ],
+  "Copy": [
+    "Copiar",
+    "Копировать",
+    "Sao chép"
+  ],
+  "IPv4 · per-peer transport": [
+    "IPv4 · transporte por dispositivo",
+    "IPv4 · отдельный транспорт для каждого узла",
+    "IPv4 · phương thức truyền riêng cho từng thiết bị"
+  ],
+  "Linux: authorize the setup helper with sudo -v in the launching terminal, then retry. The desktop stays unprivileged.": [
+    "Linux: autorize o auxiliar de configuração com sudo -v no terminal que iniciou o app e tente novamente. O app continua sem privilégios elevados.",
+    "Linux: разрешите работу помощника настройки командой sudo -v в терминале запуска и повторите попытку. Приложение работает без повышенных прав.",
+    "Linux: cấp quyền cho trình hỗ trợ cấu hình bằng sudo -v trong terminal khởi chạy, rồi thử lại. Ứng dụng vẫn chạy với quyền người dùng thông thường."
+  ],
+  "Retry interface setup": [
+    "Tentar configurar a interface novamente",
+    "Повторить настройку интерфейса",
+    "Thử cấu hình lại giao diện mạng"
+  ],
+  "DOWNLOAD": [
+    "RECEBIMENTO",
+    "ПОЛУЧЕНИЕ",
+    "TẢI XUỐNG"
+  ],
+  "UPLOAD": [
+    "ENVIO",
+    "ОТПРАВКА",
+    "TẢI LÊN"
+  ],
+  "{0} received": [
+    "{0} recebidos",
+    "Получено: {0}",
+    "Đã nhận: {0}"
+  ],
+  "{0} sent": [
+    "{0} enviados",
+    "Отправлено: {0}",
+    "Đã gửi: {0}"
+  ],
+  "PEER CONNECTIONS": [
+    "CONEXÕES COM DISPOSITIVOS",
+    "ПОДКЛЮЧЕНИЯ К УЗЛАМ",
+    "KẾT NỐI THIẾT BỊ"
+  ],
+  "{queued} pending · {0} filtered frames": [
+    "{queued} pendentes · {0} quadros filtrados",
+    "Ожидают: {queued} · отфильтровано кадров: {0}",
+    "Đang chờ: {queued} · khung đã lọc: {0}"
+  ],
+  "Your networks": [
+    "Suas redes",
+    "Ваши сети",
+    "Mạng của bạn"
+  ],
+  "Create private network": [
+    "Criar rede privada",
+    "Создать частную сеть",
+    "Tạo mạng riêng"
+  ],
+  "Join private network": [
+    "Entrar em rede privada",
+    "Вступить в частную сеть",
+    "Tham gia mạng riêng"
+  ],
+  "Browse public": [
+    "Explorar redes públicas",
+    "Обзор публичных сетей",
+    "Duyệt mạng công cộng"
+  ],
+  "Make your first connection": [
+    "Faça sua primeira conexão",
+    "Создайте первое подключение",
+    "Tạo kết nối đầu tiên của bạn"
+  ],
+  "Your networks will appear here": [
+    "Suas redes aparecerão aqui",
+    "Здесь появятся ваши сети",
+    "Các mạng của bạn sẽ xuất hiện ở đây"
+  ],
+  "Create a private network, join one with a password, or explore public networks. OpenRad connects to available members.": [
+    "Crie uma rede privada, entre em uma com senha ou explore redes públicas. O OpenRad se conecta aos membros disponíveis.",
+    "Создайте частную сеть, вступите в неё по паролю или найдите публичную сеть. OpenRad подключается к доступным участникам.",
+    "Tạo mạng riêng, tham gia bằng mật khẩu hoặc khám phá mạng công cộng. OpenRad kết nối với các thành viên sẵn sàng."
+  ],
+  "Explore public networks": [
+    "Explorar redes públicas",
+    "Найти публичные сети",
+    "Khám phá mạng công cộng"
+  ],
+  "All networks": [
+    "Todas as redes",
+    "Все сети",
+    "Tất cả mạng"
+  ],
+  "Select a network to see roles and manage its members.": [
+    "Selecione uma rede para ver as funções e gerenciar seus membros.",
+    "Выберите сеть, чтобы увидеть роли и управлять участниками.",
+    "Chọn một mạng để xem vai trò và quản lý thành viên."
+  ],
+  "Filter peers by name or VPN address": [
+    "Filtrar dispositivos por nome ou endereço VPN",
+    "Фильтр узлов по имени или адресу VPN",
+    "Lọc thiết bị theo tên hoặc địa chỉ VPN"
+  ],
+  "Retry failed peers": [
+    "Tentar novamente os dispositivos com falha",
+    "Повторить подключения с ошибками",
+    "Thử lại các kết nối bị lỗi"
+  ],
+  "{failed} failed/refused · {offline} offline · {0} retrying · {1} retries queued": [
+    "{failed} com falha/recusados · {offline} desconectados · {0} tentando novamente · {1} tentativas na fila",
+    "Ошибки/отказы: {failed} · не в сети: {offline} · повторных попыток: {0} · в очереди: {1}",
+    "Lỗi/bị từ chối: {failed} · ngoại tuyến: {offline} · đang thử lại: {0} · lượt thử trong hàng đợi: {1}"
+  ],
+  "Leave network": [
+    "Sair da rede",
+    "Покинуть сеть",
+    "Rời mạng"
+  ],
+  "Delete network": [
+    "Excluir rede",
+    "Удалить сеть",
+    "Xóa mạng"
+  ],
+  "No peers match this view. Members will appear as the server reports them.": [
+    "Nenhum dispositivo corresponde a esta visualização. Os membros aparecerão conforme o servidor os informar.",
+    "Нет узлов, соответствующих фильтру. Участники появятся по мере получения данных от сервера.",
+    "Không có thiết bị phù hợp với chế độ xem này. Thành viên sẽ xuất hiện khi máy chủ cung cấp thông tin."
+  ],
+  "Manage": [
+    "Gerenciar",
+    "Управление",
+    "Quản lý"
+  ],
+  "Refused means the remote service declined the connection. Offline members are kept in your network list.": [
+    "Recusado significa que o serviço remoto rejeitou a conexão. Membros desconectados continuam na sua lista de redes.",
+    "Отказ означает, что удалённая служба отклонила подключение. Участники не в сети остаются в списке.",
+    "Bị từ chối nghĩa là dịch vụ từ xa đã từ chối kết nối. Thành viên ngoại tuyến vẫn được giữ trong danh sách mạng."
+  ],
+  "Recent activity": [
+    "Atividade recente",
+    "Последние события",
+    "Hoạt động gần đây"
+  ],
+  "Find your people.": [
+    "Encontre sua comunidade.",
+    "Найдите своих.",
+    "Tìm cộng đồng của bạn."
+  ],
+  "Explore public networks and bring everyone onto the same LAN.": [
+    "Explore redes públicas e coloque todos na mesma LAN.",
+    "Найдите публичные сети и объедините всех в одну локальную сеть.",
+    "Khám phá mạng công cộng và đưa mọi người vào cùng một mạng LAN."
+  ],
+  "Search games, communities, or a network name": [
+    "Busque jogos, comunidades ou o nome de uma rede",
+    "Поиск игр, сообществ или названия сети",
+    "Tìm trò chơi, cộng đồng hoặc tên mạng"
+  ],
+  "Search": [
+    "Buscar",
+    "Поиск",
+    "Tìm kiếm"
+  ],
+  "Connect your device to search and join public networks.": [
+    "Conecte seu dispositivo para buscar e entrar em redes públicas.",
+    "Подключите устройство, чтобы искать публичные сети и вступать в них.",
+    "Kết nối thiết bị để tìm và tham gia mạng công cộng."
+  ],
+  "Start with a name, or browse what’s available.": [
+    "Comece por um nome ou explore as redes disponíveis.",
+    "Введите название или посмотрите доступные сети.",
+    "Bắt đầu bằng một tên hoặc duyệt các mạng có sẵn."
+  ],
+  "Browse public networks": [
+    "Explorar redes públicas",
+    "Обзор публичных сетей",
+    "Duyệt mạng công cộng"
+  ],
+  "No networks found": [
+    "Nenhuma rede encontrada",
+    "Сети не найдены",
+    "Không tìm thấy mạng nào"
+  ],
+  "Try a shorter name or a different search.": [
+    "Tente um nome mais curto ou outra busca.",
+    "Попробуйте более короткое название или другой запрос.",
+    "Thử tên ngắn hơn hoặc từ khóa khác."
+  ],
+  "{0} networks": [
+    "Redes: {0}",
+    "Сетей: {0}",
+    "Số mạng: {0}"
+  ],
+  "Working…": [
+    "Processando…",
+    "Выполняется…",
+    "Đang xử lý…"
+  ],
+  "Public network  ·  {0} members reported": [
+    "Rede pública  ·  {0} membros informados",
+    "Публичная сеть  ·  участников по данным сервера: {0}",
+    "Mạng công cộng  ·  thành viên được báo cáo: {0}"
+  ],
+  "Joined": [
+    "Já participa",
+    "Вы участник",
+    "Đã tham gia"
+  ],
+  "Join network": [
+    "Entrar na rede",
+    "Вступить в сеть",
+    "Tham gia mạng"
+  ],
+  "Load more networks": [
+    "Carregar mais redes",
+    "Загрузить ещё сети",
+    "Tải thêm mạng"
+  ],
+  "Make yourself at home.": [
+    "Deixe o app do seu jeito.",
+    "Настройте под себя.",
+    "Tùy chỉnh theo ý bạn."
+  ],
+  "Tune connection behavior, the workspace, and developer diagnostics.": [
+    "Ajuste a conexão, a área de trabalho e o diagnóstico para desenvolvedores.",
+    "Настройте подключение, рабочую область и диагностику для разработчиков.",
+    "Điều chỉnh kết nối, không gian làm việc và chẩn đoán cho nhà phát triển."
+  ],
+  "Connection": [
+    "Conexão",
+    "Подключение",
+    "Kết nối"
+  ],
+  "Connect when OpenRad launches": [
+    "Conectar ao iniciar o OpenRad",
+    "Подключаться при запуске OpenRad",
+    "Kết nối khi khởi chạy OpenRad"
+  ],
+  "Reconnect after a connection failure": [
+    "Reconectar após uma falha de conexão",
+    "Переподключаться при сбое соединения",
+    "Kết nối lại sau khi kết nối bị lỗi"
+  ],
+  "Maximum attempts": [
+    "Máximo de tentativas",
+    "Число попыток",
+    "Số lần thử tối đa"
+  ],
+  "Initial retry delay": [
+    "Espera inicial para nova tentativa",
+    "Начальная задержка повтора",
+    "Thời gian chờ lần thử lại đầu tiên"
+  ],
+  "Each retry waits twice as long, up to five minutes. Changes apply to the next failure.": [
+    "A espera dobra a cada tentativa, até cinco minutos. As alterações valem para a próxima falha.",
+    "При каждом повторе задержка удваивается, до пяти минут. Изменения действуют со следующего сбоя.",
+    "Thời gian chờ tăng gấp đôi sau mỗi lần thử, tối đa năm phút. Thay đổi áp dụng từ lần lỗi tiếp theo."
+  ],
+  "Device name": [
+    "Nome do dispositivo",
+    "Имя устройства",
+    "Tên thiết bị"
+  ],
+  "The device name is set when your identity is created.": [
+    "O nome do dispositivo é definido quando sua identidade é criada.",
+    "Имя устройства задаётся при создании его идентификационных данных.",
+    "Tên thiết bị được đặt khi tạo danh tính."
+  ],
+  "Workspace": [
+    "Área de trabalho",
+    "Рабочая область",
+    "Không gian làm việc"
+  ],
+  "Open to": [
+    "Página inicial",
+    "Стартовая страница",
+    "Trang mở khi khởi động"
+  ],
+  "Used the next time OpenRad starts.": [
+    "Usado na próxima vez que o OpenRad iniciar.",
+    "Применится при следующем запуске OpenRad.",
+    "Áp dụng vào lần khởi chạy OpenRad tiếp theo."
+  ],
+  "Interface scale": [
+    "Escala da interface",
+    "Масштаб интерфейса",
+    "Tỷ lệ giao diện"
+  ],
+  "Show traffic overview": [
+    "Mostrar resumo do tráfego",
+    "Показывать сводку трафика",
+    "Hiển thị tổng quan lưu lượng"
+  ],
+  "Show traffic graphs": [
+    "Mostrar gráficos de tráfego",
+    "Показывать графики трафика",
+    "Hiển thị biểu đồ lưu lượng"
+  ],
+  "Use decimal traffic units (kB / MB)": [
+    "Usar unidades decimais de tráfego (kB / MB)",
+    "Использовать десятичные единицы трафика (kB / MB)",
+    "Dùng đơn vị lưu lượng thập phân (kB / MB)"
+  ],
+  "Show offline peers": [
+    "Mostrar dispositivos desconectados",
+    "Показывать узлы не в сети",
+    "Hiển thị thiết bị ngoại tuyến"
+  ],
+  "Sort peers by": [
+    "Ordenar dispositivos por",
+    "Сортировать узлы по",
+    "Sắp xếp thiết bị theo"
+  ],
+  "Name": [
+    "Nome",
+    "Имя",
+    "Tên"
+  ],
+  "Connection status": [
+    "Estado da conexão",
+    "Состояние подключения",
+    "Trạng thái kết nối"
+  ],
+  "VPN address": [
+    "Endereço VPN",
+    "Адрес VPN",
+    "Địa chỉ VPN"
+  ],
+  "Show recent activity": [
+    "Mostrar atividade recente",
+    "Показывать последние события",
+    "Hiển thị hoạt động gần đây"
+  ],
+  "Events shown": [
+    "Eventos exibidos",
+    "Число событий",
+    "Số sự kiện hiển thị"
+  ],
+  "Developer view": [
+    "Visão do desenvolvedor",
+    "Режим разработчика",
+    "Chế độ nhà phát triển"
+  ],
+  "Show peer connection details under each row": [
+    "Mostrar detalhes da conexão abaixo de cada dispositivo",
+    "Показывать сведения о подключении под каждой строкой",
+    "Hiển thị chi tiết kết nối dưới mỗi thiết bị"
+  ],
+  "Show internal peer and network IDs": [
+    "Mostrar IDs internos dos dispositivos e redes",
+    "Показывать внутренние ID узлов и сетей",
+    "Hiển thị ID nội bộ của thiết bị và mạng"
+  ],
+  "Show live diagnostic counters": [
+    "Mostrar contadores de diagnóstico em tempo real",
+    "Показывать текущие диагностические счётчики",
+    "Hiển thị bộ đếm chẩn đoán trực tiếp"
+  ],
+  "Session: {0} · latency: {1} ms · interface: {2}": [
+    "Sessão: {0} · latência: {1} ms · interface: {2}",
+    "Сеанс: {0} · задержка: {1} мс · интерфейс: {2}",
+    "Phiên: {0} · độ trễ: {1} ms · giao diện mạng: {2}"
+  ],
+  "ready": [
+    "pronta",
+    "готов",
+    "đã sẵn sàng"
+  ],
+  "not ready": [
+    "não está pronta",
+    "не готов",
+    "chưa sẵn sàng"
+  ],
+  "Networks: {0} · peers: {1} · connected: {2}": [
+    "Redes: {0} · dispositivos: {1} · conectados: {2}",
+    "Сетей: {0} · узлов: {1} · подключено: {2}",
+    "Mạng: {0} · thiết bị: {1} · đã kết nối: {2}"
+  ],
+  "Frames: {0} in / {1} out / {2} filtered": [
+    "Quadros: {0} recebidos / {1} enviados / {2} filtrados",
+    "Кадры: {0} входящих / {1} исходящих / {2} отфильтровано",
+    "Khung: {0} nhận / {1} gửi / {2} đã lọc"
+  ],
+  "Copy diagnostic summary": [
+    "Copiar resumo do diagnóstico",
+    "Копировать сводку диагностики",
+    "Sao chép tóm tắt chẩn đoán"
+  ],
+  "Save preferences": [
+    "Salvar preferências",
+    "Сохранить настройки",
+    "Lưu tùy chọn"
+  ],
+  "Discard changes": [
+    "Descartar alterações",
+    "Отменить изменения",
+    "Hủy thay đổi"
+  ],
+  "Restore defaults": [
+    "Restaurar padrões",
+    "Восстановить по умолчанию",
+    "Khôi phục mặc định"
+  ],
+  "Display changes preview immediately. Save preferences to keep them after restart.": [
+    "As alterações visuais aparecem imediatamente. Salve as preferências para mantê-las após reiniciar.",
+    "Изменения отображаются сразу. Сохраните настройки, чтобы они сохранились после перезапуска.",
+    "Thay đổi hiển thị được áp dụng ngay. Lưu tùy chọn để giữ chúng sau khi khởi động lại."
+  ],
+  "Private device identity": [
+    "Identidade privada do dispositivo",
+    "Личные данные устройства",
+    "Danh tính riêng của thiết bị"
+  ],
+  "{name}  ·  Device {rid}": [
+    "{name}  ·  Dispositivo {rid}",
+    "{name}  ·  Устройство {rid}",
+    "{name}  ·  Thiết bị {rid}"
+  ],
+  "No identity loaded": [
+    "Nenhuma identidade carregada",
+    "Идентификация не загружена",
+    "Chưa tải danh tính nào"
+  ],
+  "Stored in your operating system’s credential store. The same identity is reused each time you connect.": [
+    "Armazenada no cofre de credenciais do sistema operacional. A mesma identidade é reutilizada a cada conexão.",
+    "Хранятся в хранилище учётных данных ОС. При каждом подключении используются те же идентификационные данные.",
+    "Được lưu trong kho thông tin xác thực của hệ điều hành. Cùng một danh tính được dùng lại mỗi khi kết nối."
+  ],
+  "Retry saving new identity": [
+    "Tentar salvar a nova identidade novamente",
+    "Повторить сохранение данных",
+    "Thử lưu lại danh tính mới"
+  ],
+  "Reset identity…": [
+    "Redefinir identidade…",
+    "Сбросить данные устройства…",
+    "Đặt lại danh tính…"
+  ],
+  "Import an existing OpenRad identity": [
+    "Importar uma identidade existente do OpenRad",
+    "Импортировать данные устройства OpenRad",
+    "Nhập danh tính OpenRad hiện có"
+  ],
+  "Import": [
+    "Importar",
+    "Импорт",
+    "Nhập"
+  ],
+  "Linux interface": [
+    "Interface Linux",
+    "Интерфейс Linux",
+    "Giao diện mạng Linux"
+  ],
+  "A short-lived helper configures the interface and member host routes. OpenRad runs as your normal user. Closing the app removes its interface and routes.": [
+    "Um auxiliar temporário configura a interface e as rotas dos membros. O OpenRad roda como seu usuário normal. Fechar o app remove a interface e as rotas.",
+    "Временный помощник настраивает интерфейс и маршруты участников. OpenRad работает от обычного пользователя. При закрытии интерфейс и маршруты удаляются.",
+    "Trình hỗ trợ tạm thời cấu hình giao diện mạng và tuyến đến thành viên. OpenRad chạy với quyền người dùng thông thường. Đóng ứng dụng sẽ xóa giao diện mạng và các tuyến."
+  ],
+  "If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup.": [
+    "Se a configuração precisar de permissão, execute sudo -v no terminal que inicia o OpenRad e tente configurar a interface novamente.",
+    "Если для настройки нужны права, выполните sudo -v в терминале запуска OpenRad и повторите настройку интерфейса.",
+    "Nếu cấu hình cần quyền, chạy sudo -v trong terminal khởi chạy OpenRad, rồi thử cấu hình lại giao diện mạng."
+  ],
+  "Windows and macOS data planes are not implemented or tested. Each connected peer shows its authenticated transport. Direct candidates come from the server; relay remains available when direct connection fails.": [
+    "Os planos de dados do Windows e macOS não foram implementados nem testados. Cada dispositivo conectado mostra seu transporte autenticado. Os candidatos diretos vêm do servidor; o relay continua disponível se a conexão direta falhar.",
+    "Передача данных в Windows и macOS не реализована и не протестирована. Для каждого подключённого узла указан аутентифицированный транспорт. Адреса для прямого подключения поступают от сервера; при неудаче доступна ретрансляция.",
+    "Truyền dữ liệu trên Windows và macOS chưa được triển khai hoặc kiểm thử. Mỗi thiết bị đã kết nối hiển thị phương thức truyền đã xác thực. Máy chủ cung cấp địa chỉ kết nối trực tiếp; chuyển tiếp vẫn khả dụng khi kết nối trực tiếp thất bại."
+  ],
+  "Settings: {0}": [
+    "Configurações: {0}",
+    "Настройки: {0}",
+    "Cài đặt: {0}"
+  ],
+  "Copy profile path": [
+    "Copiar caminho do perfil",
+    "Копировать путь профиля",
+    "Sao chép đường dẫn hồ sơ"
+  ],
+  "Connection logs: {0}": [
+    "Logs de conexão: {0}",
+    "Журналы подключений: {0}",
+    "Nhật ký kết nối: {0}"
+  ],
+  "Copy connection log path": [
+    "Copiar caminho dos logs de conexão",
+    "Копировать путь журнала подключений",
+    "Sao chép đường dẫn nhật ký kết nối"
+  ],
+  "Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate": [
+    "Atalhos: Ctrl+K buscar · Ctrl+D conectar / desconectar · Ctrl+, configurações · Tab / Shift+Tab navegar",
+    "Клавиши: Ctrl+K поиск · Ctrl+D подключение / отключение · Ctrl+, настройки · Tab / Shift+Tab навигация",
+    "Phím tắt: Ctrl+K tìm kiếm · Ctrl+D kết nối / ngắt kết nối · Ctrl+, cài đặt · Tab / Shift+Tab điều hướng"
+  ],
+  "WORKSPACE / MY NETWORKS": [
+    "ÁREA DE TRABALHO / MINHAS REDES",
+    "РАБОЧАЯ ОБЛАСТЬ / МОИ СЕТИ",
+    "KHÔNG GIAN LÀM VIỆC / MẠNG CỦA TÔI"
+  ],
+  "WORKSPACE / DISCOVER": [
+    "ÁREA DE TRABALHO / DESCOBRIR",
+    "РАБОЧАЯ ОБЛАСТЬ / ОБЗОР СЕТЕЙ",
+    "KHÔNG GIAN LÀM VIỆC / KHÁM PHÁ"
+  ],
+  "WORKSPACE / SETTINGS": [
+    "ÁREA DE TRABALHO / CONFIGURAÇÕES",
+    "РАБОЧАЯ ОБЛАСТЬ / НАСТРОЙКИ",
+    "KHÔNG GIAN LÀM VIỆC / CÀI ĐẶT"
+  ],
+  "Connected": [
+    "Conectado",
+    "Подключён",
+    "Đã kết nối"
+  ],
+  "Linux preview": [
+    "Prévia no Linux",
+    "Предварительная версия для Linux",
+    "Bản xem trước Linux"
+  ],
+  "Controlled test mode · application traffic is restricted to the selected test peers": [
+    "Modo de teste controlado · o tráfego dos aplicativos está restrito aos dispositivos de teste selecionados",
+    "Контролируемый тестовый режим · трафик приложений ограничен выбранными тестовыми узлами",
+    "Chế độ kiểm thử có kiểm soát · lưu lượng ứng dụng chỉ dành cho các thiết bị thử nghiệm đã chọn"
+  ],
+  "Reset device identity?": [
+    "Redefinir identidade do dispositivo?",
+    "Сбросить идентификационные данные устройства?",
+    "Đặt lại danh tính thiết bị?"
+  ],
+  "OpenRad will disconnect this session and create a new device identity and VPN address. Your network memberships belong to the old identity; you will need to join networks again.": [
+    "O OpenRad desconectará esta sessão e criará uma nova identidade de dispositivo e um novo endereço VPN. Suas participações nas redes pertencem à identidade antiga; você precisará entrar nas redes novamente.",
+    "OpenRad отключит этот сеанс и создаст новые идентификационные данные устройства и адрес VPN. Участие в сетях привязано к старым данным; в сети придётся вступить заново.",
+    "OpenRad sẽ ngắt kết nối phiên này và tạo danh tính thiết bị cùng địa chỉ VPN mới. Tư cách thành viên mạng thuộc danh tính cũ; bạn sẽ phải tham gia lại các mạng."
+  ],
+  "The saved identity is replaced only after provisioning succeeds. Once saved, the old identity cannot be recovered from this profile.": [
+    "A identidade salva só é substituída após a criação bem-sucedida. Depois de salvar, a identidade antiga não poderá ser recuperada deste perfil.",
+    "Сохранённые данные устройства заменяются только после успешного создания новых. После сохранения старые данные нельзя восстановить из этого профиля.",
+    "Danh tính đã lưu chỉ được thay thế sau khi tạo thành công. Sau khi lưu, không thể khôi phục danh tính cũ từ hồ sơ này."
+  ],
+  "Cancel": [
+    "Cancelar",
+    "Отмена",
+    "Hủy"
+  ],
+  "Disconnect and reset identity": [
+    "Desconectar e redefinir identidade",
+    "Отключиться и сбросить данные",
+    "Ngắt kết nối và đặt lại danh tính"
+  ],
+  "Closing your connection": [
+    "Fechando sua conexão",
+    "Закрытие подключения",
+    "Đang đóng kết nối"
+  ],
+  "Finishing identity storage and removing the VPN interface…": [
+    "Finalizando o armazenamento da identidade e removendo a interface VPN…",
+    "Завершение сохранения данных устройства и удаление интерфейса VPN…",
+    "Đang hoàn tất lưu danh tính và xóa giao diện mạng VPN…"
+  ],
+  "Create a private network": [
+    "Criar uma rede privada",
+    "Создать частную сеть",
+    "Tạo mạng riêng"
+  ],
+  "Join a private network": [
+    "Entrar em uma rede privada",
+    "Вступить в частную сеть",
+    "Tham gia mạng riêng"
+  ],
+  "Share the exact network name and password with the people you want to join.": [
+    "Compartilhe o nome exato da rede e a senha com as pessoas que devem entrar.",
+    "Сообщите точное название сети и пароль тем, кого хотите пригласить.",
+    "Chia sẻ tên mạng chính xác và mật khẩu với những người bạn muốn mời tham gia."
+  ],
+  "Enter the exact network name and the password shared by its administrator.": [
+    "Digite o nome exato da rede e a senha compartilhada pelo administrador.",
+    "Введите точное название сети и пароль, полученный от администратора.",
+    "Nhập tên mạng chính xác và mật khẩu do quản trị viên cung cấp."
+  ],
+  "Network name": [
+    "Nome da rede",
+    "Название сети",
+    "Tên mạng"
+  ],
+  "Password": [
+    "Senha",
+    "Пароль",
+    "Mật khẩu"
+  ],
+  "Confirm password": [
+    "Confirmar senha",
+    "Подтвердите пароль",
+    "Xác nhận mật khẩu"
+  ],
+  "Show password": [
+    "Mostrar senha",
+    "Показать пароль",
+    "Hiển thị mật khẩu"
+  ],
+  "Use at least 6 characters. The password is not saved in your profile.": [
+    "Use pelo menos 6 caracteres. A senha não é salva no seu perfil.",
+    "Используйте не менее 6 символов. Пароль не сохраняется в профиле.",
+    "Dùng ít nhất 6 ký tự. Mật khẩu không được lưu trong hồ sơ của bạn."
+  ],
+  "Connect your device and wait for the current operation to finish.": [
+    "Conecte seu dispositivo e aguarde a operação atual terminar.",
+    "Подключите устройство и дождитесь завершения текущей операции.",
+    "Kết nối thiết bị và chờ thao tác hiện tại hoàn tất."
+  ],
+  "Create network": [
+    "Criar rede",
+    "Создать сеть",
+    "Tạo mạng"
+  ],
+  "Network: {0}": [
+    "Rede: {0}",
+    "Сеть: {0}",
+    "Mạng: {0}"
+  ],
+  "Remove this member from this network? They can rejoin if they know its password.": [
+    "Remover este membro da rede? Ele poderá entrar novamente se souber a senha.",
+    "Удалить этого участника из сети? Он сможет вернуться, если знает пароль.",
+    "Xóa thành viên này khỏi mạng? Họ có thể tham gia lại nếu biết mật khẩu."
+  ],
+  "Give this member permission to manage this network and its members?": [
+    "Dar a este membro permissão para gerenciar a rede e seus membros?",
+    "Разрешить этому участнику управлять сетью и её участниками?",
+    "Cho phép thành viên này quản lý mạng và các thành viên?"
+  ],
+  "Remove this member's administration permissions? They will remain a network member.": [
+    "Remover as permissões de administração deste membro? Ele continuará participando da rede.",
+    "Отозвать у этого участника права администратора? Он останется участником сети.",
+    "Thu hồi quyền quản trị của thành viên này? Họ vẫn là thành viên mạng."
+  ],
+  "This member or your administration permissions have changed. Close this dialog to refresh your selection.": [
+    "Este membro ou suas permissões de administração mudaram. Feche este diálogo para atualizar a seleção.",
+    "Участник или ваши права администратора изменились. Закройте диалог и выберите участника заново.",
+    "Thành viên này hoặc quyền quản trị của bạn đã thay đổi. Đóng hộp thoại để chọn lại."
+  ],
+  "Delete network?": [
+    "Excluir rede?",
+    "Удалить сеть?",
+    "Xóa mạng?"
+  ],
+  "This permanently deletes the network and removes every member. This cannot be undone.": [
+    "Isso exclui a rede permanentemente e remove todos os membros. Esta ação não pode ser desfeita.",
+    "Сеть будет удалена навсегда вместе со всеми участниками. Это действие нельзя отменить.",
+    "Thao tác này xóa vĩnh viễn mạng và tất cả thành viên. Không thể hoàn tác."
+  ],
+  "Connect and check that you still administer this network.": [
+    "Conecte e verifique se você ainda administra esta rede.",
+    "Подключитесь и убедитесь, что вы всё ещё администратор этой сети.",
+    "Kết nối và kiểm tra rằng bạn vẫn là quản trị viên mạng này."
+  ],
+  "Delete for everyone": [
+    "Excluir para todos",
+    "Удалить для всех",
+    "Xóa cho mọi người"
+  ],
+  "Pending approval": [
+    "Aguardando aprovação",
+    "Ожидает одобрения",
+    "Đang chờ phê duyệt"
+  ],
+  "Member": [
+    "Membro",
+    "Участник",
+    "Thành viên"
+  ],
+  "Admin": [
+    "Administrador",
+    "Администратор",
+    "Quản trị viên"
+  ],
+  "Role unavailable": [
+    "Função indisponível",
+    "Роль недоступна",
+    "Vai trò không khả dụng"
+  ],
+  "Passwords do not match": [
+    "As senhas não coincidem",
+    "Пароли не совпадают",
+    "Mật khẩu không khớp"
+  ],
+  "Offline": [
+    "Desconectado",
+    "Не в сети",
+    "Ngoại tuyến"
+  ],
+  "Online · queued": [
+    "Online · na fila",
+    "В сети · в очереди",
+    "Trực tuyến · trong hàng đợi"
+  ],
+  "Refused": [
+    "Recusado",
+    "Отказ",
+    "Bị từ chối"
+  ],
+  "Failed": [
+    "Falha",
+    "Ошибка",
+    "Lỗi"
+  ],
+  "Unavailable": [
+    "Indisponível",
+    "Недоступен",
+    "Không khả dụng"
+  ],
+  "Direct TCP": [
+    "TCP direto",
+    "Прямой TCP",
+    "TCP trực tiếp"
+  ],
+  "Direct UDP": [
+    "UDP direto",
+    "Прямой UDP",
+    "UDP trực tiếp"
+  ],
+  "Relay": [
+    "Retransmissão",
+    "Ретрансляция",
+    "Chuyển tiếp"
+  ],
+  "Incoming": [
+    "Entrada",
+    "Входящий",
+    "Đến"
+  ],
+  "Outgoing": [
+    "Saída",
+    "Исходящий",
+    "Đi"
+  ],
+  "Remove member": [
+    "Remover membro",
+    "Удалить участника",
+    "Xóa thành viên"
+  ],
+  "Grant admin": [
+    "Conceder administração",
+    "Назначить администратором",
+    "Cấp quyền quản trị"
+  ],
+  "Revoke admin": [
+    "Revogar administração",
+    "Отозвать права администратора",
+    "Thu hồi quyền quản trị"
+  ],
+  "Yes": [
+    "Sim",
+    "Да",
+    "Có"
+  ],
+  "No": [
+    "Não",
+    "Нет",
+    "Không"
+  ],
+  "Loading": [
+    "Carregando",
+    "Загрузка",
+    "Đang tải"
+  ],
+  "Disconnected": [
+    "Desconectado",
+    "Отключён",
+    "Đã ngắt kết nối"
+  ],
+  "Provisioning": [
+    "Criando identidade",
+    "Создание данных устройства",
+    "Đang tạo danh tính"
+  ],
+  "Resetting": [
+    "Redefinindo",
+    "Сброс",
+    "Đang đặt lại"
+  ],
+  "Error": [
+    "Erro",
+    "Ошибка",
+    "Lỗi"
+  ],
+  "Opening your credential store…": [
+    "Abrindo seu cofre de credenciais…",
+    "Открытие хранилища учётных данных…",
+    "Đang mở kho thông tin xác thực…"
+  ],
+  "Client disconnected": [
+    "Cliente desconectado",
+    "Клиент отключён",
+    "Ứng dụng đã ngắt kết nối"
+  ],
+  "Starting connection…": [
+    "Iniciando conexão…",
+    "Запуск подключения…",
+    "Đang bắt đầu kết nối…"
+  ],
+  "Connection diagnostics unavailable: {error}": [
+    "Diagnóstico de conexão indisponível: {error}",
+    "Диагностика подключения недоступна: {error}",
+    "Chẩn đoán kết nối không khả dụng: {error}"
+  ],
+  "Settings could not be loaded. Repair settings.json and restart.": [
+    "Não foi possível carregar as configurações. Corrija settings.json e reinicie.",
+    "Не удалось загрузить настройки. Исправьте settings.json и перезапустите приложение.",
+    "Không thể tải cài đặt. Sửa settings.json và khởi động lại."
+  ],
+  "This profile already has an identity; use another data directory to import a different one": [
+    "Este perfil já tem uma identidade; use outro diretório de dados para importar uma diferente",
+    "В этом профиле уже есть данные устройства; для импорта других используйте иной каталог данных",
+    "Hồ sơ này đã có danh tính; dùng thư mục dữ liệu khác để nhập danh tính khác"
+  ],
+  "Ready when you are": [
+    "Pronto quando você estiver",
+    "Готово к работе",
+    "Sẵn sàng khi bạn muốn"
+  ],
+  "Creating your replacement identity…": [
+    "Criando sua nova identidade…",
+    "Создание новых данных устройства…",
+    "Đang tạo danh tính thay thế…"
+  ],
+  "Identity reset and saved securely. Connect to use your new device.": [
+    "Identidade redefinida e salva com segurança. Conecte para usar seu novo dispositivo.",
+    "Идентификация сброшена и надёжно сохранена. Подключитесь, чтобы использовать новое устройство.",
+    "Danh tính đã được đặt lại và lưu an toàn. Kết nối để dùng thiết bị mới."
+  ],
+  "Identity reset: {e}. Your previous saved identity is preserved.": [
+    "Redefinição da identidade: {e}. Sua identidade anterior está preservada.",
+    "Сброс данных устройства: {e}. Прежние сохранённые данные не изменены.",
+    "Đặt lại danh tính: {e}. Danh tính đã lưu trước đó vẫn được giữ nguyên."
+  ],
+  "Preparing your private device identity…": [
+    "Preparando a identidade privada do seu dispositivo…",
+    "Подготовка личных данных устройства…",
+    "Đang chuẩn bị danh tính riêng của thiết bị…"
+  ],
+  "Authenticating your saved identity…": [
+    "Autenticando sua identidade salva…",
+    "Аутентификация по сохранённым данным устройства…",
+    "Đang xác thực danh tính đã lưu…"
+  ],
+  "VPN worker stopped unexpectedly": [
+    "O processo da VPN parou inesperadamente",
+    "Рабочий поток VPN неожиданно завершился",
+    "Luồng xử lý VPN đã dừng đột ngột"
+  ],
+  "Disconnected · interface removed": [
+    "Desconectado · interface removida",
+    "Отключено · интерфейс удалён",
+    "Đã ngắt kết nối · giao diện mạng đã xóa"
+  ],
+  " Reconnecting with the same identity…": [
+    " Reconectando com a mesma identidade…",
+    " Переподключение с теми же данными устройства…",
+    " Đang kết nối lại bằng cùng danh tính…"
+  ],
+  "Disconnecting…": [
+    "Desconectando…",
+    "Отключение…",
+    "Đang ngắt kết nối…"
+  ],
+  "Disconnecting the current session before resetting identity…": [
+    "Desconectando a sessão atual antes de redefinir a identidade…",
+    "Отключение текущего сеанса перед сбросом данных устройства…",
+    "Đang ngắt kết nối phiên hiện tại trước khi đặt lại danh tính…"
+  ],
+  "Settings saved": [
+    "Configurações salvas",
+    "Настройки сохранены",
+    "Đã lưu cài đặt"
+  ],
+  "An identity is already saved in this profile": [
+    "Já há uma identidade salva neste perfil",
+    "В этом профиле уже сохранены данные устройства",
+    "Hồ sơ này đã lưu một danh tính"
+  ],
+  "Identity imported securely. Ready to connect.": [
+    "Identidade importada com segurança. Pronto para conectar.",
+    "Идентификация надёжно импортирована. Готово к подключению.",
+    "Danh tính đã được nhập an toàn. Sẵn sàng kết nối."
+  ],
+  "Cannot locate the user data directory": [
+    "Não foi possível localizar o diretório de dados do usuário",
+    "Не удалось найти каталог данных пользователя",
+    "Không tìm thấy thư mục dữ liệu người dùng"
+  ],
+  "OpenRad is already running with this profile": [
+    "O OpenRad já está em execução com este perfil",
+    "OpenRad уже запущен с этим профилем",
+    "OpenRad đã chạy với hồ sơ này"
+  ],
+  "Settings file is too large": [
+    "O arquivo de configurações é grande demais",
+    "Файл настроек слишком большой",
+    "Tệp cài đặt quá lớn"
+  ],
+  "Device name cannot be empty": [
+    "O nome do dispositivo não pode estar vazio",
+    "Имя устройства не может быть пустым",
+    "Tên thiết bị không được để trống"
+  ],
+  "Settings are out of range": [
+    "As configurações estão fora dos limites permitidos",
+    "Значения настроек выходят за допустимые пределы",
+    "Giá trị cài đặt ngoài phạm vi cho phép"
+  ],
+  "Credential store unavailable. Start and unlock Secret Service (GNOME Keyring or KWallet), then restart OpenRad.": [
+    "Cofre de credenciais indisponível. Inicie e desbloqueie o Secret Service (GNOME Keyring ou KWallet) e reinicie o OpenRad.",
+    "Хранилище учётных данных недоступно. Запустите и разблокируйте Secret Service (GNOME Keyring или KWallet), затем перезапустите OpenRad.",
+    "Kho thông tin xác thực không khả dụng. Khởi chạy và mở khóa Secret Service (GNOME Keyring hoặc KWallet), rồi khởi động lại OpenRad."
+  ],
+  "Could not read the saved identity. Unlock your credential store; your identity has not been replaced.": [
+    "Não foi possível ler a identidade salva. Desbloqueie seu cofre de credenciais; sua identidade não foi substituída.",
+    "Не удалось прочитать сохранённые данные устройства. Разблокируйте хранилище учётных данных; данные устройства не заменены.",
+    "Không thể đọc danh tính đã lưu. Mở khóa kho thông tin xác thực; danh tính của bạn chưa bị thay thế."
+  ],
+  "Could not save the identity in the credential store. Keep this window open, unlock your keyring, then retry.": [
+    "Não foi possível salvar a identidade no cofre de credenciais. Mantenha esta janela aberta, desbloqueie o cofre e tente novamente.",
+    "Не удалось сохранить данные устройства в хранилище учётных данных. Оставьте окно открытым, разблокируйте хранилище и повторите попытку.",
+    "Không thể lưu danh tính vào kho thông tin xác thực. Giữ cửa sổ này mở, mở khóa kho khóa rồi thử lại."
+  ],
+  "An earlier registration did not finish saving. Import a saved identity to recover; OpenRad will not create another identity automatically.": [
+    "Um registro anterior não terminou de salvar. Importe uma identidade salva para recuperar; o OpenRad não criará outra automaticamente.",
+    "Предыдущая регистрация не завершила сохранение. Для восстановления импортируйте сохранённые данные устройства; OpenRad не создаст новые автоматически.",
+    "Lần đăng ký trước chưa hoàn tất lưu. Nhập danh tính đã lưu để khôi phục; OpenRad sẽ không tự động tạo danh tính khác."
+  ],
+  "No replacement identity to save": [
+    "Nenhuma nova identidade para salvar",
+    "Нет новых данных устройства для сохранения",
+    "Không có danh tính thay thế để lưu"
+  ],
+  "OpenRad native desktop VPN client": [
+    "Cliente VPN OpenRad para desktop",
+    "Настольный VPN-клиент OpenRad",
+    "Ứng dụng VPN OpenRad cho máy tính"
+  ],
+  "Run the desktop as your normal user. Only the TAP setup helper uses sudo.": [
+    "Execute o app como seu usuário normal. Apenas o auxiliar de configuração TAP usa sudo.",
+    "Запускайте приложение от обычного пользователя. Только помощник настройки TAP использует sudo.",
+    "Chạy ứng dụng với quyền người dùng thông thường. Chỉ trình hỗ trợ cấu hình TAP dùng sudo."
+  ],
+  "Native window could not be started: {e}": [
+    "Não foi possível abrir a janela do app: {e}",
+    "Не удалось открыть окно приложения: {e}",
+    "Không thể mở cửa sổ ứng dụng: {e}"
+  ],
+  "Startup log: {0}": [
+    "Log de inicialização: {0}",
+    "Журнал запуска: {0}",
+    "Nhật ký khởi động: {0}"
+  ],
+  "Graphics renderer: auto, opengl, wgpu or software": [
+    "Renderizador gráfico: auto, opengl, wgpu ou software",
+    "Графический рендерер: auto, opengl, wgpu или software",
+    "Trình kết xuất đồ họa: auto, opengl, wgpu hoặc software"
+  ],
+  "desktop application must only be created once": [
+    "O aplicativo desktop só deve ser criado uma vez",
+    "Приложение должно создаваться только один раз",
+    "Ứng dụng chỉ được khởi tạo một lần"
+  ],
+  "network password must contain 6–256 characters": [
+    "A senha da rede deve conter de 6 a 256 caracteres",
+    "Пароль сети должен содержать от 6 до 256 символов",
+    "Mật khẩu mạng phải có từ 6 đến 256 ký tự"
+  ],
+  "network password contains a control character": [
+    "A senha da rede contém um caractere de controle",
+    "Пароль сети содержит управляющий символ",
+    "Mật khẩu mạng chứa ký tự điều khiển"
+  ],
+  "network name must contain 1–255 characters": [
+    "O nome da rede deve conter de 1 a 255 caracteres",
+    "Название сети должно содержать от 1 до 255 символов",
+    "Tên mạng phải có từ 1 đến 255 ký tự"
+  ],
+  "network name contains a control character": [
+    "O nome da rede contém um caractere de controle",
+    "Название сети содержит управляющий символ",
+    "Tên mạng chứa ký tự điều khiển"
+  ],
+  "compiled SH prime": [
+    "Número primo SH embutido",
+    "Встроенное простое число SH",
+    "Số nguyên tố SH được nhúng"
+  ],
+  "invalid network request correlation": [
+    "Correlação inválida da solicitação de rede",
+    "Неверная привязка запроса сети",
+    "Liên kết yêu cầu mạng không hợp lệ"
+  ],
+  "invalid network ID": [
+    "ID de rede inválido",
+    "Неверный ID сети",
+    "ID mạng không hợp lệ"
+  ],
+  "salt size": [
+    "Tamanho do salt",
+    "Размер соли",
+    "Kích thước salt"
+  ],
+  "invalid member ID": [
+    "ID de membro inválido",
+    "Неверный ID участника",
+    "ID thành viên không hợp lệ"
+  ],
+  "unexpected join context": [
+    "Contexto de entrada inesperado",
+    "Неожиданный контекст вступления",
+    "Ngữ cảnh tham gia không đúng dự kiến"
+  ],
+  "Network join refused (server status {status}); check the network name and password": [
+    "Entrada na rede recusada (estado do servidor {status}); confira o nome da rede e a senha",
+    "Вступление в сеть отклонено (статус сервера {status}); проверьте название сети и пароль",
+    "Tham gia mạng bị từ chối (trạng thái máy chủ {status}); kiểm tra tên mạng và mật khẩu"
+  ],
+  "password required for this network": [
+    "Esta rede exige uma senha",
+    "Для этой сети нужен пароль",
+    "Mạng này yêu cầu mật khẩu"
+  ],
+  "Network password authentication failed; check the password": [
+    "Falha na autenticação da senha da rede; confira a senha",
+    "Ошибка проверки пароля сети; проверьте пароль",
+    "Xác thực mật khẩu mạng thất bại; kiểm tra mật khẩu"
+  ],
+  "unexpected network authentication message": [
+    "Mensagem inesperada de autenticação de rede",
+    "Неожиданное сообщение аутентификации сети",
+    "Thông điệp xác thực mạng không đúng dự kiến"
+  ],
+  "invalid approved network ID": [
+    "ID inválido da rede aprovada",
+    "Неверный ID одобренной сети",
+    "ID mạng được phê duyệt không hợp lệ"
+  ],
+  "network response action mismatch": [
+    "A ação na resposta da rede não corresponde à solicitação",
+    "Действие в ответе сети не соответствует запросу",
+    "Thao tác trong phản hồi mạng không khớp yêu cầu"
+  ],
+  "network response context mismatch": [
+    "O contexto na resposta da rede não corresponde à solicitação",
+    "Контекст ответа сети не соответствует запросу",
+    "Ngữ cảnh phản hồi mạng không khớp yêu cầu"
+  ],
+  "; grant admin to another member before leaving, or delete the network": [
+    "; conceda administração a outro membro antes de sair ou exclua a rede",
+    "; перед уходом назначьте другого администратора или удалите сеть",
+    "; cấp quyền quản trị cho thành viên khác trước khi rời mạng hoặc xóa mạng"
+  ],
+  "Network operation refused (server error {code}){hint}": [
+    "Operação de rede recusada (erro do servidor {code}){hint}",
+    "Операция сети отклонена (ошибка сервера {code}){hint}",
+    "Thao tác mạng bị từ chối (lỗi máy chủ {code}){hint}"
+  ],
+  "private join completed before server password proof": [
+    "Entrada na rede privada concluída antes da prova de senha do servidor",
+    "Вступление в частную сеть завершилось до подтверждения пароля сервером",
+    "Tham gia mạng riêng hoàn tất trước bằng chứng mật khẩu của máy chủ"
+  ],
+  "join response network name mismatch": [
+    "O nome da rede na resposta de entrada não corresponde à solicitação",
+    "Название сети в ответе на вступление не соответствует запросу",
+    "Tên mạng trong phản hồi tham gia không khớp yêu cầu"
+  ],
+  "validated network": [
+    "Rede validada",
+    "Проверенная сеть",
+    "Mạng đã được kiểm tra"
+  ],
+  "Requested membership in {name}; waiting for administrator approval": [
+    "Solicitada participação em {name}; aguardando aprovação do administrador",
+    "Запрошено вступление в {name}; ожидается одобрение администратора",
+    "Đã yêu cầu tham gia {name}; đang chờ quản trị viên phê duyệt"
+  ],
+  "create response network name mismatch": [
+    "O nome da rede na resposta de criação não corresponde à solicitação",
+    "Название сети в ответе на создание не соответствует запросу",
+    "Tên mạng trong phản hồi tạo không khớp yêu cầu"
+  ],
+  "Created {name}": [
+    "Rede criada: {name}",
+    "Создана сеть: {name}",
+    "Đã tạo mạng: {name}"
+  ],
+  "network response ID mismatch": [
+    "O ID na resposta da rede não corresponde à solicitação",
+    "ID в ответе сети не соответствует запросу",
+    "ID trong phản hồi mạng không khớp yêu cầu"
+  ],
+  "network response member mismatch": [
+    "O membro na resposta da rede não corresponde à solicitação",
+    "Участник в ответе сети не соответствует запросу",
+    "Thành viên trong phản hồi mạng không khớp yêu cầu"
+  ],
+  "{0} completed": [
+    "{0}: concluído",
+    "{0}: выполнено",
+    "{0}: đã hoàn tất"
+  ],
+  "Deleted network": [
+    "Rede excluída",
+    "Сеть удалена",
+    "Đã xóa mạng"
+  ],
+  "Left network": [
+    "Saiu da rede",
+    "Вы покинули сеть",
+    "Đã rời mạng"
+  ],
+  "Joined {0}": [
+    "Entrou na rede {0}",
+    "Вы вступили в сеть {0}",
+    "Đã tham gia mạng {0}"
+  ],
+  "engine event receiver closed": [
+    "O receptor de eventos do mecanismo foi fechado",
+    "Получатель событий движка закрыт",
+    "Bộ nhận sự kiện của bộ máy đã đóng"
+  ],
+  "Too many network commands are waiting. Try again shortly.": [
+    "Há muitos comandos de rede na fila. Tente novamente em instantes.",
+    "Слишком много команд сети в очереди. Повторите попытку чуть позже.",
+    "Quá nhiều lệnh mạng đang chờ. Hãy thử lại sau một lát."
+  ],
+  "Control worker unavailable": [
+    "Processo de controle indisponível",
+    "Рабочий поток управления недоступен",
+    "Luồng điều khiển không khả dụng"
+  ],
+  "sending attachment heartbeat": [
+    "Enviando sinal de manutenção da conexão",
+    "Отправка сигнала поддержания подключения",
+    "Đang gửi tín hiệu duy trì kết nối"
+  ],
+  "sending incoming peer advertisement": [
+    "Enviando anúncio do dispositivo de entrada",
+    "Отправка объявления входящего узла",
+    "Đang gửi thông báo thiết bị đến"
+  ],
+  "unsupported control command": [
+    "Comando de controle não suportado",
+    "Неподдерживаемая команда управления",
+    "Lệnh điều khiển không được hỗ trợ"
+  ],
+  "sending network command": [
+    "Enviando comando de rede",
+    "Отправка команды сети",
+    "Đang gửi lệnh mạng"
+  ],
+  "Public network search timed out. You can retry the search.": [
+    "O tempo da busca de redes públicas esgotou. Você pode tentar buscar novamente.",
+    "Время поиска публичных сетей истекло. Можно повторить поиск.",
+    "Tìm kiếm mạng công cộng đã hết thời gian chờ. Bạn có thể tìm lại."
+  ],
+  "network operation timed out; reconnect to reload server membership": [
+    "O tempo da operação de rede esgotou; reconecte para recarregar a participação informada pelo servidor",
+    "Время операции сети истекло; переподключитесь для обновления данных об участии с сервера",
+    "Thao tác mạng hết thời gian chờ; kết nối lại để tải lại thông tin thành viên từ máy chủ"
+  ],
+  "polling attachment connection": [
+    "Verificando a conexão com o servidor",
+    "Проверка подключения к серверу",
+    "Đang kiểm tra kết nối với máy chủ"
+  ],
+  "receiving attachment record": [
+    "Recebendo registro da conexão",
+    "Получение записи подключения",
+    "Đang nhận bản ghi kết nối"
+  ],
+  "decoding attachment operation": [
+    "Decodificando operação da conexão",
+    "Декодирование операции подключения",
+    "Đang giải mã thao tác kết nối"
+  ],
+  "decoding membership snapshot": [
+    "Decodificando o estado das participações",
+    "Декодирование состояния участников",
+    "Đang giải mã trạng thái thành viên"
+  ],
+  "decoding membership changes": [
+    "Decodificando alterações de participação",
+    "Декодирование изменений участников",
+    "Đang giải mã thay đổi thành viên"
+  ],
+  "server disconnected the session": [
+    "O servidor desconectou a sessão",
+    "Сервер отключил сеанс",
+    "Máy chủ đã ngắt kết nối phiên"
+  ],
+  "Public networks updated": [
+    "Redes públicas atualizadas",
+    "Публичные сети обновлены",
+    "Đã cập nhật mạng công cộng"
+  ],
+  "Control connection closed": [
+    "Conexão de controle fechada",
+    "Подключение управления закрыто",
+    "Kết nối điều khiển đã đóng"
+  ],
+  "{0} · Retry queued (at least {1}s; adaptive recovery)": [
+    "{0} · Nova tentativa na fila (pelo menos {1}s; recuperação adaptativa)",
+    "{0} · Повтор в очереди (не менее {1}с; адаптивное восстановление)",
+    "{0} · Lượt thử lại trong hàng đợi (ít nhất {1}s; phục hồi thích ứng)"
+  ],
+  "{count} peer retries queued with adaptive recovery.": [
+    "Tentativas de conexão na fila: {count}, com recuperação adaptativa.",
+    "Повторных подключений в очереди: {count}, с адаптивным восстановлением.",
+    "Lượt thử lại kết nối trong hàng đợi: {count}, với phục hồi thích ứng."
+  ],
+  "Incoming request rejected: {e}": [
+    "Solicitação de entrada rejeitada: {e}",
+    "Входящий запрос отклонён: {e}",
+    "Yêu cầu đến bị từ chối: {e}"
+  ],
+  "Authenticated {0} · {1}": [
+    "Autenticado: {0} · {1}",
+    "Аутентифицирован: {0} · {1}",
+    "Đã xác thực: {0} · {1}"
+  ],
+  "Channel closed": [
+    "Canal fechado",
+    "Канал закрыт",
+    "Kênh đã đóng"
+  ],
+  "OpenRad {version}\nState: {state}\nSession: {session}\nInterface ready: {interface}\nLatency: {latency} ms\nNetworks: {networks}\nPeers: {peers} ({connected} connected)\nTraffic: {received} received / {sent} sent bytes\nFrames: {frames_in} received / {frames_out} sent / {filtered} filtered\nRestricted traffic: {restricted}": [
+    "OpenRad {version}\nEstado: {state}\nSessão: {session}\nInterface pronta: {interface}\nLatência: {latency} ms\nRedes: {networks}\nDispositivos: {peers} ({connected} conectados)\nTráfego: {received} bytes recebidos / {sent} enviados\nQuadros: {frames_in} recebidos / {frames_out} enviados / {filtered} filtrados\nTráfego restrito: {restricted}",
+    "OpenRad {version}\nСостояние: {state}\nСеанс: {session}\nИнтерфейс готов: {interface}\nЗадержка: {latency} мс\nСетей: {networks}\nУзлов: {peers} (подключено: {connected})\nТрафик: {received} байт получено / {sent} отправлено\nКадры: {frames_in} получено / {frames_out} отправлено / {filtered} отфильтровано\nОграниченный трафик: {restricted}",
+    "OpenRad {version}\nTrạng thái: {state}\nPhiên: {session}\nGiao diện mạng sẵn sàng: {interface}\nĐộ trễ: {latency} ms\nMạng: {networks}\nThiết bị: {peers} (đã kết nối: {connected})\nLưu lượng: {received} byte nhận / {sent} byte gửi\nKhung: {frames_in} nhận / {frames_out} gửi / {filtered} đã lọc\nLưu lượng bị giới hạn: {restricted}"
+  ],
+  "incoming TCP rendezvous identity mismatch": [
+    "A identidade do rendezvous TCP de entrada não corresponde",
+    "Несовпадение идентификатора входящего TCP-рандеву",
+    "Danh tính điểm hẹn TCP đến không khớp"
+  ],
+  "invalid TCP rendezvous identity": [
+    "Identidade inválida no rendezvous TCP",
+    "Неверный идентификатор TCP-рандеву",
+    "Danh tính điểm hẹn TCP không hợp lệ"
+  ],
+  "TCP rendezvous checksum mismatch": [
+    "A soma de verificação do rendezvous TCP não corresponde",
+    "Несовпадение контрольной суммы TCP-рандеву",
+    "Tổng kiểm tra điểm hẹn TCP không khớp"
+  ],
+  "no endpoint address": [
+    "Nenhum endereço de destino",
+    "Нет адреса конечной точки",
+    "Không có địa chỉ điểm cuối"
+  ],
+  "frame/deadline limit": [
+    "Limite de quadros ou de tempo",
+    "Превышен лимит кадров или времени",
+    "Vượt giới hạn khung hoặc thời gian"
+  ],
+  "session deadline/record budget": [
+    "Limite de tempo ou registros da sessão",
+    "Превышен лимит времени или записей сеанса",
+    "Vượt giới hạn thời gian hoặc bản ghi của phiên"
+  ],
+  "frame/byte budget": [
+    "Limite de quadros ou bytes",
+    "Превышен лимит кадров или байтов",
+    "Vượt giới hạn khung hoặc byte"
+  ],
+  "frame receive timeout": [
+    "O tempo de recebimento do quadro esgotou",
+    "Время ожидания кадра истекло",
+    "Nhận khung hết thời gian chờ"
+  ],
+  "remote endpoint closed the connection": [
+    "O destino remoto fechou a conexão",
+    "Удалённая сторона закрыла подключение",
+    "Điểm cuối từ xa đã đóng kết nối"
+  ],
+  "TCP connect timeout": [
+    "O tempo da conexão TCP esgotou",
+    "Время подключения TCP истекло",
+    "Kết nối TCP hết thời gian chờ"
+  ],
+  "channel key must be 32 bytes": [
+    "A chave do canal deve ter 32 bytes",
+    "Ключ канала должен содержать 32 байта",
+    "Khóa kênh phải có 32 byte"
+  ],
+  "invalid plaintext length": [
+    "Comprimento inválido do texto não criptografado",
+    "Неверная длина открытого текста",
+    "Độ dài bản rõ không hợp lệ"
+  ],
+  "invalid ciphertext length": [
+    "Comprimento inválido do texto criptografado",
+    "Неверная длина шифротекста",
+    "Độ dài bản mã không hợp lệ"
+  ],
+  "invalid channel padding": [
+    "Preenchimento inválido do canal",
+    "Неверное дополнение канала",
+    "Phần đệm kênh không hợp lệ"
+  ],
+  "channel trailer rejected": [
+    "Trailer do canal rejeitado",
+    "Концевой блок канала отклонён",
+    "Phần cuối kênh bị từ chối"
+  ],
+  "truncated SH header": [
+    "Cabeçalho SH truncado",
+    "Обрезанный заголовок SH",
+    "Tiêu đề SH bị cắt ngắn"
+  ],
+  "invalid SH record": [
+    "Registro SH inválido",
+    "Неверная запись SH",
+    "Bản ghi SH không hợp lệ"
+  ],
+  "truncated SH body": [
+    "Corpo SH truncado",
+    "Обрезанное тело SH",
+    "Nội dung SH bị cắt ngắn"
+  ],
+  "SH state/trailing data mismatch": [
+    "Estado ou dados finais SH não correspondem",
+    "Несовпадение состояния или завершающих данных SH",
+    "Trạng thái hoặc dữ liệu cuối SH không khớp"
+  ],
+  "invalid SH credentials/exponent": [
+    "Credenciais ou expoente SH inválidos",
+    "Неверные учётные данные или показатель SH",
+    "Thông tin xác thực hoặc số mũ SH không hợp lệ"
+  ],
+  "SH already started": [
+    "SH já iniciado",
+    "SH уже запущен",
+    "SH đã bắt đầu"
+  ],
+  "SH unexpected parameters": [
+    "Parâmetros SH inesperados",
+    "Неожиданные параметры SH",
+    "Tham số SH không đúng dự kiến"
+  ],
+  "unsupported SH group": [
+    "Grupo SH não suportado",
+    "Неподдерживаемая группа SH",
+    "Nhóm SH không được hỗ trợ"
+  ],
+  "SH unexpected challenge": [
+    "Desafio SH inesperado",
+    "Неожиданный запрос проверки SH",
+    "Thách thức SH không đúng dự kiến"
+  ],
+  "invalid SH peer public": [
+    "Chave pública SH do dispositivo inválida",
+    "Неверный открытый ключ узла SH",
+    "Khóa công khai SH của thiết bị không hợp lệ"
+  ],
+  "zero SH multiplier": [
+    "Multiplicador SH igual a zero",
+    "Нулевой множитель SH",
+    "Hệ số nhân SH bằng không"
+  ],
+  "SH unexpected confirmation": [
+    "Confirmação SH inesperada",
+    "Неожиданное подтверждение SH",
+    "Xác nhận SH không đúng dự kiến"
+  ],
+  "SH server proof rejected": [
+    "Prova SH do servidor rejeitada",
+    "Доказательство сервера SH отклонено",
+    "Bằng chứng SH của máy chủ bị từ chối"
+  ],
+  "invalid SH server parameters": [
+    "Parâmetros SH do servidor inválidos",
+    "Неверные параметры сервера SH",
+    "Tham số SH của máy chủ không hợp lệ"
+  ],
+  "SH unexpected hello": [
+    "Saudação SH inesperada",
+    "Неожиданное приветствие SH",
+    "Thông điệp chào SH không đúng dự kiến"
+  ],
+  "SH identity mismatch": [
+    "Identidade SH não corresponde",
+    "Несовпадение идентификатора SH",
+    "Danh tính SH không khớp"
+  ],
+  "SH unexpected client public": [
+    "Chave pública SH do cliente inesperada",
+    "Неожиданный открытый ключ клиента SH",
+    "Khóa công khai SH của máy khách không đúng dự kiến"
+  ],
+  "invalid SH client public": [
+    "Chave pública SH do cliente inválida",
+    "Неверный открытый ключ клиента SH",
+    "Khóa công khai SH của máy khách không hợp lệ"
+  ],
+  "zero SH scrambling parameter": [
+    "Parâmetro de mistura SH igual a zero",
+    "Нулевой параметр смешивания SH",
+    "Tham số xáo trộn SH bằng không"
+  ],
+  "SH unexpected client proof": [
+    "Prova SH do cliente inesperada",
+    "Неожиданное доказательство клиента SH",
+    "Bằng chứng SH của máy khách không đúng dự kiến"
+  ],
+  "SH client proof rejected": [
+    "Prova SH do cliente rejeitada",
+    "Доказательство клиента SH отклонено",
+    "Bằng chứng SH của máy khách bị từ chối"
+  ],
+  "invalid RSA parameters": [
+    "Parâmetros RSA inválidos",
+    "Неверные параметры RSA",
+    "Tham số RSA không hợp lệ"
+  ],
+  "unsupported RSA width": [
+    "Tamanho RSA não suportado",
+    "Неподдерживаемая длина RSA",
+    "Độ dài RSA không được hỗ trợ"
+  ],
+  "RSA message too long": [
+    "Mensagem RSA longa demais",
+    "Сообщение RSA слишком длинное",
+    "Thông điệp RSA quá dài"
+  ],
+  "RSA randomness failure": [
+    "Falha na geração aleatória RSA",
+    "Сбой генерации случайных данных RSA",
+    "Tạo số ngẫu nhiên RSA thất bại"
+  ],
+  "RSA encoded message exceeds modulus": [
+    "Mensagem RSA codificada excede o módulo",
+    "Закодированное сообщение RSA превышает модуль",
+    "Thông điệp RSA đã mã hóa vượt mô-đun"
+  ],
+  "TLV payload exceeds limit": [
+    "Os dados TLV excedem o limite",
+    "Данные TLV превышают лимит",
+    "Dữ liệu TLV vượt giới hạn"
+  ],
+  "invalid TLV header/count": [
+    "Cabeçalho ou contagem TLV inválidos",
+    "Неверный заголовок или счётчик TLV",
+    "Tiêu đề hoặc số lượng TLV không hợp lệ"
+  ],
+  "truncated TLV body": [
+    "Corpo TLV truncado",
+    "Обрезанное тело TLV",
+    "Nội dung TLV bị cắt ngắn"
+  ],
+  "duplicate singleton {tag}": [
+    "Campo único duplicado: {tag}",
+    "Повтор уникального поля: {tag}",
+    "Trường duy nhất bị trùng: {tag}"
+  ],
+  "missing field {tag}": [
+    "Campo ausente: {tag}",
+    "Отсутствует поле: {tag}",
+    "Thiếu trường: {tag}"
+  ],
+  "invalid u32 width": [
+    "Tamanho u32 inválido",
+    "Неверная длина u32",
+    "Độ dài u32 không hợp lệ"
+  ],
+  "invalid u64 width": [
+    "Tamanho u64 inválido",
+    "Неверная длина u64",
+    "Độ dài u64 không hợp lệ"
+  ],
+  "invalid UTF16 text": [
+    "Texto UTF16 inválido",
+    "Неверный текст UTF16",
+    "Văn bản UTF16 không hợp lệ"
+  ],
+  "embedded NUL in text": [
+    "Texto contém NUL",
+    "В тексте содержится NUL",
+    "Văn bản chứa NUL"
+  ],
+  "control character in text": [
+    "Texto contém caractere de controle",
+    "В тексте содержится управляющий символ",
+    "Văn bản chứa ký tự điều khiển"
+  ],
+  "text too long": [
+    "Texto longo demais",
+    "Текст слишком длинный",
+    "Văn bản quá dài"
+  ],
+  "invalid candidate: {0}": [
+    "Candidato inválido: {0}",
+    "Неверный адрес-кандидат: {0}",
+    "Địa chỉ kết nối ứng viên không hợp lệ: {0}"
+  ],
+  "unexpected candidate operation": [
+    "Operação de candidato inesperada",
+    "Неожиданная операция адреса-кандидата",
+    "Thao tác địa chỉ ứng viên không đúng dự kiến"
+  ],
+  "candidate correlation mismatch": [
+    "Correlação de candidato não corresponde",
+    "Несовпадение привязки адреса-кандидата",
+    "Liên kết địa chỉ ứng viên không khớp"
+  ],
+  "direct candidate limit": [
+    "Limite de candidatos diretos",
+    "Превышен лимит прямых адресов-кандидатов",
+    "Vượt giới hạn địa chỉ ứng viên trực tiếp"
+  ],
+  "invalid candidate port": [
+    "Porta do candidato inválida",
+    "Неверный порт адреса-кандидата",
+    "Cổng địa chỉ ứng viên không hợp lệ"
+  ],
+  "invalid candidate address": [
+    "Endereço do candidato inválido",
+    "Неверный адрес-кандидат",
+    "Địa chỉ ứng viên không hợp lệ"
+  ],
+  "candidate {index}: {e}": [
+    "Candidato {index}: {e}",
+    "Адрес-кандидат {index}: {e}",
+    "Địa chỉ ứng viên {index}: {e}"
+  ],
+  "TCP advertisement bounds": [
+    "Anúncio TCP fora dos limites",
+    "Параметры объявления TCP вне допустимых пределов",
+    "Thông báo TCP ngoài giới hạn"
+  ],
+  "UDP advertisement bounds": [
+    "Anúncio UDP fora dos limites",
+    "Параметры объявления UDP вне допустимых пределов",
+    "Thông báo UDP ngoài giới hạn"
+  ],
+  "expected LoginComplete": [
+    "Esperada a mensagem LoginComplete",
+    "Ожидалось сообщение LoginComplete",
+    "Cần thông điệp LoginComplete"
+  ],
+  "UES host count limit": [
+    "Limite de hosts UES",
+    "Превышен лимит узлов UES",
+    "Vượt giới hạn số máy chủ UES"
+  ],
+  "invalid UES host text": [
+    "Texto do host UES inválido",
+    "Неверный текст узла UES",
+    "Văn bản máy chủ UES không hợp lệ"
+  ],
+  "invalid UES host": [
+    "Host UES inválido",
+    "Неверный узел UES",
+    "Máy chủ UES không hợp lệ"
+  ],
+  "mapped candidate correlation": [
+    "Correlação do candidato mapeado",
+    "Привязка сопоставленного адреса-кандидата",
+    "Liên kết địa chỉ ứng viên đã ánh xạ"
+  ],
+  "invalid mapped UDP candidate": [
+    "Candidato UDP mapeado inválido",
+    "Неверный сопоставленный UDP-адрес",
+    "Địa chỉ UDP ứng viên đã ánh xạ không hợp lệ"
+  ],
+  "node name required": [
+    "Nome do dispositivo obrigatório",
+    "Требуется имя устройства",
+    "Cần tên thiết bị"
+  ],
+  "expected Registered": [
+    "Esperada a mensagem Registered",
+    "Ожидалось сообщение Registered",
+    "Cần thông điệp Registered"
+  ],
+  "invalid assigned identity": [
+    "Identidade atribuída inválida",
+    "Неверные назначенные данные устройства",
+    "Danh tính được cấp không hợp lệ"
+  ],
+  "invalid assigned credential/address": [
+    "Credencial ou endereço atribuídos inválidos",
+    "Неверные назначенные учётные данные или адрес",
+    "Thông tin xác thực hoặc địa chỉ được cấp không hợp lệ"
+  ],
+  "identity file too large": [
+    "Arquivo de identidade grande demais",
+    "Файл данных устройства слишком большой",
+    "Tệp danh tính quá lớn"
+  ],
+  "identity record too large": [
+    "Registro de identidade grande demais",
+    "Запись данных устройства слишком большая",
+    "Bản ghi danh tính quá lớn"
+  ],
+  "invalid identity file": [
+    "Arquivo de identidade inválido",
+    "Неверный файл данных устройства",
+    "Tệp danh tính không hợp lệ"
+  ],
+  "unsupported identity": [
+    "Identidade não suportada",
+    "Неподдерживаемые данные устройства",
+    "Danh tính không được hỗ trợ"
+  ],
+  "invalid VIP": [
+    "Endereço VPN inválido",
+    "Неверный адрес VPN",
+    "Địa chỉ VPN không hợp lệ"
+  ],
+  "invalid companion address": [
+    "Endereço auxiliar inválido",
+    "Неверный вспомогательный адрес",
+    "Địa chỉ phụ trợ không hợp lệ"
+  ],
+  "invalid credential length": [
+    "Tamanho da credencial inválido",
+    "Неверная длина учётных данных",
+    "Độ dài thông tin xác thực không hợp lệ"
+  ],
+  "empty node name": [
+    "Nome do dispositivo vazio",
+    "Пустое имя устройства",
+    "Tên thiết bị trống"
+  ],
+  "invalid credential encoding": [
+    "Codificação da credencial inválida",
+    "Неверная кодировка учётных данных",
+    "Mã hóa thông tin xác thực không hợp lệ"
+  ],
+  "invalid login profile": [
+    "Perfil de login inválido",
+    "Неверный профиль входа",
+    "Hồ sơ đăng nhập không hợp lệ"
+  ],
+  "peer RID required": [
+    "RID do dispositivo obrigatório",
+    "Требуется RID узла",
+    "Cần RID của thiết bị"
+  ],
+  "invalid join request": [
+    "Solicitação de entrada inválida",
+    "Неверный запрос вступления",
+    "Yêu cầu tham gia không hợp lệ"
+  ],
+  "join response command mismatch": [
+    "O comando na resposta de entrada não corresponde",
+    "Несовпадение команды в ответе на вступление",
+    "Lệnh trong phản hồi tham gia không khớp"
+  ],
+  "invalid leave request": [
+    "Solicitação de saída inválida",
+    "Неверный запрос выхода",
+    "Yêu cầu rời mạng không hợp lệ"
+  ],
+  "leave response command mismatch": [
+    "O comando na resposta de saída não corresponde",
+    "Несовпадение команды в ответе на выход",
+    "Lệnh trong phản hồi rời mạng không khớp"
+  ],
+  "leave response sequence mismatch": [
+    "A sequência na resposta de saída não corresponde",
+    "Несовпадение последовательности в ответе на выход",
+    "Trình tự trong phản hồi rời mạng không khớp"
+  ],
+  "leave response network mismatch": [
+    "A rede na resposta de saída não corresponde",
+    "Несовпадение сети в ответе на выход",
+    "Mạng trong phản hồi rời mạng không khớp"
+  ],
+  "listing correlation mismatch": [
+    "A correlação da listagem não corresponde",
+    "Несовпадение привязки списка",
+    "Liên kết danh sách không khớp"
+  ],
+  "missing event member": [
+    "Membro ausente no evento",
+    "В событии отсутствует участник",
+    "Thiếu thành viên trong sự kiện"
+  ],
+  "too many member event identifiers": [
+    "Identificadores demais no evento de membro",
+    "Слишком много идентификаторов в событии участника",
+    "Quá nhiều mã định danh trong sự kiện thành viên"
+  ],
+  "requested network missing: {name}": [
+    "Rede solicitada ausente: {name}",
+    "Запрошенная сеть отсутствует: {name}",
+    "Thiếu mạng đã yêu cầu: {name}"
+  ],
+  "invalid own VIP": [
+    "Seu endereço VPN é inválido",
+    "Неверный собственный адрес VPN",
+    "Địa chỉ VPN của bạn không hợp lệ"
+  ],
+  "expected all, tcp, udp or relay": [
+    "Esperado all, tcp, udp ou relay",
+    "Ожидалось all, tcp, udp или relay",
+    "Cần all, tcp, udp hoặc relay"
+  ],
+  "incoming record size limit": [
+    "Limite de tamanho do registro de entrada",
+    "Превышен лимит размера входящей записи",
+    "Vượt giới hạn kích thước bản ghi đến"
+  ],
+  "zero incoming connection ID": [
+    "ID da conexão de entrada igual a zero",
+    "Нулевой ID входящего подключения",
+    "ID kết nối đến bằng không"
+  ],
+  "invalid incoming credentials": [
+    "Credenciais de entrada inválidas",
+    "Неверные входящие учётные данные",
+    "Thông tin xác thực đến không hợp lệ"
+  ],
+  "incoming TCP cancelled/timeout": [
+    "TCP de entrada cancelado ou com tempo esgotado",
+    "Входящий TCP отменён или истекло время ожидания",
+    "TCP đến bị hủy hoặc hết thời gian chờ"
+  ],
+  "incoming TCP accept budget": [
+    "Limite de conexões TCP de entrada",
+    "Превышен лимит принятия входящих TCP",
+    "Vượt giới hạn nhận kết nối TCP đến"
+  ],
+  "incoming peer setup timeout": [
+    "O tempo de configuração do dispositivo de entrada esgotou",
+    "Время настройки входящего узла истекло",
+    "Cấu hình thiết bị đến hết thời gian chờ"
+  ],
+  "incoming relay pairing timeout": [
+    "O tempo de pareamento do relay de entrada esgotou",
+    "Время сопряжения входящего ретранслятора истекло",
+    "Ghép nối chuyển tiếp đến hết thời gian chờ"
+  ],
+  "incoming relay ticket rejected": [
+    "Ticket do relay de entrada rejeitado",
+    "Билет входящего ретранслятора отклонён",
+    "Vé chuyển tiếp đến bị từ chối"
+  ],
+  "incoming coordinator closed": [
+    "Coordenador de entrada fechado",
+    "Входящий координатор закрыт",
+    "Bộ điều phối đến đã đóng"
+  ],
+  "incoming relay correlation": [
+    "Correlação do relay de entrada",
+    "Привязка входящего ретранслятора",
+    "Liên kết chuyển tiếp đến"
+  ],
+  "invalid incoming relay ticket": [
+    "Ticket do relay de entrada inválido",
+    "Неверный билет входящего ретранслятора",
+    "Vé chuyển tiếp đến không hợp lệ"
+  ],
+  "incoming mapped candidate correlation": [
+    "Correlação do candidato mapeado de entrada",
+    "Привязка входящего сопоставленного адреса",
+    "Liên kết địa chỉ ứng viên đến đã ánh xạ"
+  ],
+  "invalid incoming mapped candidate": [
+    "Candidato mapeado de entrada inválido",
+    "Неверный входящий сопоставленный адрес",
+    "Địa chỉ ứng viên đến đã ánh xạ không hợp lệ"
+  ],
+  "peer has no authenticated server": [
+    "O dispositivo não tem servidor autenticado",
+    "У узла нет аутентифицированного сервера",
+    "Thiết bị không có máy chủ đã xác thực"
+  ],
+  "peer setup timeout": [
+    "O tempo de configuração do dispositivo esgotou",
+    "Время настройки узла истекло",
+    "Cấu hình thiết bị hết thời gian chờ"
+  ],
+  "direct TCP candidates failed: {0}": [
+    "Os candidatos TCP diretos falharam: {0}",
+    "Не удалось подключиться по прямым TCP-адресам: {0}",
+    "Các địa chỉ TCP trực tiếp đều thất bại: {0}"
+  ],
+  "relay pairing timeout": [
+    "O tempo de pareamento do relay esgotou",
+    "Время сопряжения ретранслятора истекло",
+    "Ghép nối chuyển tiếp hết thời gian chờ"
+  ],
+  "relay ticket rejected": [
+    "Ticket do relay rejeitado",
+    "Билет ретранслятора отклонён",
+    "Vé chuyển tiếp bị từ chối"
+  ],
+  "all peer transports failed or no authenticated candidates arrived": [
+    "Todos os transportes do dispositivo falharam ou nenhum candidato autenticado chegou",
+    "Все транспорты узла завершились с ошибкой или не поступило аутентифицированных адресов",
+    "Mọi phương thức truyền của thiết bị đều thất bại hoặc không nhận được địa chỉ ứng viên đã xác thực"
+  ],
+  "duplicate NewConnection": [
+    "Mensagem NewConnection duplicada",
+    "Повтор сообщения NewConnection",
+    "Thông điệp NewConnection bị trùng"
+  ],
+  "NewConnection target mismatch": [
+    "O destino de NewConnection não corresponde",
+    "Несовпадение цели NewConnection",
+    "Đích NewConnection không khớp"
+  ],
+  "invalid connection credentials": [
+    "Credenciais de conexão inválidas",
+    "Неверные учётные данные подключения",
+    "Thông tin xác thực kết nối không hợp lệ"
+  ],
+  "candidates before NewConnection": [
+    "Candidatos recebidos antes de NewConnection",
+    "Адреса-кандидаты получены до NewConnection",
+    "Nhận địa chỉ ứng viên trước NewConnection"
+  ],
+  "mapped candidates before NewConnection": [
+    "Candidatos mapeados recebidos antes de NewConnection",
+    "Сопоставленные адреса получены до NewConnection",
+    "Nhận địa chỉ ứng viên đã ánh xạ trước NewConnection"
+  ],
+  "relay before NewConnection": [
+    "Relay recebido antes de NewConnection",
+    "Ретранслятор получен до NewConnection",
+    "Nhận chuyển tiếp trước NewConnection"
+  ],
+  "relay correlation mismatch": [
+    "A correlação do relay não corresponde",
+    "Несовпадение привязки ретранслятора",
+    "Liên kết chuyển tiếp không khớp"
+  ],
+  "invalid relay ticket": [
+    "Ticket do relay inválido",
+    "Неверный билет ретранслятора",
+    "Vé chuyển tiếp không hợp lệ"
+  ],
+  "coordinator refused connection: operation {0}": [
+    "O coordenador recusou a conexão: operação {0}",
+    "Координатор отклонил подключение: операция {0}",
+    "Bộ điều phối từ chối kết nối: thao tác {0}"
+  ],
+  "incoming SH hello timeout": [
+    "O tempo da saudação SH de entrada esgotou",
+    "Время ожидания входящего приветствия SH истекло",
+    "Thông điệp chào SH đến hết thời gian chờ"
+  ],
+  "incoming peer race marker mismatch": [
+    "O marcador de disputa do dispositivo de entrada não corresponde",
+    "Несовпадение маркера гонки входящего узла",
+    "Dấu hiệu phân xử thiết bị đến không khớp"
+  ],
+  "incoming peer race GUID length": [
+    "Tamanho do GUID de disputa do dispositivo de entrada",
+    "Неверная длина GUID гонки входящего узла",
+    "Độ dài GUID phân xử thiết bị đến không hợp lệ"
+  ],
+  "UES response correlation/type": [
+    "Correlação ou tipo da resposta UES",
+    "Неверная привязка или тип ответа UES",
+    "Liên kết hoặc loại phản hồi UES không hợp lệ"
+  ],
+  "UES response length": [
+    "Tamanho da resposta UES",
+    "Неверная длина ответа UES",
+    "Độ dài phản hồi UES không hợp lệ"
+  ],
+  "truncated UES attribute": [
+    "Atributo UES truncado",
+    "Обрезанный атрибут UES",
+    "Thuộc tính UES bị cắt ngắn"
+  ],
+  "truncated UES value": [
+    "Valor UES truncado",
+    "Обрезанное значение UES",
+    "Giá trị UES bị cắt ngắn"
+  ],
+  "invalid UES mapped address": [
+    "Endereço UES mapeado inválido",
+    "Неверный сопоставленный адрес UES",
+    "Địa chỉ UES đã ánh xạ không hợp lệ"
+  ],
+  "invalid UES mapping": [
+    "Mapeamento UES inválido",
+    "Неверное сопоставление UES",
+    "Ánh xạ UES không hợp lệ"
+  ],
+  "missing UES mapping": [
+    "Mapeamento UES ausente",
+    "Отсутствует сопоставление UES",
+    "Thiếu ánh xạ UES"
+  ],
+  "insufficient authenticated UES hosts": [
+    "Hosts UES autenticados insuficientes",
+    "Недостаточно аутентифицированных узлов UES",
+    "Không đủ máy chủ UES đã xác thực"
+  ],
+  "UES mapping timeout": [
+    "O tempo do mapeamento UES esgotou",
+    "Время сопоставления UES истекло",
+    "Ánh xạ UES hết thời gian chờ"
+  ],
+  "UES mapping changes by destination; no port prediction attempted": [
+    "O mapeamento UES muda conforme o destino; não foi tentada previsão de porta",
+    "Сопоставление UES зависит от назначения; прогнозирование порта не выполнялось",
+    "Ánh xạ UES thay đổi theo đích; không thử dự đoán cổng"
+  ],
+  "local interface inventory failed": [
+    "Falha ao listar interfaces locais",
+    "Не удалось получить список локальных интерфейсов",
+    "Không thể liệt kê giao diện mạng cục bộ"
+  ],
+  "no routable local UDP candidates": [
+    "Nenhum candidato UDP local roteável",
+    "Нет маршрутизируемых локальных UDP-адресов",
+    "Không có địa chỉ UDP cục bộ có thể định tuyến"
+  ],
+  "UDP candidate/nonce limit": [
+    "Limite de candidatos ou nonces UDP",
+    "Превышен лимит UDP-адресов или nonce",
+    "Vượt giới hạn địa chỉ ứng viên hoặc nonce UDP"
+  ],
+  "incoming UDP rendezvous timeout": [
+    "O tempo do rendezvous UDP de entrada esgotou",
+    "Время входящего UDP-рандеву истекло",
+    "Điểm hẹn UDP đến hết thời gian chờ"
+  ],
+  "UDP rendezvous timeout (received={received}, matched={matched}, P/A/C={kinds})": [
+    "O tempo do rendezvous UDP esgotou (recebidos={received}, correspondentes={matched}, P/A/C={kinds})",
+    "Время UDP-рандеву истекло (получено={received}, совпало={matched}, P/A/C={kinds})",
+    "Điểm hẹn UDP hết thời gian chờ (đã nhận={received}, khớp={matched}, P/A/C={kinds})"
+  ],
+  "short UDP datagram write": [
+    "Gravação incompleta do datagrama UDP",
+    "Неполная запись UDP-датаграммы",
+    "Ghi gói UDP không đầy đủ"
+  ],
+  "UDP send window exhausted": [
+    "Janela de envio UDP esgotada",
+    "Окно отправки UDP исчерпано",
+    "Cửa sổ gửi UDP đã đầy"
+  ],
+  "UDP message size/state": [
+    "Tamanho ou estado da mensagem UDP inválido",
+    "Неверный размер или состояние сообщения UDP",
+    "Kích thước hoặc trạng thái thông điệp UDP không hợp lệ"
+  ],
+  "UDP message limit": [
+    "Limite de mensagens UDP",
+    "Превышен лимит сообщений UDP",
+    "Vượt giới hạn thông điệp UDP"
+  ],
+  "UDP receive timeout": [
+    "O tempo de recebimento UDP esgotou",
+    "Время ожидания UDP истекло",
+    "Nhận UDP hết thời gian chờ"
+  ],
+  "UDP handshake deadline": [
+    "Prazo da negociação UDP esgotado",
+    "Время согласования UDP истекло",
+    "Bắt tay UDP hết thời hạn"
+  ],
+  "UDP liveness timeout": [
+    "O tempo de verificação de atividade UDP esgotou",
+    "Время проверки активности UDP истекло",
+    "Kiểm tra hoạt động UDP hết thời gian chờ"
+  ],
+  "UDP acknowledgement timeout": [
+    "O tempo de confirmação UDP esgotou",
+    "Время подтверждения UDP истекло",
+    "Xác nhận UDP hết thời gian chờ"
+  ],
+  "truncated ENET command": [
+    "Comando ENET truncado",
+    "Обрезанная команда ENET",
+    "Lệnh ENET bị cắt ngắn"
+  ],
+  "unknown ENET command": [
+    "Comando ENET desconhecido",
+    "Неизвестная команда ENET",
+    "Lệnh ENET không xác định"
+  ],
+  "truncated ENET command body": [
+    "Corpo do comando ENET truncado",
+    "Обрезанное тело команды ENET",
+    "Nội dung lệnh ENET bị cắt ngắn"
+  ],
+  "truncated ENET data": [
+    "Dados ENET truncados",
+    "Обрезанные данные ENET",
+    "Dữ liệu ENET bị cắt ngắn"
+  ],
+  "ENET incoming CONNECT mismatch": [
+    "CONNECT de entrada ENET não corresponde",
+    "Несовпадение входящего CONNECT ENET",
+    "CONNECT đến của ENET không khớp"
+  ],
+  "ENET changed CONNECT": [
+    "CONNECT ENET alterado",
+    "CONNECT ENET изменён",
+    "CONNECT ENET đã thay đổi"
+  ],
+  "ENET reliable command without timestamp": [
+    "Comando confiável ENET sem marca de tempo",
+    "Надёжная команда ENET без метки времени",
+    "Lệnh tin cậy ENET không có dấu thời gian"
+  ],
+  "ENET verification mismatch": [
+    "A verificação ENET não corresponde",
+    "Несовпадение проверки ENET",
+    "Xác minh ENET không khớp"
+  ],
+  "ENET peer id": [
+    "ID do dispositivo ENET inválido",
+    "Неверный ID узла ENET",
+    "ID thiết bị ENET không hợp lệ"
+  ],
+  "UDP peer disconnected": [
+    "Dispositivo UDP desconectado",
+    "UDP-узел отключён",
+    "Thiết bị UDP đã ngắt kết nối"
+  ],
+  "unsupported ENET channel/command": [
+    "Canal ou comando ENET não suportado",
+    "Неподдерживаемый канал или команда ENET",
+    "Kênh hoặc lệnh ENET không được hỗ trợ"
+  ],
+  "ENET command budget": [
+    "Limite de comandos ENET",
+    "Превышен лимит команд ENET",
+    "Vượt giới hạn lệnh ENET"
+  ],
+  "UDP fragment bounds": [
+    "Fragmento UDP fora dos limites",
+    "Фрагмент UDP вне допустимых пределов",
+    "Mảnh UDP ngoài giới hạn"
+  ],
+  "UDP fragment sequence": [
+    "Sequência de fragmentos UDP inválida",
+    "Неверная последовательность фрагментов UDP",
+    "Trình tự mảnh UDP không hợp lệ"
+  ],
+  "inconsistent UDP fragments": [
+    "Fragmentos UDP inconsistentes",
+    "Несогласованные фрагменты UDP",
+    "Các mảnh UDP không nhất quán"
+  ],
+  "overlapping/gapped UDP fragments": [
+    "Fragmentos UDP sobrepostos ou com lacunas",
+    "Перекрывающиеся фрагменты UDP или пропуски",
+    "Các mảnh UDP chồng lấn hoặc có khoảng trống"
+  ],
+  "UDP fragment total mismatch": [
+    "O total dos fragmentos UDP não corresponde",
+    "Несовпадение общего размера фрагментов UDP",
+    "Tổng mảnh UDP không khớp"
+  ],
+  "peer service refused: {0}": [
+    "O serviço do dispositivo recusou: {0}",
+    "Служба узла отказала: {0}",
+    "Dịch vụ thiết bị từ chối: {0}"
+  ],
+  "invalid service version/MAC": [
+    "Versão ou MAC do serviço inválidos",
+    "Неверная версия или MAC службы",
+    "Phiên bản hoặc MAC dịch vụ không hợp lệ"
+  ],
+  "service peer identity mismatch": [
+    "A identidade do dispositivo do serviço não corresponde",
+    "Несовпадение идентификатора узла службы",
+    "Danh tính thiết bị của dịch vụ không khớp"
+  ],
+  "service acknowledgement mismatch": [
+    "A confirmação do serviço não corresponde",
+    "Несовпадение подтверждения службы",
+    "Xác nhận dịch vụ không khớp"
+  ],
+  "invalid Ethernet length": [
+    "Tamanho Ethernet inválido",
+    "Неверная длина Ethernet",
+    "Độ dài Ethernet không hợp lệ"
+  ],
+  "truncated tunnel packet": [
+    "Pacote do túnel truncado",
+    "Обрезанный пакет туннеля",
+    "Gói đường hầm bị cắt ngắn"
+  ],
+  "truncated Ethernet envelope": [
+    "Envelope Ethernet truncado",
+    "Обрезанная оболочка Ethernet",
+    "Khung bao Ethernet bị cắt ngắn"
+  ],
+  "invalid Ethernet envelope length": [
+    "Tamanho do envelope Ethernet inválido",
+    "Неверная длина оболочки Ethernet",
+    "Độ dài khung bao Ethernet không hợp lệ"
+  ],
+  "unsupported Ethernet offload/compression flags": [
+    "Flags de offload ou compressão Ethernet não suportadas",
+    "Неподдерживаемые флаги разгрузки или сжатия Ethernet",
+    "Cờ giảm tải hoặc nén Ethernet không được hỗ trợ"
+  ],
+  "empty Ethernet packet": [
+    "Pacote Ethernet vazio",
+    "Пустой пакет Ethernet",
+    "Gói Ethernet trống"
+  ],
+  "invalid keepalive length": [
+    "Tamanho do sinal de manutenção inválido",
+    "Неверная длина сигнала поддержания связи",
+    "Độ dài tín hiệu duy trì kết nối không hợp lệ"
+  ],
+  "TAP helper executable missing; build the workspace including the openrad CLI": [
+    "Executável do auxiliar TAP ausente; compile o workspace incluindo a CLI openrad",
+    "Нет исполняемого файла помощника TAP; соберите рабочую область вместе с CLI openrad",
+    "Thiếu tệp thực thi trình hỗ trợ TAP; biên dịch không gian làm việc cùng CLI openrad"
+  ],
+  "radminvpn0 already exists; refusing to touch it": [
+    "radminvpn0 já existe; a interface existente não será alterada",
+    "radminvpn0 уже существует; существующий интерфейс не будет изменён",
+    "radminvpn0 đã tồn tại; giao diện mạng hiện có sẽ không bị thay đổi"
+  ],
+  "TAP helper failed; sudo is required only for interface setup": [
+    "O auxiliar TAP falhou; sudo é necessário apenas para configurar a interface",
+    "Сбой помощника TAP; sudo нужен только для настройки интерфейса",
+    "Trình hỗ trợ TAP thất bại; sudo chỉ cần cho cấu hình giao diện mạng"
+  ],
+  "TAP helper did not return an interface descriptor": [
+    "O auxiliar TAP não retornou um descritor de interface",
+    "Помощник TAP не вернул дескриптор интерфейса",
+    "Trình hỗ trợ TAP không trả về mô tả giao diện mạng"
+  ],
+  "TAP Ethernet frame exceeds configured MTU": [
+    "O quadro Ethernet TAP excede o MTU configurado",
+    "Кадр Ethernet TAP превышает настроенный MTU",
+    "Khung Ethernet TAP vượt MTU đã cấu hình"
+  ],
+  "short TAP packet write": [
+    "Gravação incompleta do pacote TAP",
+    "Неполная запись пакета TAP",
+    "Ghi gói TAP không đầy đủ"
+  ],
+  "TAP interface configuration failed": [
+    "Falha na configuração da interface TAP",
+    "Не удалось настроить интерфейс TAP",
+    "Cấu hình giao diện mạng TAP thất bại"
+  ],
+  "interface helper requires CAP_NET_ADMIN via sudo": [
+    "O auxiliar da interface exige CAP_NET_ADMIN via sudo",
+    "Помощнику интерфейса нужен CAP_NET_ADMIN через sudo",
+    "Trình hỗ trợ giao diện mạng cần CAP_NET_ADMIN qua sudo"
+  ],
+  "invalid VPN interface parameters": [
+    "Parâmetros da interface VPN inválidos",
+    "Неверные параметры интерфейса VPN",
+    "Tham số giao diện mạng VPN không hợp lệ"
+  ],
+  "invalid peer host route": [
+    "Rota para o dispositivo inválida",
+    "Неверный маршрут к узлу",
+    "Tuyến đến thiết bị không hợp lệ"
+  ],
+  "TUNSETIFF failed: {0}": [
+    "TUNSETIFF falhou: {0}",
+    "Сбой TUNSETIFF: {0}",
+    "TUNSETIFF thất bại: {0}"
+  ],
+  "TUNSETOWNER failed": [
+    "TUNSETOWNER falhou",
+    "Сбой TUNSETOWNER",
+    "TUNSETOWNER thất bại"
+  ],
+  "could not pass TAP descriptor": [
+    "Não foi possível transferir o descritor TAP",
+    "Не удалось передать дескриптор TAP",
+    "Không thể chuyển mô tả TAP"
+  ],
+  "TAP helper ended before descriptor transfer": [
+    "O auxiliar TAP terminou antes de transferir o descritor",
+    "Помощник TAP завершился до передачи дескриптора",
+    "Trình hỗ trợ TAP kết thúc trước khi chuyển mô tả"
+  ],
+  "invalid TAP descriptor transfer": [
+    "Transferência de descritor TAP inválida",
+    "Неверная передача дескриптора TAP",
+    "Chuyển mô tả TAP không hợp lệ"
+  ],
+  "The VPN data plane is implemented and tested on Linux only": [
+    "O plano de dados da VPN está implementado e testado apenas no Linux",
+    "Передача данных VPN реализована и протестирована только в Linux",
+    "Truyền dữ liệu VPN chỉ được triển khai và kiểm thử trên Linux"
+  ],
+  "VPN interface unavailable on this platform": [
+    "Interface VPN indisponível nesta plataforma",
+    "Интерфейс VPN недоступен на этой платформе",
+    "Giao diện mạng VPN không khả dụng trên nền tảng này"
+  ],
+  "The TAP helper is Linux only": [
+    "O auxiliar TAP é exclusivo do Linux",
+    "Помощник TAP доступен только в Linux",
+    "Trình hỗ trợ TAP chỉ dành cho Linux"
+  ],
+  "eligible-peer budget exceeded": [
+    "Limite de dispositivos elegíveis excedido",
+    "Превышен лимит допустимых узлов",
+    "Vượt giới hạn thiết bị đủ điều kiện"
+  ],
+  "traffic allowlist contains an ineligible or offline peer": [
+    "A lista de tráfego permitido contém um dispositivo inelegível ou desconectado",
+    "Список разрешённого трафика содержит недопустимый узел или узел не в сети",
+    "Danh sách lưu lượng cho phép chứa thiết bị không đủ điều kiện hoặc ngoại tuyến"
+  ],
+  "session peer budget exceeded": [
+    "Limite de dispositivos da sessão excedido",
+    "Превышен лимит узлов сеанса",
+    "Vượt giới hạn thiết bị của phiên"
+  ],
+  "unknown authenticated peer": [
+    "Dispositivo autenticado desconhecido",
+    "Неизвестный аутентифицированный узел",
+    "Thiết bị đã xác thực không xác định"
+  ],
+  "ambiguous peer VIP": [
+    "Endereço VPN do dispositivo ambíguo",
+    "Неоднозначный адрес VPN узла",
+    "Địa chỉ VPN của thiết bị không rõ ràng"
+  ],
+  "controlled peer connections did not become ready for TAP": [
+    "As conexões de teste não ficaram prontas para a TAP",
+    "Тестовые подключения узлов не подготовлены для TAP",
+    "Các kết nối kiểm thử không sẵn sàng cho TAP"
+  ],
+  "TAP did not disappear after close": [
+    "A TAP não foi removida após fechar",
+    "TAP не удалён после закрытия",
+    "TAP không được xóa sau khi đóng"
+  ],
+  "report name must be a single file name": [
+    "O nome do relatório deve ser um único nome de arquivo",
+    "Имя отчёта должно быть одним именем файла",
+    "Tên báo cáo phải là một tên tệp duy nhất"
+  ],
+  "OpenRad diagnostics write failed: {error}": [
+    "Falha ao gravar o diagnóstico do OpenRad: {error}",
+    "Не удалось записать диагностику OpenRad: {error}",
+    "Ghi chẩn đoán OpenRad thất bại: {error}"
+  ],
+  "diagnostic record too large": [
+    "Registro de diagnóstico grande demais",
+    "Запись диагностики слишком большая",
+    "Bản ghi chẩn đoán quá lớn"
+  ],
+  "OpenRad VPN: one persistent connection, simple local commands": [
+    "VPN OpenRad: uma conexão persistente, comandos locais simples",
+    "VPN OpenRad: постоянное подключение и простые локальные команды",
+    "VPN OpenRad: kết nối liên tục, lệnh cục bộ đơn giản"
+  ],
+  "network password file too large": [
+    "Arquivo de senha da rede grande demais",
+    "Файл пароля сети слишком большой",
+    "Tệp mật khẩu mạng quá lớn"
+  ],
+  "Profile already exists at {0}. Use `openrad start` or choose another --data-dir": [
+    "Já existe um perfil em {0}. Use `openrad start` ou escolha outro --data-dir",
+    "Профиль уже существует в {0}. Используйте `openrad start` или другой --data-dir",
+    "Hồ sơ đã tồn tại tại {0}. Dùng `openrad start` hoặc chọn --data-dir khác"
+  ],
+  "public modulus size is invalid": [
+    "O tamanho do módulo público é inválido",
+    "Неверный размер открытого модуля",
+    "Kích thước mô-đun công khai không hợp lệ"
+  ],
+  "--node-name is required": [
+    "--node-name é obrigatório",
+    "Требуется --node-name",
+    "Cần --node-name"
+  ],
+  "Identity saved. Run `openrad start` to connect.": [
+    "Identidade salva. Execute `openrad start` para conectar.",
+    "Идентификация сохранена. Выполните `openrad start` для подключения.",
+    "Đã lưu danh tính. Chạy `openrad start` để kết nối."
+  ],
+  "Service started. It stays open after this terminal closes.": [
+    "Serviço iniciado. Ele continua rodando após fechar este terminal.",
+    "Служба запущена. Она продолжит работать после закрытия терминала.",
+    "Dịch vụ đã khởi chạy. Dịch vụ tiếp tục chạy sau khi đóng terminal này."
+  ],
+  "Service is already running.": [
+    "O serviço já está em execução.",
+    "Служба уже запущена.",
+    "Dịch vụ đã chạy."
+  ],
+  "Service stopped": [
+    "Serviço parado",
+    "Служба остановлена",
+    "Dịch vụ đã dừng"
+  ],
+  "Service already stopped": [
+    "O serviço já está parado",
+    "Служба уже остановлена",
+    "Dịch vụ đã dừng trước đó"
+  ],
+  "network deletion requires --yes": [
+    "A exclusão da rede exige --yes",
+    "Для удаления сети нужен --yes",
+    "Xóa mạng cần --yes"
+  ],
+  "Service: {phase}": [
+    "Serviço: {phase}",
+    "Служба: {phase}",
+    "Dịch vụ: {phase}"
+  ],
+  "Device: {0} (RID {rid})": [
+    "Dispositivo: {0} (RID {rid})",
+    "Устройство: {0} (RID {rid})",
+    "Thiết bị: {0} (RID {rid})"
+  ],
+  "VPN address: {0}": [
+    "Endereço VPN: {0}",
+    "Адрес VPN: {0}",
+    "Địa chỉ VPN: {0}"
+  ],
+  "Interface: {0}": [
+    "Interface: {0}",
+    "Интерфейс: {0}",
+    "Giao diện mạng: {0}"
+  ],
+  "Interface error: {error}": [
+    "Erro da interface: {error}",
+    "Ошибка интерфейса: {error}",
+    "Lỗi giao diện mạng: {error}"
+  ],
+  "Networks: {0} · Peers connected: {connected}": [
+    "Redes: {0} · Dispositivos conectados: {connected}",
+    "Сетей: {0} · Подключённых узлов: {connected}",
+    "Mạng: {0} · Thiết bị đã kết nối: {connected}"
+  ],
+  "Last error: {error}": [
+    "Último erro: {error}",
+    "Последняя ошибка: {error}",
+    "Lỗi gần nhất: {error}"
+  ],
+  "No joined networks. Use `openrad join NAME` or `openrad create NAME --password-file FILE`.": [
+    "Você não participa de nenhuma rede. Use `openrad join NAME` ou `openrad create NAME --password-file FILE`.",
+    "Вы не участвуете в сетях. Используйте `openrad join NAME` или `openrad create NAME --password-file FILE`.",
+    "Chưa tham gia mạng nào. Dùng `openrad join NAME` hoặc `openrad create NAME --password-file FILE`."
+  ],
+  "pending approval": [
+    "aguardando aprovação",
+    "ожидает одобрения",
+    "đang chờ phê duyệt"
+  ],
+  "member": [
+    "membro",
+    "участник",
+    "thành viên"
+  ],
+  "admin": [
+    "administrador",
+    "администратор",
+    "quản trị viên"
+  ],
+  "unknown": [
+    "desconhecido",
+    "неизвестно",
+    "không xác định"
+  ],
+  "disabled": [
+    "desativada",
+    "отключён",
+    "đã tắt"
+  ],
+  "unavailable": [
+    "indisponível",
+    "недоступен",
+    "không khả dụng"
+  ],
+  "stopped": [
+    "parado",
+    "остановлена",
+    "đã dừng"
+  ],
+  "stopping": [
+    "parando",
+    "останавливается",
+    "đang dừng"
+  ],
+  "connecting": [
+    "conectando",
+    "подключается",
+    "đang kết nối"
+  ],
+  "connected": [
+    "conectado",
+    "подключена",
+    "đã kết nối"
+  ],
+  "reconnecting": [
+    "reconectando",
+    "переподключается",
+    "đang kết nối lại"
+  ],
+  "Online": [
+    "Online",
+    "В сети",
+    "Trực tuyến"
+  ],
+  "No public networks found.": [
+    "Nenhuma rede pública encontrada.",
+    "Публичные сети не найдены.",
+    "Không tìm thấy mạng công cộng nào."
+  ],
+  "{0}  ({1} members reported)": [
+    "{0}  (membros informados: {1})",
+    "{0}  (участников по данным сервера: {1})",
+    "{0}  (thành viên được báo cáo: {1})"
+  ],
+  "Next page: --cursor {0}": [
+    "Próxima página: --cursor {0}",
+    "Следующая страница: --cursor {0}",
+    "Trang tiếp theo: --cursor {0}"
+  ],
+  "No peers in joined networks yet.": [
+    "Ainda não há dispositivos nas redes em que você participa.",
+    "В ваших сетях пока нет узлов.",
+    "Chưa có thiết bị trong các mạng đã tham gia."
+  ],
+  "Identity: {path}": [
+    "Identidade: {path}",
+    "Идентификация: {path}",
+    "Danh tính: {path}"
+  ],
+  "run OpenRad as your normal user; only the TAP helper uses sudo": [
+    "Execute o OpenRad como seu usuário normal; apenas o auxiliar TAP usa sudo",
+    "Запускайте OpenRad от обычного пользователя; только помощник TAP использует sudo",
+    "Chạy OpenRad với quyền người dùng thông thường; chỉ trình hỗ trợ TAP dùng sudo"
+  ],
+  "persistent CLI service currently requires Unix": [
+    "O serviço persistente da CLI atualmente exige Unix",
+    "Постоянная служба CLI сейчас требует Unix",
+    "Dịch vụ CLI liên tục hiện cần Unix"
+  ],
+  "Set HOME or use --data-dir": [
+    "Defina HOME ou use --data-dir",
+    "Задайте HOME или используйте --data-dir",
+    "Đặt HOME hoặc dùng --data-dir"
+  ],
+  "data path is not a directory": [
+    "O caminho de dados não é um diretório",
+    "Путь данных не является каталогом",
+    "Đường dẫn dữ liệu không phải thư mục"
+  ],
+  "data directory must be owned by the current user": [
+    "O diretório de dados deve pertencer ao usuário atual",
+    "Каталог данных должен принадлежать текущему пользователю",
+    "Thư mục dữ liệu phải thuộc người dùng hiện tại"
+  ],
+  "data directory must have mode 0700: {0}": [
+    "O diretório de dados deve ter permissão 0700: {0}",
+    "Каталог данных должен иметь права 0700: {0}",
+    "Thư mục dữ liệu phải có quyền 0700: {0}"
+  ],
+  "data directory path is too long for a Unix socket": [
+    "O caminho do diretório de dados é longo demais para um socket Unix",
+    "Путь каталога данных слишком длинный для сокета Unix",
+    "Đường dẫn thư mục dữ liệu quá dài cho socket Unix"
+  ],
+  "OpenRad service is already running for this profile": [
+    "O serviço OpenRad já está em execução para este perfil",
+    "Служба OpenRad уже запущена для этого профиля",
+    "Dịch vụ OpenRad đã chạy với hồ sơ này"
+  ],
+  "No saved identity at {0}. Run `openrad init` first": [
+    "Não há identidade salva em {0}. Execute `openrad init` primeiro",
+    "Нет сохранённых данных устройства в {0}. Сначала выполните `openrad init`",
+    "Không có danh tính đã lưu tại {0}. Chạy `openrad init` trước"
+  ],
+  "local control message too large": [
+    "Mensagem de controle local grande demais",
+    "Сообщение локального управления слишком большое",
+    "Thông điệp điều khiển cục bộ quá lớn"
+  ],
+  "Service is stopped. Run `openrad start` first": [
+    "O serviço está parado. Execute `openrad start` primeiro",
+    "Служба остановлена. Сначала выполните `openrad start`",
+    "Dịch vụ đã dừng. Chạy `openrad start` trước"
+  ],
+  "service closed the control connection": [
+    "O serviço fechou a conexão de controle",
+    "Служба закрыла подключение управления",
+    "Dịch vụ đã đóng kết nối điều khiển"
+  ],
+  "Service connection lost; membership will reload: {error}": [
+    "Conexão com o serviço perdida; as participações serão recarregadas: {error}",
+    "Подключение к службе потеряно; данные об участии будут обновлены: {error}",
+    "Mất kết nối dịch vụ; thông tin thành viên sẽ được tải lại: {error}"
+  ],
+  "Service is reconnecting; run `openrad status` and retry shortly": [
+    "O serviço está reconectando; execute `openrad status` e tente novamente em instantes",
+    "Служба переподключается; выполните `openrad status` и повторите чуть позже",
+    "Dịch vụ đang kết nối lại; chạy `openrad status` và thử lại sau"
+  ],
+  "Service connection is unavailable": [
+    "A conexão com o serviço está indisponível",
+    "Подключение к службе недоступно",
+    "Kết nối dịch vụ không khả dụng"
+  ],
+  "Network command timed out; check `openrad status` before retrying": [
+    "O tempo do comando de rede esgotou; verifique `openrad status` antes de tentar novamente",
+    "Время команды сети истекло; перед повтором проверьте `openrad status`",
+    "Lệnh mạng hết thời gian chờ; kiểm tra `openrad status` trước khi thử lại"
+  ],
+  "Service is reconnecting; retry shortly": [
+    "O serviço está reconectando; tente novamente em instantes",
+    "Служба переподключается; повторите чуть позже",
+    "Dịch vụ đang kết nối lại; hãy thử lại sau"
+  ],
+  "Requested": [
+    "Solicitado",
+    "Запрошено",
+    "Đã yêu cầu"
+  ],
+  "Membership is not loaded yet": [
+    "As participações ainda não foram carregadas",
+    "Данные об участии ещё не загружены",
+    "Chưa tải thông tin thành viên"
+  ],
+  "network not found or ambiguous; use its ID from `openrad networks`": [
+    "Rede não encontrada ou nome ambíguo; use o ID informado por `openrad networks`",
+    "Сеть не найдена или название неоднозначно; используйте ID из `openrad networks`",
+    "Không tìm thấy mạng hoặc tên không rõ ràng; dùng ID từ `openrad networks`"
+  ],
+  "Membership is not loaded yet; run `openrad status`": [
+    "As participações ainda não foram carregadas; execute `openrad status`",
+    "Данные об участии ещё не загружены; выполните `openrad status`",
+    "Chưa tải thông tin thành viên; chạy `openrad status`"
+  ],
+  "{0} peers": [
+    "Dispositivos: {0}",
+    "Узлов: {0}",
+    "Số thiết bị: {0}"
+  ],
+  "Membership is pending administrator approval": [
+    "A participação está aguardando aprovação do administrador",
+    "Участие ожидает одобрения администратора",
+    "Tư cách thành viên đang chờ quản trị viên phê duyệt"
+  ],
+  "Already joined": [
+    "Você já participa",
+    "Вы уже участник",
+    "Đã tham gia trước đó"
+  ],
+  "member RID must be nonzero": [
+    "O RID do membro deve ser diferente de zero",
+    "RID участника должен быть ненулевым",
+    "RID thành viên phải khác không"
+  ],
+  "Service stopping": [
+    "Serviço parando",
+    "Служба останавливается",
+    "Dịch vụ đang dừng"
+  ],
+  "VPN engine stopped unexpectedly": [
+    "O mecanismo da VPN parou inesperadamente",
+    "Движок VPN неожиданно завершился",
+    "Bộ máy VPN đã dừng đột ngột"
+  ],
+  "empty control request": [
+    "Solicitação de controle vazia",
+    "Пустой запрос управления",
+    "Yêu cầu điều khiển trống"
+  ],
+  "control reply too large": [
+    "Resposta de controle grande demais",
+    "Ответ управления слишком большой",
+    "Phản hồi điều khiển quá lớn"
+  ],
+  "refusing to replace non-socket at {0}": [
+    "Não é possível substituir o arquivo que não é um socket em {0}",
+    "Отказ от замены файла, который не является сокетом, в {0}",
+    "Từ chối thay thế tệp không phải socket tại {0}"
+  ],
+  "service supervisor panicked": [
+    "Falha inesperada no supervisor do serviço",
+    "Непредвиденный сбой диспетчера службы",
+    "Bộ giám sát dịch vụ gặp lỗi bất ngờ"
+  ],
+  "service exited with {status}; see {0}": [
+    "O serviço encerrou com {status}; consulte {0}",
+    "Служба завершилась с {status}; см. {0}",
+    "Dịch vụ kết thúc với {status}; xem {0}"
+  ],
+  "service did not create its control socket; see {0}": [
+    "O serviço não criou seu socket de controle; consulte {0}",
+    "Служба не создала сокет управления; см. {0}",
+    "Dịch vụ không tạo socket điều khiển; xem {0}"
+  ],
+  "Unsupported language: {value}. Use system, en, pt, ru or vi.": [
+    "Idioma não suportado: {value}. Use system, en, pt, ru ou vi.",
+    "Неподдерживаемый язык: {value}. Используйте system, en, pt, ru или vi.",
+    "Ngôn ngữ không được hỗ trợ: {value}. Dùng system, en, pt, ru hoặc vi."
+  ],
+  "Display language: system, en, pt, ru or vi": [
+    "Idioma de exibição: system, en, pt, ru ou vi",
+    "Язык интерфейса: system, en, pt, ru или vi",
+    "Ngôn ngữ hiển thị: system, en, pt, ru hoặc vi"
+  ],
+  "Profile directory (default: $XDG_STATE_HOME/openrad or ~/.local/state/openrad)": [
+    "Diretório do perfil (padrão: $XDG_STATE_HOME/openrad ou ~/.local/state/openrad)",
+    "Каталог профиля (по умолчанию: $XDG_STATE_HOME/openrad или ~/.local/state/openrad)",
+    "Thư mục hồ sơ (mặc định: $XDG_STATE_HOME/openrad hoặc ~/.local/state/openrad)"
+  ],
+  "Print machine-readable JSON": [
+    "Exibir JSON para processamento automático",
+    "Вывести JSON для машинной обработки",
+    "Xuất JSON cho máy đọc"
+  ],
+  "Create or import an identity once for this profile": [
+    "Criar ou importar uma identidade uma vez para este perfil",
+    "Однократно создать или импортировать данные устройства для этого профиля",
+    "Tạo hoặc nhập danh tính một lần cho hồ sơ này"
+  ],
+  "Import an existing OpenRad identity file": [
+    "Importar um arquivo de identidade existente do OpenRad",
+    "Импортировать существующий файл данных устройства OpenRad",
+    "Nhập tệp danh tính OpenRad hiện có"
+  ],
+  "Registration server override, for controlled deployments": [
+    "Servidor de registro alternativo para implantações controladas",
+    "Другой сервер регистрации для контролируемых развёртываний",
+    "Máy chủ đăng ký thay thế cho triển khai có kiểm soát"
+  ],
+  "Public RSA modulus override, for controlled deployments": [
+    "Módulo RSA público alternativo para implantações controladas",
+    "Другой открытый модуль RSA для контролируемых развёртываний",
+    "Mô-đun RSA công khai thay thế cho triển khai có kiểm soát"
+  ],
+  "Start the VPN service in the background": [
+    "Iniciar o serviço VPN em segundo plano",
+    "Запустить службу VPN в фоне",
+    "Khởi chạy dịch vụ VPN trong nền"
+  ],
+  "Connect without creating a TAP interface": [
+    "Conectar sem criar uma interface TAP",
+    "Подключиться без создания интерфейса TAP",
+    "Kết nối mà không tạo giao diện mạng TAP"
+  ],
+  "Show connection, interface, network, and peer summary": [
+    "Mostrar resumo da conexão, interface, redes e dispositivos",
+    "Показать сводку подключения, интерфейса, сетей и узлов",
+    "Hiển thị tóm tắt kết nối, giao diện mạng, mạng và thiết bị"
+  ],
+  "Stop the VPN service and remove its TAP interface": [
+    "Parar o serviço VPN e remover sua interface TAP",
+    "Остановить службу VPN и удалить интерфейс TAP",
+    "Dừng dịch vụ VPN và xóa giao diện mạng TAP"
+  ],
+  "List joined networks and your role in each": [
+    "Listar as redes em que você participa e sua função em cada uma",
+    "Показать ваши сети и роль в каждой",
+    "Liệt kê mạng đã tham gia và vai trò của bạn trong mỗi mạng"
+  ],
+  "List current peers and their live connection states": [
+    "Listar os dispositivos e seus estados de conexão atuais",
+    "Показать текущие узлы и состояния их подключений",
+    "Liệt kê thiết bị hiện tại và trạng thái kết nối trực tiếp"
+  ],
+  "Search public networks": [
+    "Buscar redes públicas",
+    "Поиск публичных сетей",
+    "Tìm mạng công cộng"
+  ],
+  "Join a public or private network": [
+    "Entrar em uma rede pública ou privada",
+    "Вступить в публичную или частную сеть",
+    "Tham gia mạng công cộng hoặc riêng"
+  ],
+  "Private-network password stored in a UTF-8 file": [
+    "Senha da rede privada em um arquivo UTF-8",
+    "Пароль частной сети в файле UTF-8",
+    "Mật khẩu mạng riêng lưu trong tệp UTF-8"
+  ],
+  "Leave a network by exact name or ID": [
+    "Sair de uma rede pelo nome exato ou ID",
+    "Покинуть сеть по точному названию или ID",
+    "Rời mạng theo tên chính xác hoặc ID"
+  ],
+  "Delete a network for all members": [
+    "Excluir uma rede para todos os membros",
+    "Удалить сеть для всех участников",
+    "Xóa mạng cho tất cả thành viên"
+  ],
+  "Remove a member from a network you administer": [
+    "Remover um membro de uma rede que você administra",
+    "Удалить участника из сети, которой вы управляете",
+    "Xóa thành viên khỏi mạng bạn quản trị"
+  ],
+  "Grant network administration to a member": [
+    "Conceder administração da rede a um membro",
+    "Назначить участника администратором сети",
+    "Cấp quyền quản trị mạng cho thành viên"
+  ],
+  "Revoke network administration from a member": [
+    "Revogar a administração da rede de um membro",
+    "Отозвать у участника права администратора сети",
+    "Thu hồi quyền quản trị mạng của thành viên"
+  ],
+  "Retry failed peer channels now": [
+    "Tentar novamente os canais com falha agora",
+    "Повторить подключения каналов с ошибками сейчас",
+    "Thử lại ngay các kênh thiết bị bị lỗi"
+  ],
+  "Retry TAP creation after making sudo authorization available": [
+    "Tentar criar a TAP novamente após autorizar sudo",
+    "Повторить создание TAP после предоставления прав sudo",
+    "Thử tạo lại TAP sau khi cấp quyền sudo"
+  ],
+  "Import an owned identity into the platform credential store once": [
+    "Importar uma identidade sua uma vez para o cofre de credenciais do sistema",
+    "Однократно импортировать свои данные устройства в хранилище учётных данных ОС",
+    "Nhập danh tính của bạn vào kho thông tin xác thực hệ thống một lần"
+  ],
+  "Isolated profile directory, useful for controlled interoperability tests": [
+    "Diretório de perfil isolado para testes controlados de interoperabilidade",
+    "Изолированный каталог профиля для контролируемых тестов совместимости",
+    "Thư mục hồ sơ riêng cho kiểm thử tương tác có kiểm soát"
+  ],
+  "Restrict application traffic to these owned test peers (normal mode permits all members)": [
+    "Restringir o tráfego dos aplicativos a estes dispositivos de teste (o modo normal permite todos os membros)",
+    "Ограничить трафик приложений этими тестовыми узлами (обычный режим допускает всех участников)",
+    "Giới hạn lưu lượng ứng dụng vào các thiết bị thử nghiệm này (chế độ thông thường cho phép mọi thành viên)"
+  ],
+  "Commands": [
+    "Comandos",
+    "Команды",
+    "Lệnh"
+  ],
+  "Arguments": [
+    "Argumentos",
+    "Аргументы",
+    "Đối số"
+  ],
+  "Options": [
+    "Opções",
+    "Параметры",
+    "Tùy chọn"
+  ],
+  "Print help": [
+    "Exibir ajuda",
+    "Показать справку",
+    "Hiển thị trợ giúp"
+  ],
+  "Print help (see more with '--help')": [
+    "Exibir ajuda (mais detalhes com '--help')",
+    "Показать справку (подробнее с '--help')",
+    "Hiển thị trợ giúp (chi tiết hơn với '--help')"
+  ],
+  "Print help (see a summary with '-h')": [
+    "Exibir ajuda (resumo com '-h')",
+    "Показать справку (кратко с '-h')",
+    "Hiển thị trợ giúp (tóm tắt với '-h')"
+  ],
+  "Print version": [
+    "Exibir versão",
+    "Показать версию",
+    "Hiển thị phiên bản"
+  ],
+  "Print this message or the help of the given subcommand(s)": [
+    "Exibir esta mensagem ou a ajuda dos subcomandos indicados",
+    "Показать это сообщение или справку по указанным подкомандам",
+    "Hiển thị thông điệp này hoặc trợ giúp cho lệnh con được chọn"
+  ],
+  "{about-with-newline}\nUsage: {usage}\n\n{all-args}{after-help}": [
+    "{about-with-newline}\nUso: {usage}\n\n{all-args}{after-help}",
+    "{about-with-newline}\nИспользование: {usage}\n\n{all-args}{after-help}",
+    "{about-with-newline}\nCách dùng: {usage}\n\n{all-args}{after-help}"
+  ],
+  "Usage: {0}": [
+    "Uso: {0}",
+    "Использование: {0}",
+    "Cách dùng: {0}"
+  ],
+  "For more information, try '--help'.": [
+    "Para mais informações, use '--help'.",
+    "Подробнее: '--help'.",
+    "Để biết thêm thông tin, dùng '--help'."
+  ],
+  "[default: {0}]": [
+    "[padrão: {0}]",
+    "[по умолчанию: {0}]",
+    "[mặc định: {0}]"
+  ],
+  "[possible values: {0}]": [
+    "[valores possíveis: {0}]",
+    "[допустимые значения: {0}]",
+    "[giá trị hợp lệ: {0}]"
+  ],
+  "[aliases: {0}]": [
+    "[apelidos: {0}]",
+    "[псевдонимы: {0}]",
+    "[bí danh: {0}]"
+  ],
+  "error: unexpected argument '{arg}' found": [
+    "erro: argumento inesperado '{arg}'",
+    "ошибка: неожиданный аргумент '{arg}'",
+    "lỗi: đối số không đúng dự kiến '{arg}'"
+  ],
+  "error: unrecognized subcommand '{subcommand}'": [
+    "erro: subcomando desconhecido '{subcommand}'",
+    "ошибка: неизвестная подкоманда '{subcommand}'",
+    "lỗi: lệnh con không xác định '{subcommand}'"
+  ],
+  "error: the following required arguments were not provided:": [
+    "erro: os seguintes argumentos obrigatórios não foram informados:",
+    "ошибка: не указаны следующие обязательные аргументы:",
+    "lỗi: chưa cung cấp các đối số bắt buộc sau:"
+  ],
+  "error: a value is required for '{arg}' but none was supplied": [
+    "erro: é necessário informar um valor para '{arg}'",
+    "ошибка: для '{arg}' необходимо указать значение",
+    "lỗi: cần cung cấp giá trị cho '{arg}'"
+  ],
+  "error: the argument '{arg}' cannot be used with '{other}'": [
+    "erro: o argumento '{arg}' não pode ser usado com '{other}'",
+    "ошибка: аргумент '{arg}' нельзя использовать с '{other}'",
+    "lỗi: đối số '{arg}' không thể dùng cùng '{other}'"
+  ],
+  "error: invalid value '{value}' for '{arg}': {error}": [
+    "erro: valor inválido '{value}' para '{arg}': {error}",
+    "ошибка: неверное значение '{value}' для '{arg}': {error}",
+    "lỗi: giá trị không hợp lệ '{value}' cho '{arg}': {error}"
+  ],
+  "tip: a similar subcommand exists: '{value}'": [
+    "dica: existe um subcomando parecido: '{value}'",
+    "подсказка: есть похожая подкоманда: '{value}'",
+    "gợi ý: có lệnh con tương tự: '{value}'"
+  ],
+  "tip: a similar argument exists: '{value}'": [
+    "dica: existe um argumento parecido: '{value}'",
+    "подсказка: есть похожий аргумент: '{value}'",
+    "gợi ý: có đối số tương tự: '{value}'"
+  ],
+  "tip: to pass '{arg}' as a value, use '-- {arg}'": [
+    "dica: para passar '{arg}' como valor, use '-- {arg}'",
+    "подсказка: чтобы передать '{arg}' как значение, используйте '-- {arg}'",
+    "gợi ý: để truyền '{arg}' làm giá trị, dùng '-- {arg}'"
+  ],
+  "Connection refused (os error {code})": [
+    "Conexão recusada (erro do sistema {code})",
+    "Подключение отклонено (ошибка ОС {code})",
+    "Kết nối bị từ chối (lỗi hệ điều hành {code})"
+  ],
+  "Connection reset by peer (os error {code})": [
+    "Conexão redefinida pelo destino (erro do sistema {code})",
+    "Подключение сброшено удалённой стороной (ошибка ОС {code})",
+    "Kết nối bị đặt lại bởi thiết bị từ xa (lỗi hệ điều hành {code})"
+  ],
+  "Connection timed out (os error {code})": [
+    "O tempo da conexão esgotou (erro do sistema {code})",
+    "Время подключения истекло (ошибка ОС {code})",
+    "Kết nối hết thời gian chờ (lỗi hệ điều hành {code})"
+  ],
+  "Permission denied (os error {code})": [
+    "Permissão negada (erro do sistema {code})",
+    "Доступ запрещён (ошибка ОС {code})",
+    "Quyền truy cập bị từ chối (lỗi hệ điều hành {code})"
+  ],
+  "No such file or directory (os error {code})": [
+    "Arquivo ou diretório não encontrado (erro do sistema {code})",
+    "Нет такого файла или каталога (ошибка ОС {code})",
+    "Không có tệp hoặc thư mục này (lỗi hệ điều hành {code})"
+  ],
+  "Resource temporarily unavailable (os error {code})": [
+    "Recurso temporariamente indisponível (erro do sistema {code})",
+    "Ресурс временно недоступен (ошибка ОС {code})",
+    "Tài nguyên tạm thời không khả dụng (lỗi hệ điều hành {code})"
+  ],
+  "Network is unreachable (os error {code})": [
+    "Rede inacessível (erro do sistema {code})",
+    "Сеть недоступна (ошибка ОС {code})",
+    "Không thể truy cập mạng (lỗi hệ điều hành {code})"
+  ],
+  "No route to host (os error {code})": [
+    "Não há rota para o destino (erro do sistema {code})",
+    "Нет маршрута к узлу (ошибка ОС {code})",
+    "Không có tuyến đến máy chủ (lỗi hệ điều hành {code})"
+  ],
+  "Broken pipe (os error {code})": [
+    "Canal interrompido (erro do sistema {code})",
+    "Канал разорван (ошибка ОС {code})",
+    "Kênh bị ngắt (lỗi hệ điều hành {code})"
+  ],
+  "File exists (os error {code})": [
+    "Arquivo já existe (erro do sistema {code})",
+    "Файл уже существует (ошибка ОС {code})",
+    "Tệp đã tồn tại (lỗi hệ điều hành {code})"
+  ],
+  "No space left on device (os error {code})": [
+    "Não há espaço disponível no dispositivo (erro do sistema {code})",
+    "На устройстве нет свободного места (ошибка ОС {code})",
+    "Thiết bị không còn dung lượng trống (lỗi hệ điều hành {code})"
+  ],
+  "invalid digit found in string": [
+    "O valor contém um caractere que não é um dígito",
+    "Значение содержит символ, не являющийся цифрой",
+    "Giá trị chứa ký tự không phải chữ số"
+  ],
+  "number too large to fit in target type": [
+    "Número grande demais para o tipo esperado",
+    "Число слишком большое для ожидаемого типа",
+    "Số quá lớn cho kiểu dữ liệu yêu cầu"
+  ],
+  "cannot parse integer from empty string": [
+    "Não é possível ler um inteiro de um valor vazio",
+    "Нельзя прочитать целое число из пустого значения",
+    "Không thể đọc số nguyên từ giá trị trống"
+  ],
+  "English": [
+    "Inglês",
+    "Английский",
+    "Tiếng Anh"
+  ],
+  "Portuguese": [
+    "Português",
+    "Португальский",
+    "Tiếng Bồ Đào Nha"
+  ],
+  "Russian": [
+    "Russo",
+    "Русский",
+    "Tiếng Nga"
+  ],
+  "Vietnamese": [
+    "Vietnamita",
+    "Вьетнамский",
+    "Tiếng Việt"
+  ],
+  "Native Windows · v{0}": [
+    "Windows nativo · v{0}",
+    "Приложение Windows · v{0}",
+    "Ứng dụng Windows · v{0}"
+  ],
+  "OpenRad TAP active": [
+    "TAP OpenRad ativo",
+    "TAP OpenRad активен",
+    "TAP OpenRad đang hoạt động"
+  ],
+  "Windows interface": [
+    "Interface do Windows",
+    "Интерфейс Windows",
+    "Giao diện Windows"
+  ],
+  "Windows preview": [
+    "Prévia do Windows",
+    "Предпросмотр Windows",
+    "Xem trước Windows"
+  ],
+  "Windows uses TAP-Windows6 and awaits Windows runtime validation. macOS has no data plane. Each connected peer shows its authenticated transport; relay remains available when direct connection fails.": [
+    "O Windows usa TAP-Windows6 e aguarda validação de execução no Windows. O macOS não tem plano de dados. Cada par conectado mostra seu transporte autenticado; o relay continua disponível quando a conexão direta falha.",
+    "Windows использует TAP-Windows6 и ожидает проверки работы в Windows. В macOS передача трафика не реализована. Для каждого подключённого узла показан аутентифицированный транспорт; ретрансляция доступна при отказе прямого соединения.",
+    "Windows dùng TAP-Windows6 và đang chờ xác minh hoạt động trên Windows. macOS chưa có lớp truyền dữ liệu. Mỗi máy ngang hàng hiển thị phương thức truyền đã xác thực; chuyển tiếp vẫn khả dụng khi kết nối trực tiếp thất bại."
+  ],
+  "Set LOCALAPPDATA or use --data-dir": [
+    "Defina LOCALAPPDATA ou use --data-dir",
+    "Задайте LOCALAPPDATA или используйте --data-dir",
+    "Đặt LOCALAPPDATA hoặc dùng --data-dir"
+  ],
+  "local interface inventory is unavailable on this platform": [
+    "O inventário de interfaces locais não está disponível nesta plataforma",
+    "Список локальных интерфейсов недоступен на этой платформе",
+    "Danh sách giao diện cục bộ không khả dụng trên nền tảng này"
+  ],
+  "unterminated registry string": [
+    "String do registro sem terminador",
+    "Строка реестра без завершающего символа",
+    "Chuỗi sổ đăng ký thiếu ký tự kết thúc"
+  ],
+  "cannot enumerate installed network adapters": [
+    "Não foi possível listar os adaptadores de rede instalados",
+    "Не удалось перечислить установленные сетевые адаптеры",
+    "Không thể liệt kê bộ điều hợp mạng đã cài"
+  ],
+  "Install official TAP-Windows6 and name one dedicated TAP-Windows Adapter V9 'OpenRad'; see docs/windows.md (found {0} matching adapters)": [
+    "Instale o TAP-Windows6 oficial e nomeie um TAP-Windows Adapter V9 dedicado como 'OpenRad'; veja docs/windows.md ({0} adaptadores correspondentes encontrados)",
+    "Установите официальный TAP-Windows6 и назовите один выделенный TAP-Windows Adapter V9 'OpenRad'; см. docs/windows.md (найдено подходящих адаптеров: {0})",
+    "Cài TAP-Windows6 chính thức và đặt tên một TAP-Windows Adapter V9 riêng là 'OpenRad'; xem docs/windows.md (tìm thấy {0} bộ điều hợp phù hợp)"
+  ],
+  "An existing 26.0.0.0/8 address conflicts with OpenRad; disconnect other VPNs and clear stale OpenRad addresses (docs/windows.md)": [
+    "Um endereço existente em 26.0.0.0/8 conflita com o OpenRad; desconecte outras VPNs e remova endereços antigos do OpenRad (docs/windows.md)",
+    "Существующий адрес в 26.0.0.0/8 конфликтует с OpenRad; отключите другие VPN и удалите оставшиеся адреса OpenRad (docs/windows.md)",
+    "Địa chỉ hiện có trong 26.0.0.0/8 xung đột với OpenRad; ngắt VPN khác và xóa địa chỉ OpenRad cũ (docs/windows.md)"
+  ],
+  "The OpenRad adapter already has a configured IPv4 address; use a dedicated adapter with no static address": [
+    "O adaptador OpenRad já tem um endereço IPv4 configurado; use um adaptador dedicado sem endereço estático",
+    "На адаптере OpenRad уже настроен адрес IPv4; используйте выделенный адаптер без статического адреса",
+    "Bộ điều hợp OpenRad đã có địa chỉ IPv4; dùng bộ điều hợp riêng không có địa chỉ tĩnh"
+  ],
+  "Enable the OpenRad TAP-Windows6 adapter before connecting": [
+    "Ative o adaptador TAP-Windows6 OpenRad antes de conectar",
+    "Включите адаптер TAP-Windows6 OpenRad перед подключением",
+    "Bật bộ điều hợp TAP-Windows6 OpenRad trước khi kết nối"
+  ],
+  "Cannot open the OpenRad TAP-Windows6 adapter; close other users of this adapter and run OpenRad as administrator": [
+    "Não foi possível abrir o adaptador TAP-Windows6 OpenRad; feche os outros aplicativos que o utilizam e execute o OpenRad como administrador",
+    "Не удалось открыть адаптер TAP-Windows6 OpenRad; закройте использующие его приложения и запустите OpenRad от имени администратора",
+    "Không thể mở bộ điều hợp TAP-Windows6 OpenRad; đóng ứng dụng khác đang dùng nó và chạy OpenRad với quyền quản trị"
+  ],
+  "invalid TAP-Windows6 version response": [
+    "Resposta de versão inválida do TAP-Windows6",
+    "Некорректный ответ версии TAP-Windows6",
+    "Phản hồi phiên bản TAP-Windows6 không hợp lệ"
+  ],
+  "TAP-Windows6 9.21 or newer is required": [
+    "É necessário TAP-Windows6 9.21 ou mais recente",
+    "Требуется TAP-Windows6 9.21 или новее",
+    "Cần TAP-Windows6 9.21 trở lên"
+  ],
+  "invalid TAP-Windows6 MAC response": [
+    "Resposta MAC inválida do TAP-Windows6",
+    "Некорректный ответ MAC TAP-Windows6",
+    "Phản hồi MAC TAP-Windows6 không hợp lệ"
+  ],
+  "invalid TAP-Windows6 adapter MAC": [
+    "MAC inválido do adaptador TAP-Windows6",
+    "Некорректный MAC адаптера TAP-Windows6",
+    "MAC bộ điều hợp TAP-Windows6 không hợp lệ"
+  ],
+  "TAP-Windows6 driver MTU must be at least 1500": [
+    "O MTU do driver TAP-Windows6 deve ser de pelo menos 1500",
+    "MTU драйвера TAP-Windows6 должен быть не меньше 1500",
+    "MTU trình điều khiển TAP-Windows6 phải ít nhất là 1500"
+  ],
+  "Cannot configure the OpenRad IPv4 interface; run OpenRad as administrator": [
+    "Não foi possível configurar a interface IPv4 OpenRad; execute o OpenRad como administrador",
+    "Не удалось настроить интерфейс IPv4 OpenRad; запустите OpenRad от имени администратора",
+    "Không thể cấu hình giao diện IPv4 OpenRad; chạy OpenRad với quyền quản trị"
+  ],
+  "Cannot assign the OpenRad VPN address; run OpenRad as administrator": [
+    "Não foi possível atribuir o endereço VPN OpenRad; execute o OpenRad como administrador",
+    "Не удалось назначить адрес VPN OpenRad; запустите OpenRad от имени администратора",
+    "Không thể gán địa chỉ VPN OpenRad; chạy OpenRad với quyền quản trị"
+  ],
+  "Cannot add an OpenRad interface route": [
+    "Não foi possível adicionar uma rota da interface OpenRad",
+    "Не удалось добавить маршрут интерфейса OpenRad",
+    "Không thể thêm tuyến giao diện OpenRad"
+  ],
+  "invalid TAP-Windows6 Ethernet frame length": [
+    "Tamanho inválido de quadro Ethernet do TAP-Windows6",
+    "Некорректная длина Ethernet-кадра TAP-Windows6",
+    "Độ dài khung Ethernet TAP-Windows6 không hợp lệ"
+  ],
+  "short TAP-Windows6 packet write": [
+    "Escrita incompleta de pacote TAP-Windows6",
+    "Неполная запись пакета TAP-Windows6",
+    "Ghi gói TAP-Windows6 chưa đủ"
+  ],
+  "Windows configures TAP-Windows6 in the elevated application; the descriptor helper is Linux only": [
+    "O Windows configura o TAP-Windows6 no aplicativo elevado; o auxiliar de descritor é exclusivo do Linux",
+    "В Windows TAP-Windows6 настраивается приложением с повышенными правами; помощник дескриптора работает только в Linux",
+    "Windows cấu hình TAP-Windows6 trong ứng dụng có quyền quản trị; chương trình trợ giúp mô tả chỉ dùng cho Linux"
+  ],
+  "TAP-Windows6 has an invalid adapter GUID": [
+    "O TAP-Windows6 tem um GUID de adaptador inválido",
+    "У TAP-Windows6 некорректный GUID адаптера",
+    "TAP-Windows6 có GUID bộ điều hợp không hợp lệ"
+  ],
+  "Windows Credential Manager is unavailable. Check your Windows account's credential store, then restart OpenRad.": [
+    "O Gerenciador de Credenciais do Windows está indisponível. Verifique o armazenamento de credenciais da sua conta e reinicie o OpenRad.",
+    "Диспетчер учётных данных Windows недоступен. Проверьте хранилище учётных данных вашей учётной записи Windows и перезапустите OpenRad.",
+    "Trình quản lý thông tin xác thực Windows không khả dụng. Kiểm tra kho thông tin xác thực của tài khoản Windows rồi khởi động lại OpenRad."
+  ],
+  "Could not save the identity in Windows Credential Manager. Keep this window open, check your Windows account's credential store, then retry.": [
+    "Não foi possível salvar a identidade no Gerenciador de Credenciais do Windows. Mantenha esta janela aberta, verifique o armazenamento de credenciais da sua conta e tente novamente.",
+    "Не удалось сохранить идентификатор в диспетчере учётных данных Windows. Оставьте это окно открытым, проверьте хранилище учётных данных вашей учётной записи Windows и повторите попытку.",
+    "Không thể lưu danh tính vào Trình quản lý thông tin xác thực Windows. Giữ cửa sổ này mở, kiểm tra kho thông tin xác thực của tài khoản Windows rồi thử lại."
+  ],
+  "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically.": [
+    "Windows: execute OpenRad-Setup.exe para instalar ou reparar o adaptador TAP e tente novamente. A autorização de administrador é solicitada automaticamente.",
+    "Windows: запустите OpenRad-Setup.exe для установки или восстановления TAP-адаптера, затем повторите попытку. Разрешение администратора запрашивается автоматически.",
+    "Windows: chạy OpenRad-Setup.exe để cài đặt hoặc sửa bộ điều hợp TAP, rồi thử lại. Quyền quản trị được yêu cầu tự động."
+  ],
+  "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains.": [
+    "O instalador do OpenRad cria o adaptador TAP-Windows6 dedicado. Ao desconectar, o endereço VPN e as rotas da sessão são removidos; o adaptador instalado permanece.",
+    "Установщик OpenRad создаёт отдельный адаптер TAP-Windows6. При отключении адрес VPN и маршруты сеанса удаляются; установленный адаптер остаётся.",
+    "Trình cài đặt OpenRad tạo bộ điều hợp TAP-Windows6 riêng. Ngắt kết nối sẽ xóa địa chỉ VPN và các tuyến của phiên; bộ điều hợp đã cài đặt vẫn được giữ lại."
+  ],
+  "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md.": [
+    "Execute OpenRad-Setup.exe novamente para verificar ou reparar a instalação. Use --no-launch para preparar o uso pela CLI. A validação de execução no Windows ainda está pendente. Consulte docs/windows.md.",
+    "Запустите OpenRad-Setup.exe снова для проверки или восстановления установки. Используйте --no-launch для работы с CLI. Проверка работы в Windows ещё не выполнена. См. docs/windows.md.",
+    "Chạy lại OpenRad-Setup.exe để kiểm tra hoặc sửa cài đặt. Dùng --no-launch để thiết lập cho CLI. Việc xác minh hoạt động trên Windows vẫn chưa hoàn tất. Xem docs/windows.md."
+  ],
+  "Cannot check Windows administrator permissions: {detail}": [
+    "Não foi possível verificar as permissões de administrador do Windows: {detail}",
+    "Не удалось проверить права администратора Windows: {detail}",
+    "Không thể kiểm tra quyền quản trị Windows: {detail}"
+  ],
+  "Windows administrator approval is required to open OpenRad: {detail}": [
+    "É necessária a autorização de administrador do Windows para abrir o OpenRad: {detail}",
+    "Для открытия OpenRad требуется разрешение администратора Windows: {detail}",
+    "Cần quyền quản trị Windows để mở OpenRad: {detail}"
+  ]
+}

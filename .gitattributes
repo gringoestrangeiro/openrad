@@ -1,1 +1,5 @@
 * text=auto eol=lf
+
+# Preserve upstream license text while checking whitespace in project code.
+docs/licenses/** whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+desktop/assets/OFL-NotoSans.txt whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

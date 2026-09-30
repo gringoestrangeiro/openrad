@@ -2,15 +2,37 @@
 
 Build the workspace and keep both binaries together. Start `openrad-desktop` from an ordinary user session with the credential store unlocked. The desktop's network operations run in a background engine so handshakes and packet forwarding do not block the interface.
 
+Those privilege instructions apply to Linux. On Windows 10/11 x64, run `OpenRad-Setup.exe`: it installs the official signed TAP-Windows6 driver, creates a dedicated adapter, and opens the desktop. Repeat setup opens the existing installation; `--no-launch` skips desktop startup. Normal GUI launches request administrator approval automatically. Identities use Windows Credential Manager. Normal disconnect removes the VPN address/session routes while retaining the installed adapter. Windows support is experimental and the tester reports it working on Windows 10; the published binaries were cross-built on Linux, and other Windows configurations still need validation; follow [Windows setup and tests](windows.md).
+
+Graphics startup defaults to `--renderer auto`: on Windows, native Direct3D 12
+hardware, then the WARP CPU adapter, then OpenGL. This lets a VM without OpenGL
+use the desktop and avoids entering an OpenGL translation layer when native
+rendering is available. Use `--renderer software`, `--renderer opengl` or
+`--renderer wgpu` to select a single path. On Linux the order remains OpenGL,
+hardware WGPU, then a Vulkan CPU driver such as Mesa lavapipe.
+
+Developers can check startup with `cargo run -p openrad-desktop --example
+graphics-smoke -- --renderer software`. This briefly opens a synthetic window
+and closes after three frames, without accessing profiles, credentials or the
+VPN backend. An opt-in Linux pixel check is available with `cargo test -p
+openrad-desktop --locked -- --ignored
+cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl`; it requires a
+Vulkan CPU driver and renders offscreen without a window.
+
 ## Connection and network management
 
 On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. **Settings** offers:
 
+- **Language:** automatic system-language selection, English, Português, Русский, or Tiếng Việt. The language changes immediately, including dialogs, notifications and retained activity. Use **Save preferences** to keep the selection after restart. **Discard changes** restores the saved language; **Restore defaults** selects the system language again. Existing profiles without a language preference use automatic selection.
 - **Connection:** connect on launch, reconnect after failures, maximum retry attempts (1–10), and the initial retry delay (1–30 seconds). Later retries double the delay, capped at five minutes. The device name is editable until the identity is created.
 - **Workspace:** the page shown at startup, interface scale, traffic overview and graphs, decimal or binary traffic units, visibility of offline peers, peer sorting, and the number of recent activity events shown.
 - **Developer view:** inline peer connection details, internal IDs, and live session, interface, peer, and frame counters. **Copy diagnostic summary** copies aggregate counters without credentials or packet contents.
 
 Workspace display changes preview immediately. Use **Save preferences** to keep them after restart, **Discard changes** to return to the last saved values, or **Restore defaults** to prepare the defaults for saving. The created identity's name is preserved when restoring defaults. Settings remain separate from credentials and are saved per profile.
+
+Automatic language selection uses the message locale (`LC_ALL`, then `LC_MESSAGES`, then `LANG`) and GNU `LANGUAGE` preference lists. `C`, `C.UTF-8`, and `POSIX` explicitly select English. Regional variants such as `pt_BR.UTF-8`, `pt-PT`, `ru_RU`, and `vi-VN` select the corresponding supported language; unsupported locales fall back to English. The detected language is shown beside the selector. The embedded Noto Sans font covers Cyrillic and Vietnamese accents without requiring fonts to be installed on the system.
+
+`--language system|en|pt|ru|vi` overrides the language for that launch, including help and command-line errors. Language names in the selector use their own language so it is possible to switch back after selecting an unfamiliar one. Network/device names, addresses, paths and protocol identifiers keep their original values. JSON connection diagnostics use stable English messages; unrecognized details from external libraries or the operating system are preserved.
 
 In **Your networks**, choose **Create private network** or **Join private network**. Enter the exact network name and password; creation also asks you to confirm the password. Passwords are masked by default and are not saved in your profile. **Browse public** opens the existing public-network catalog.
 

@@ -1,6 +1,7 @@
 # Build products and distributable archives
 /target/
 /dist/
+/scripts/__pycache__/
 *.exe
 *.dll
 *.so

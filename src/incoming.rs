@@ -12,7 +12,7 @@ use anyhow::{bail, ensure, Result};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, Ipv4Addr, TcpListener},
+    net::{IpAddr, Ipv4Addr},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
@@ -213,7 +213,7 @@ impl Setup {
             let _cancel_guard = Cancel(cancel.clone());
             let (tx, rx) = mpsc::channel::<(&'static str, Result<PeerChannel>)>();
             if matches!(self.policy, Policy::All | Policy::Tcp) {
-                let listener = TcpListener::bind("[::]:0")?;
+                let listener = udp::listen_dual_stack()?;
                 listener.set_nonblocking(true)?;
                 let addresses =
                     udp::local_candidates(self.route_ip, listener.local_addr()?.port())?;

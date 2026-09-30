@@ -2,6 +2,21 @@
 
 Build with `cargo build -p openrad-client --release --locked`. Run `openrad` as your normal user. The CLI now controls a persistent per-user service over a private Unix socket. Once started, the service keeps its server session, peer channels, and Linux TAP interface open when you close the terminal. It refreshes membership when the server reports a change and retries a lost server connection with bounded backoff. Peers that appear later are connected automatically; there is no 90-second run window.
 
+On Windows 10/11 x64, run `OpenRad-Setup.exe --no-launch` to install the CLI and configure its dedicated TAP-Windows6 adapter without opening the desktop. Use the **OpenRad CLI** Start menu shortcut or an elevated PowerShell in `C:\Program Files\OpenRad`; see [Windows installation and testing](windows.md). The same commands control a detached per-user process over a local named pipe. The default profile is `%LOCALAPPDATA%\openrad`; the Windows process configures TAP directly, so its whole process requires elevation. Normal stopping removes session IP configuration while leaving the installed adapter. Windows support is experimental; successful Windows 10 operation has been reported by the tester. Other Windows versions and more networking configurations need validation.
+
+## Language
+
+The CLI uses the same automatic language detection as the desktop and supports English, Portuguese, Russian, and Vietnamese. Select a language for a command with the global `--language` option, including for `--help`:
+
+```sh
+openrad --language pt status
+openrad --language ru --help
+openrad --language vi search
+openrad --language en status
+```
+
+The default `system` follows `LC_ALL`, `LC_MESSAGES`, and `LANG`, with GNU `LANGUAGE` preference lists when the message locale is not C/POSIX. Unsupported locales fall back to English. Desktop preferences are stored in the desktop profile; the separate CLI service profile does not inherit them. Human-readable output and argument errors are translated, while command names, flags, user-provided names and paths, `--json` replies, and diagnostic records keep their stable values.
+
 ## First use
 
 ```sh

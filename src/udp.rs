@@ -183,7 +183,7 @@ impl MappingDiscovery {
             .name("udp-mapping".into())
             .spawn(move || {
                 let result = (|| {
-                    let socket = UdpSocket::bind("[::]:0")?;
+                    let socket = bind_dual_stack()?;
                     let endpoint = discover_mapping(&socket, &hosts, &Some(stop))?;
                     Ok((socket, endpoint))
                 })();
@@ -209,13 +209,45 @@ impl Drop for MappingDiscovery {
 }
 
 /// Advertise only addresses on the interface used by the authenticated coordinator.
-/// getifaddrs is local inventory, not network discovery or probing.
+/// Interface inventory is local, not network discovery or probing.
 pub fn bind_candidates(route_ip: IpAddr) -> Result<(UdpSocket, Vec<SocketAddr>)> {
-    let socket = UdpSocket::bind("[::]:0")?;
+    let socket = bind_dual_stack()?;
     let port = socket.local_addr()?.port();
     Ok((socket, local_candidates(route_ip, port)?))
 }
 pub fn local_candidates(route_ip: IpAddr, port: u16) -> Result<Vec<SocketAddr>> {
+    candidates_from_inventory(interface_inventory()?, route_ip, port)
+}
+
+fn candidates_from_inventory(
+    entries: Vec<(Vec<u8>, IpAddr)>,
+    route_ip: IpAddr,
+    port: u16,
+) -> Result<Vec<SocketAddr>> {
+    let interface = entries
+        .iter()
+        .find(|(_, ip)| *ip == route_ip)
+        .map(|(name, _)| name.clone());
+    let mut candidates: Vec<_> = entries
+        .into_iter()
+        .filter(|(name, ip)| {
+            interface.as_ref() == Some(name)
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_loopback()
+                && !matches!(ip, IpAddr::V6(v) if v.is_unicast_link_local())
+        })
+        .map(|(_, ip)| SocketAddr::new(ip, port))
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+    candidates.truncate(32);
+    ensure!(!candidates.is_empty(), "no routable local UDP candidates");
+    Ok(candidates)
+}
+
+#[cfg(unix)]
+fn interface_inventory() -> Result<Vec<(Vec<u8>, IpAddr)>> {
     let mut head = std::ptr::null_mut();
     // SAFETY: libc initializes a linked list; it is read only until freeifaddrs below.
     ensure!(
@@ -255,26 +287,53 @@ pub fn local_candidates(route_ip: IpAddr, port: u16) -> Result<Vec<SocketAddr>> 
     }
     // SAFETY: exactly once, after all borrowed pointers have been copied.
     unsafe { libc::freeifaddrs(head) };
-    let interface = entries
-        .iter()
-        .find(|(_, ip)| *ip == route_ip)
-        .map(|(name, _)| name.clone());
-    let mut candidates: Vec<_> = entries
-        .into_iter()
-        .filter(|(name, ip)| {
-            interface.as_ref() == Some(name)
-                && !ip.is_unspecified()
-                && !ip.is_multicast()
-                && !ip.is_loopback()
-                && !matches!(ip, IpAddr::V6(v) if v.is_unicast_link_local())
-        })
-        .map(|(_, ip)| SocketAddr::new(ip, port))
-        .collect();
-    candidates.sort();
-    candidates.dedup();
-    candidates.truncate(32);
-    ensure!(!candidates.is_empty(), "no routable local UDP candidates");
-    Ok(candidates)
+    Ok(entries)
+}
+
+#[cfg(windows)]
+#[path = "platform/windows_adapters.rs"]
+mod windows_adapters;
+#[cfg(windows)]
+fn interface_inventory() -> Result<Vec<(Vec<u8>, IpAddr)>> {
+    windows_adapters::inventory()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn interface_inventory() -> Result<Vec<(Vec<u8>, IpAddr)>> {
+    bail!("local interface inventory is unavailable on this platform")
+}
+
+pub(crate) fn bind_dual_stack() -> std::io::Result<UdpSocket> {
+    #[cfg(windows)]
+    {
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV6,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        socket.set_only_v6(false)?;
+        socket.bind(&"[::]:0".parse::<SocketAddr>().unwrap().into())?;
+        Ok(socket.into())
+    }
+    #[cfg(not(windows))]
+    UdpSocket::bind("[::]:0")
+}
+
+pub(crate) fn listen_dual_stack() -> std::io::Result<std::net::TcpListener> {
+    #[cfg(windows)]
+    {
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV6,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )?;
+        socket.set_only_v6(false)?;
+        socket.bind(&"[::]:0".parse::<SocketAddr>().unwrap().into())?;
+        socket.listen(8)?;
+        Ok(socket.into())
+    }
+    #[cfg(not(windows))]
+    std::net::TcpListener::bind("[::]:0")
 }
 
 /// Sequence span a sender may keep unacknowledged. Counting the span from the
@@ -930,6 +989,70 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
+    #[test]
+    fn dual_stack_listeners_accept_ipv4_udp_and_tcp() {
+        let udp = bind_dual_stack().unwrap();
+        udp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let remote = UdpSocket::bind("127.0.0.1:0").unwrap();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let endpoint = SocketAddr::from((Ipv4Addr::LOCALHOST, udp.local_addr().unwrap().port()));
+        remote.send_to(b"request", endpoint).unwrap();
+        let mut data = [0u8; 32];
+        let (len, source) = udp.recv_from(&mut data).unwrap();
+        assert_eq!(&data[..len], b"request");
+        udp.send_to(b"reply", source).unwrap();
+        let (len, _) = remote.recv_from(&mut data).unwrap();
+        assert_eq!(&data[..len], b"reply");
+        let listener = listen_dual_stack().unwrap();
+        let endpoint =
+            SocketAddr::from((Ipv4Addr::LOCALHOST, listener.local_addr().unwrap().port()));
+        let client =
+            std::net::TcpStream::connect_timeout(&endpoint, Duration::from_secs(2)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert_eq!(
+            canonical(server.peer_addr().unwrap()),
+            client.local_addr().unwrap()
+        );
+    }
+
+    #[test]
+    fn local_candidates_include_only_routable_addresses_on_the_selected_interface() {
+        let route = "192.0.2.5".parse::<IpAddr>().unwrap();
+        let other = "192.0.2.6".parse::<IpAddr>().unwrap();
+        let v6 = "2001:db8::5".parse::<IpAddr>().unwrap();
+        let entries = [
+            (b"selected".to_vec(), route),
+            (b"selected".to_vec(), route),
+            (b"selected".to_vec(), v6),
+            (b"other".to_vec(), other),
+            (b"selected".to_vec(), "fe80::1".parse().unwrap()),
+            (b"selected".to_vec(), "127.0.0.1".parse().unwrap()),
+            (b"selected".to_vec(), "224.0.0.1".parse().unwrap()),
+        ];
+        assert_eq!(
+            candidates_from_inventory(entries.to_vec(), route, 1234).unwrap(),
+            vec![SocketAddr::new(route, 1234), SocketAddr::new(v6, 1234)]
+        );
+        assert!(
+            candidates_from_inventory(entries.to_vec(), "198.51.100.1".parse().unwrap(), 1234)
+                .is_err()
+        );
+        let many = (1..=64)
+            .map(|n| {
+                (
+                    b"selected".to_vec(),
+                    IpAddr::V4(Ipv4Addr::new(192, 0, 2, n)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            candidates_from_inventory(many, route, 1234).unwrap().len(),
+            32
+        );
+    }
+
     fn mapping_response(transaction: &[u8], port: u16) -> Vec<u8> {
         [
             vec![1, 1, 0, 12],
@@ -953,7 +1076,7 @@ mod tests {
         let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
         let worker = std::thread::spawn(move || {
             discover_mapping_at(
-                &UdpSocket::bind("[::]:0").unwrap(),
+                &bind_dual_stack().unwrap(),
                 servers,
                 &None,
                 Duration::from_secs(3),
@@ -992,7 +1115,7 @@ mod tests {
             let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
             let worker = std::thread::spawn(move || {
                 discover_mapping_at(
-                    &UdpSocket::bind("[::]:0").unwrap(),
+                    &bind_dual_stack().unwrap(),
                     servers,
                     &None,
                     Duration::from_millis(300),

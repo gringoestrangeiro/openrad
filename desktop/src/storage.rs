@@ -2,7 +2,7 @@
 //! stored in the OS credential store, never in an egui persistence file or log.
 use anyhow::{bail, ensure, Context, Result};
 use directories::ProjectDirs;
-use openrad::protocol::Identity;
+use openrad::{i18n::LanguagePreference, protocol::Identity};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -32,6 +32,7 @@ pub enum PeerSort {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub language: LanguagePreference,
     pub auto_connect: bool,
     pub auto_reconnect: bool,
     pub reconnect_attempts: u32,
@@ -53,11 +54,17 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: LanguagePreference::System,
             auto_connect: true,
             auto_reconnect: true,
             reconnect_attempts: 3,
             reconnect_base_delay_seconds: 2,
-            node_name: "openrad-linux".into(),
+            node_name: if cfg!(windows) {
+                "openrad-windows"
+            } else {
+                "openrad-linux"
+            }
+            .into(),
             scale: 1.0,
             start_page: StartPage::Networks,
             show_traffic: true,
@@ -109,9 +116,9 @@ impl Paths {
             }
             builder.create(&directory)?;
         }
-        Ok(Self {
-            directory: directory.canonicalize()?,
-        })
+        let directory = directory.canonicalize()?;
+        openrad::output::secure_directory(&directory)?;
+        Ok(Self { directory })
     }
     pub fn lock(&self) -> Result<File> {
         let file = private_file(&self.directory.join("desktop.lock"), false)?;
@@ -153,7 +160,11 @@ impl Paths {
     }
     pub fn entry(&self) -> Result<keyring::Entry> {
         keyring::Entry::new("org.openrad.desktop", &self.directory.to_string_lossy())
-            .map_err(|_| anyhow::anyhow!("Credential store unavailable. Start and unlock Secret Service (GNOME Keyring or KWallet), then restart OpenRad."))
+            .map_err(|_| anyhow::anyhow!(if cfg!(windows) {
+                "Windows Credential Manager is unavailable. Check your Windows account's credential store, then restart OpenRad."
+            } else {
+                "Credential store unavailable. Start and unlock Secret Service (GNOME Keyring or KWallet), then restart OpenRad."
+            }))
     }
 }
 fn private_file(path: &Path, exclusive: bool) -> Result<File> {
@@ -197,7 +208,11 @@ impl Vault for keyring::Entry {
         }
     }
     fn set(&self, bytes: &[u8]) -> Result<()> {
-        self.set_secret(bytes).map_err(|_| anyhow::anyhow!("Could not save the identity in the credential store. Keep this window open, unlock your keyring, then retry."))
+        self.set_secret(bytes).map_err(|_| anyhow::anyhow!(if cfg!(windows) {
+            "Could not save the identity in Windows Credential Manager. Keep this window open, check your Windows account's credential store, then retry."
+        } else {
+            "Could not save the identity in the credential store. Keep this window open, unlock your keyring, then retry."
+        }))
     }
 }
 pub fn load(vault: &impl Vault) -> Result<Option<Identity>> {
@@ -338,11 +353,13 @@ mod tests {
         assert!(!settings.auto_connect);
         assert_eq!(settings.reconnect_attempts, 3);
         assert_eq!(settings.start_page, StartPage::Networks);
+        assert_eq!(settings.language, LanguagePreference::System);
         assert!(settings.show_offline_peers);
         let mut changed = settings;
         changed.start_page = StartPage::Discover;
         changed.peer_sort = PeerSort::Status;
         changed.show_diagnostics = true;
+        changed.language = LanguagePreference::Vietnamese;
         let restored: Settings =
             serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
         assert!(restored == changed);

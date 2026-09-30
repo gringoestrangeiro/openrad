@@ -1,0 +1,23 @@
+{
+  "accesskit-0.24.1": "accesskit-0.24.1",
+  "accesskit_atspi_common-0.18.1": "accesskit_atspi_common-0.18.1",
+  "accesskit_consumer-0.35.0": "accesskit_consumer-0.35.0",
+  "accesskit_consumer-0.36.0": "accesskit_consumer-0.36.0",
+  "accesskit_unix-0.21.1": "accesskit_unix-0.21.1",
+  "accesskit_windows-0.32.1": "accesskit_windows-0.32.1",
+  "accesskit_winit-0.32.2": "accesskit_winit-0.32.2",
+  "clipboard-win-5.4.1": "clipboard-win-5.4.1",
+  "ecolor-0.36.2": "ecolor-0.36.2",
+  "eframe-0.36.2": "eframe-0.36.2",
+  "egui-0.36.2": "egui-0.36.2",
+  "egui-wgpu-0.36.2": "egui-wgpu-0.36.2",
+  "egui-winit-0.36.2": "egui-winit-0.36.2",
+  "egui_glow-0.36.2": "egui_glow-0.36.2",
+  "emath-0.36.2": "emath-0.36.2",
+  "epaint-0.36.2": "epaint-0.36.2",
+  "epaint_default_fonts-0.36.2": "epaint_default_fonts-0.36.2",
+  "gl_generator-0.14.0": "gl_generator-0.14.0",
+  "khronos_api-3.1.0": "khronos_api-3.1.0",
+  "profiling-1.0.18": "profiling-1.0.18",
+  "spirv-0.4.0+sdk-1.4.341.0": "spirv-0.4.0+sdk-1.4.341.0"
+}
