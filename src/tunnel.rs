@@ -1,7 +1,11 @@
 //! Service negotiation and uncompressed Ethernet envelopes.
 use crate::protocol::*;
 use anyhow::{ensure, Result};
-use std::net::Ipv4Addr;
+use std::{
+    net::Ipv4Addr,
+    ops::{Deref, Range},
+    sync::Arc,
+};
 pub fn mac(ip: Ipv4Addr) -> [u8; 6] {
     let a = ip.octets();
     [2, 0x1a, a[0], a[1], a[2], a[3]]
@@ -91,6 +95,126 @@ pub enum Packet<'a> {
     Keepalive { sequence: u32, reply: bool },
     Other(u16),
 }
+
+/// An Ethernet frame retaining its decrypted record allocation. A single-frame
+/// record moves its Vec directly; multi-frame records share it until drained.
+pub(crate) struct OwnedFrame {
+    data: FrameStorage,
+    range: Range<usize>,
+}
+enum FrameStorage {
+    Single(Vec<u8>),
+    Shared(Arc<Vec<u8>>),
+}
+impl FrameStorage {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Single(data) => data,
+            Self::Shared(data) => data,
+        }
+    }
+}
+impl Deref for OwnedFrame {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data.bytes()[self.range.clone()]
+    }
+}
+
+pub(crate) enum OwnedPacket {
+    Frames(OwnedFrames),
+    Keepalive { sequence: u32, reply: bool },
+    Other,
+}
+
+pub(crate) struct OwnedFrames {
+    data: Option<FrameStorage>,
+    at: usize,
+    remaining: usize,
+}
+impl Iterator for OwnedFrames {
+    type Item = OwnedFrame;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let data = self.data.as_ref()?;
+        // decode_owned validated every envelope before creating this iterator.
+        // The backing bytes are immutable and never exposed mutably afterwards.
+        let len =
+            u32::from_le_bytes(data.bytes()[self.at + 4..self.at + 8].try_into().unwrap()) as usize;
+        let start = self.at + 8;
+        self.at = start + len;
+        self.remaining -= 1;
+        let data = if self.remaining == 0 {
+            self.data.take().unwrap()
+        } else {
+            match data {
+                FrameStorage::Shared(data) => FrameStorage::Shared(Arc::clone(data)),
+                FrameStorage::Single(_) => unreachable!(),
+            }
+        };
+        Some(OwnedFrame {
+            data,
+            range: start..self.at,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+impl ExactSizeIterator for OwnedFrames {}
+
+/// Validate the entire record before releasing any frame. A malformed later
+/// envelope must reject the record without delivering its valid prefix.
+pub(crate) fn decode_owned(data: Vec<u8>) -> Result<OwnedPacket> {
+    ensure!(data.len() >= 2, "truncated tunnel packet");
+    let kind = u16::from_be_bytes(data[..2].try_into()?);
+    match kind {
+        0 => {
+            let mut at = 2;
+            let mut count = 0;
+            while at < data.len() {
+                let range = frame_range(&data, at)?;
+                at = range.end;
+                count += 1;
+            }
+            ensure!(count != 0, "empty Ethernet packet");
+            let storage = if count == 1 {
+                FrameStorage::Single(data)
+            } else {
+                FrameStorage::Shared(Arc::new(data))
+            };
+            Ok(OwnedPacket::Frames(OwnedFrames {
+                data: Some(storage),
+                at: 2,
+                remaining: count,
+            }))
+        }
+        3 | 7 => {
+            ensure!(data.len() == 6, "invalid keepalive length");
+            Ok(OwnedPacket::Keepalive {
+                sequence: u32::from_be_bytes(data[2..].try_into()?),
+                reply: kind == 7,
+            })
+        }
+        _ => Ok(OwnedPacket::Other),
+    }
+}
+
+fn frame_range(data: &[u8], at: usize) -> Result<Range<usize>> {
+    ensure!(data.len() - at >= 22, "truncated Ethernet envelope");
+    let flags = u32::from_le_bytes(data[at..at + 4].try_into()?);
+    let len = u32::from_le_bytes(data[at + 4..at + 8].try_into()?) as usize;
+    let start = at + 8;
+    ensure!(
+        (14..=65535).contains(&len) && len <= data.len() - start,
+        "invalid Ethernet envelope length"
+    );
+    ensure!(flags == 0, "unsupported Ethernet offload/compression flags");
+    Ok(start..start + len)
+}
+
 pub fn decode(data: &[u8]) -> Result<Packet<'_>> {
     ensure!(data.len() >= 2, "truncated tunnel packet");
     let kind = u16::from_be_bytes(data[..2].try_into()?);
@@ -99,17 +223,9 @@ pub fn decode(data: &[u8]) -> Result<Packet<'_>> {
             let mut at = 2;
             let mut frames = vec![];
             while at < data.len() {
-                ensure!(data.len() - at >= 22, "truncated Ethernet envelope");
-                let flags = u32::from_le_bytes(data[at..at + 4].try_into()?);
-                let len = u32::from_le_bytes(data[at + 4..at + 8].try_into()?) as usize;
-                at += 8;
-                ensure!(
-                    (14..=65535).contains(&len) && len <= data.len() - at,
-                    "invalid Ethernet envelope length"
-                );
-                ensure!(flags == 0, "unsupported Ethernet offload/compression flags");
-                frames.push(&data[at..at + len]);
-                at += len;
+                let range = frame_range(data, at)?;
+                at = range.end;
+                frames.push(&data[range]);
             }
             ensure!(!frames.is_empty(), "empty Ethernet packet");
             Ok(Packet::Frames(frames))
@@ -265,4 +381,84 @@ pub fn deliver_to(
     target_mac: [u8; 6],
 ) -> bool {
     forwarding(frame, source, source_mac).is_some_and(|route| route.deliver_to(target, target_mac))
+}
+
+#[cfg(test)]
+mod owned_packet_tests {
+    use super::*;
+
+    #[test]
+    fn single_received_frame_moves_the_record_buffer_without_copying() {
+        let frame = gratuitous_arp(Ipv4Addr::new(26, 0, 0, 1));
+        let packet = encode(&frame).unwrap();
+        let expected_pointer = packet.as_ptr().wrapping_add(10);
+        let OwnedPacket::Frames(mut frames) = decode_owned(packet).unwrap() else {
+            panic!("expected Ethernet frames");
+        };
+        assert_eq!(frames.len(), 1);
+        let received = frames.next().unwrap();
+        assert_eq!(received.as_ptr(), expected_pointer);
+        assert_eq!(&*received, frame);
+        assert!(frames.next().is_none());
+        assert_eq!(frames.len(), 0);
+    }
+
+    #[test]
+    fn multiple_received_frames_share_storage_and_outlive_the_iterator() {
+        let first = gratuitous_arp(Ipv4Addr::new(26, 0, 0, 1));
+        let second = gratuitous_arp(Ipv4Addr::new(26, 0, 0, 2));
+        let third = gratuitous_arp(Ipv4Addr::new(26, 0, 0, 3));
+        let mut packet = encode(&first).unwrap();
+        packet.extend_from_slice(&encode(&second).unwrap()[2..]);
+        packet.extend_from_slice(&encode(&third).unwrap()[2..]);
+        let expected_pointer = packet.as_ptr().wrapping_add(10);
+        let OwnedPacket::Frames(mut frames) = decode_owned(packet).unwrap() else {
+            panic!("expected Ethernet frames");
+        };
+        assert_eq!(frames.len(), 3);
+        let a = frames.next().unwrap();
+        let b = frames.next().unwrap();
+        assert_eq!(a.as_ptr(), expected_pointer);
+        assert_eq!(b.as_ptr(), a.as_ptr().wrapping_add(first.len() + 8));
+        drop(frames);
+        assert_eq!(&*a, first);
+        assert_eq!(&*b, second);
+        drop(a);
+        assert_eq!(&*b, second);
+    }
+
+    #[test]
+    fn malformed_later_envelope_rejects_the_entire_owned_record() {
+        let frame = gratuitous_arp(Ipv4Addr::new(26, 0, 0, 1));
+        let first = encode(&frame).unwrap();
+        let mut two = first.clone();
+        two.extend_from_slice(&first[2..]);
+        assert!(decode_owned(two.clone()).is_ok());
+        let mut bad_flags = two.clone();
+        bad_flags[first.len()] = 1;
+        assert!(decode_owned(bad_flags).is_err());
+        let mut bad_length = two.clone();
+        bad_length[first.len() + 4..first.len() + 8].copy_from_slice(&65535u32.to_le_bytes());
+        assert!(decode_owned(bad_length).is_err());
+        for end in first.len() + 1..two.len() {
+            assert!(decode_owned(two[..end].to_vec()).is_err());
+        }
+        assert!(decode_owned(vec![0, 0]).is_err());
+    }
+
+    #[test]
+    fn owned_keepalives_preserve_sequence_reply_and_length_checks() {
+        for reply in [false, true] {
+            let packet = keepalive(u32::MAX, reply);
+            assert!(matches!(
+                decode_owned(packet.clone()).unwrap(),
+                OwnedPacket::Keepalive { sequence: u32::MAX, reply: actual } if actual == reply
+            ));
+            assert!(decode_owned(packet[..5].to_vec()).is_err());
+        }
+        assert!(matches!(
+            decode_owned(vec![0, 9]).unwrap(),
+            OwnedPacket::Other
+        ));
+    }
 }

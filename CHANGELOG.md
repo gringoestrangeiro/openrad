@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.0.0 — 2026-10-01
+
+This release includes all local changes since remote `main` at
+`8d793b44` (v0.9.5), with fresh Linux and Windows binaries. The
+[file-by-file inventory](docs/releases/1.0.0-changes.md) accounts for every
+changed and added file; [release notes](docs/releases/1.0.0.md) document upgrading,
+packages, checks, and limitations.
+
+### Shared desktop and CLI service
+
+- Move the per-user daemon into the shared library. Both frontends attach to one engine, identity, membership roster, peer set, and TAP session per profile; either frontend may start first. Desktop status polling and commands run off the UI thread, and closing the desktop leaves the service running. Desktop Disconnect and CLI Stop stop the shared session.
+- Resolve both frontends to the same default directory, retaining an existing desktop profile when the canonical CLI profile has not been initialized. Keep existing identities in their credential store or private file. Reject initialization over a saved profile, stored identity, or running service, and prevent conflicting identity imports.
+- Serialize simultaneous service launches with a startup lock; coordinate service startup and identity changes with separate profile/service locks. Persist service reconnect, relay, and traffic-allowlist preferences with atomic private writes. Status reports the process ID and service preferences; snapshots and transport paths support deserialization.
+- Add CLI `ping PEER_RID`, `rename NODE_NAME`, and `force-relay true|false`. Validate nonblank names, control characters, and protocol length; renaming keeps the RID, address, credentials, and memberships, reconnecting only to advertise the new name. Allow offline rename/policy changes and explicit restart after reconnect attempts are exhausted.
+- Apply saved reconnect enablement, 1–10 retry attempts, and 1–30 second base delay in the service, doubling delays to a five-minute cap. Relay or traffic-policy changes cancel and finish existing workers before restarting.
+- Bound local requests with aggregate deadlines, including nonblocking Linux Unix-socket connects when the listen backlog is full, incremental bounded reply reads, and Windows named-pipe connection/message deadlines. Recover a stale Unix socket only while holding the service lock; refuse to delete a non-socket file.
+
+### Desktop networks, search, and layout
+
+- Add persistent favorites for public and private networks. Pin favorites in discovery, the sidebar, and joined-network selectors; sort favorite ties by member count and then name. Preserve search filters, server order for non-favorites, and roster/role count fallbacks.
+- Add an Auto join page with public/private selections, exact-name entry, selecting already joined networks, clearing selections, and per-network password fields. Validate all required passwords before submission, skip existing/pending memberships, and show independent joining, queued, success, approval, failure, or interrupted results.
+- Save, update, load, and delete up to 32 named configurations containing up to 128 networks each. Persist network names/access types/favorites separately in a bounded, validated, atomically written private `network-preferences.json`; keep corrupt data available for repair. Favorites and configurations survive restarts and identity replacement. Passwords stay in zeroized memory, are cleared on loading/identity changes, and are never saved; loading or launching does not submit joins automatically.
+- Pace overlapping joins at least 50 ms apart and correlate each result with its row. A refusal does not cancel other joins. Interrupt queued work on disconnect, identity change, or frontend close; already submitted requests may still take effect remotely.
+- Debounce live public-network searches for 300 ms, browse when discovery opens, keep typing enabled during requests, filter visible results immediately, discard stale query replies/failures, and retain pagination for the current query.
+- Replace the eight-network sidebar limit with a scrollable list and reserved device/interface/version footer. Make the sidebar resizable and clamp it to smaller windows. Scroll joined-network selectors horizontally, truncate long labels with full-name hover text, center the connection-card icon/title/caption, and keep connection actions and timing readable at narrow widths and translated scales.
+- Cache peer names, normalized filters, formatted addresses, selected/sorted rows, network membership counts, favorites, public results, and Auto join ordering. Reuse cached work for traffic-only snapshots. Measure peer row heights and reserve offscreen space without rebuilding controls; invalidate rows for metadata, role, ping, language, scale, style, width, or display-setting changes, keeping open menus active.
+
+### Peer RTT, relay policy, and release notices
+
+- Measure peer RTT with correlated authenticated tunnel keepalives and distinct sequences/request tokens. Keep normal forwarding active, accept only the intended reply, and expire probes after 3000 ms. Show translated RTT, pending, and failure states per peer, with a frontend deadline protecting against stalled control requests or stale replies. No ICMP privileges are needed.
+- Enforce relay-only policy for outgoing and incoming channels: suppress direct TCP/UDP requests, advertisements, mapping discovery, listeners, and attempts, and use relay-only incoming setup. Save the policy through either frontend and expose it in snapshots/settings.
+- Check GitHub's latest stable release at launch and hourly using semantic version precedence. Ignore drafts/prereleases/older versions and reject untrusted release links. Use the system curl client with HTTPS-only redirects, certificate verification, five-second connection/15-second transfer limits, and a 1 MiB response cap; hide its console on Windows. Keep a discovered notice through navigation, reconnects, and failed checks until explicitly dismissed for that launch.
+
+### Provisioning and identity reset
+
+- Make DNS waits cancellable and bounded and attempt resolved TCP addresses within the connection budget. Retry transient connection/authentication-transport failures before registration up to three times per server with one-/two-second delays and a 90-second aggregate provisioning budget; preserve bounded redirects. Fail authentication/protocol rejection immediately, and never automatically resend registration after an ambiguous lost response.
+- Cancel queued connect work before reset, acquire the profile lock without indefinite waiting, and retry service shutdown for up to ten seconds before obtaining exclusive stopped-service ownership. Keep old service status from hiding a reset failure behind Connecting.
+- Publish provisioning/redirect/retry/registration/save progress in the UI and retained activity. Retry replacement storage up to three times, preserve the old identity until saving succeeds, retain an issued unsaved replacement for storage-only retries, and finish a successful reset disconnected. Protect pending replacements during close handling and expose an identity-reset log-path action.
+- Record elapsed stages, attempts, full error chains, shutdown retries, and pending-save state in early desktop/CLI diagnostics while excluding credentials, keys, passwords, and packet contents.
+- Route concurrent private-network password replies using request IDs/authentication sequences. Retain compatibility with one legacy uncorrelated private join; reject ambiguity before applying a proof to multiple joins. Timed-out membership changes still force reattachment to reload authoritative membership.
+
+### Transport allocation and Unix resource limits
+
+- Cache the oldest unacknowledged UDP data sequence and next retry deadline, skip premature retransmission scans, capture one clock per due pass, and bypass reorder-map insertion for in-order delivery. Preserve wraparound, first-arrival precedence, checksum/ACK admission, 400 ms retries, and the 20-attempt limit.
+- Reassemble up to 128 fragments into one bounded payload allocation with indexed coverage metadata and a receipt bitmap. Avoid duplicate payload copies, validate gaps/overlaps/total length before delivery, move the completed buffer, and retain unacknowledged completed data while reorder admission is full.
+- Validate all Ethernet envelopes in an incoming decrypted record before delivering any frame. Move single-frame buffers and share multi-frame buffers across owned frame views in the runtime and diagnostic client, preserving lengths, offload rejection, keepalive parsing, and bounded queues. A queued frame retains its containing record until consumed.
+- Batch sent-byte/frame/drop counter publication, including successful sends before later I/O failure. Borrow eligible membership records/IDs, reuse existing peer metadata allocations, serialize shared immutable service snapshots outside the state lock, and move desktop JSON subtrees into parsers instead of cloning them.
+- Translate Windows Ethernet/ARP MAC fields directly in the persistent overlapped-write buffer. Validate frame bounds before submission, issue no write after a failed transform, and preserve kernel-buffer ownership through completion/cancellation.
+- Raise the Unix soft open-file limit to at least 8192 at desktop/CLI startup, capped by the unchanged hard limit. Preserve higher inherited values, pass the limit to the service, and log restrictions/errors without preventing startup or requiring sudo.
+
+### Localization, tests, documentation, and distribution
+
+- Add 100 complete English/Portuguese/Russian/Vietnamese catalog entries for the new UI, commands, validation, provisioning, IPC, and release errors. Extend catalog audits to release/HTTP modules and recognize intentionally English diagnostic records.
+- Add regressions for shared-session startup in either order/concurrently, offline rename and preserved secrets, preference persistence, aggregate IPC/backlog deadlines, inherited descriptor limits, encrypted RTT correlation/timeouts, relay-only incoming/outgoing behavior, overlapping public/private joins, refusal isolation/legacy ambiguity, provisioning retry safety, reset cancellation/storage/shutdown/stale sockets, owned tunnel frames, UDP window/reassembly/order/deadlines, counters after errors, JSON ownership, cached layouts, favorites/configurations, live search, and release dismissal. Add a Windows transformed-write test using a temporary file.
+- Extend offscreen software rendering into a reusable helper and add synthetic feature, many-network, and identity-reset screenshots. Update all six platform/usage/architecture/performance guides, README, and repository guidelines; ignore local network/service preference and lock files. Restore changelog history for 0.1.0–0.5.0 from the published releases.
+- Synchronize both workspace package versions and lockfile at 1.0.0; add library keyring and semver dependencies. Include complete release/change guides and five public synthetic screenshots in Linux, Windows portable, and installer package allowlists; preserve root Windows guide/validation/Credits links and include the MIT license beside ZIP documentation. Publish fresh Linux and Windows archives, offline setup, dependency/standard-library notices, build/import provenance, corresponding signed-driver source/licenses, and SHA-256 checksums.
+- Validation and platform limitations are recorded in the [release notes](docs/releases/1.0.0.md). Existing performance numbers measure prior isolated changes; this release does not claim new end-to-end throughput, process-RSS, or native Windows driver measurements.
+
 ## 0.9.5 — 2026-09-30
 
 ### Windows Radmin VPN migration
@@ -102,3 +160,38 @@
 
 - Confirmed private-network joins through both development and release CLIs using the test network, followed by a fresh membership check.
 - Passed the default workspace tests, formatting, Clippy, and the Linux release build. The privileged TAP test remains opt-in.
+
+## 0.5.0 — 2026-09-27
+
+- Retry refused peers with bounded per-peer backoff of 7.5–22.5, 15–45, then 30–90 seconds. Wait five seconds for initial setup to settle; pace retries 2–4 seconds apart with four outgoing retries at once, while incoming offers can bypass the wait. Manual retries preserve failure history.
+- Give direct TCP/UDP four seconds of preference over relay, extending to eight seconds after a relay ticket for late direct attempts; start relay sooner when direct options are exhausted. Apply the same preference to incoming channels except explicit relay-only diagnostics.
+- Announce the TAP address with a 42-byte gratuitous ARP reply when authenticated channels become ready and when the TAP is recreated. Apply the desktop Ethernet validation and explicit traffic allowlist to CLI forwarding, preserving source IP/MAC and membership checks.
+- Publish Linux x86-64 binaries built with Rust 1.95 on Debian 12. Development regressions passed before the final timing adjustment; they were not rerun for that adjustment. [Published release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.5.0).
+
+## 0.4.0 — 2026-09-27
+
+- Increase outgoing handshake capacity to 64 with 80 total slots and reserved incoming capacity. Discover UDP mappings concurrently through both authenticated servers, requiring agreement, independently of direct/relay setup.
+- Start direct transports as candidates arrive, with two TCP workers so an unresponsive address does not hold up others. Start relay 750 ms after its ticket; the first fully authenticated peer/service connection wins.
+- Prioritize first attempts over retries within traffic priority, start initial transient retries after 500–625 ms, enlarge bounded offer/advertisement queues, and promptly cancel superseded Linux TCP connects.
+- Accept member-removal/status events containing mandatory subject and optional source identifiers with the same tag without disconnecting or confusing their roles; retain strict singleton checks elsewhere.
+- Pass 111 headless tests, formatting, and Clippy; publish Linux binaries requiring glibc 2.35+. [Published release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.4.0).
+
+## 0.3.0 — 2026-09-27
+
+- Keep attachment heartbeats running under queue pressure and separate packet/counter work from lifecycle events. Preserve established peers across equivalent online roster states and consume queued UDP ACKs before timeout checks.
+- Retry transient peer failures with individual staggered backoff. Keep search timeout, full command queues, and TAP read failures from unnecessarily ending the whole session; reconnect after uncertain membership mutations.
+- Add persistent session/peer/transport/retry/roster/heartbeat/queue diagnostics rotating over four 4 MiB files, without passwords, keys, or payloads. Show peer failure details in Recent activity and add Copy connection log path.
+- Pass 99 headless tests, formatting, and Clippy; publish Linux binaries requiring glibc 2.35+. [Published release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.3.0).
+
+## 0.2.0 — 2026-09-27
+
+- Add password-protected private-network creation and joining to the desktop and CLI, private membership views, administrator-authorized member removal and permission grants/revocations, and owner-authorized network deletion.
+- Use passwords only during authenticated operations and retain OS credential storage, public discovery/joining, and the 0.1.0 transport/I/O improvements.
+- Publish experimental Linux x86-64 binaries built with Rust 1.95 on Debian 12, requiring glibc 2.35+, with guides, license, build information, and checksums. [Published release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.2.0).
+
+## 0.1.0 — 2026-09-27
+
+- Release the native Linux desktop and headless CLI with public networks, direct TCP/UDP, and relay transport; private-network management arrived in 0.2.0.
+- Run up to 24 concurrent outgoing handshakes with 32 total slots to retain incoming capacity. Use Linux poll readiness and vectored TCP writes, reduce Ethernet allocations, avoid redundant membership updates, and omit JSON serialization for disabled reports.
+- Preserve protocol, cryptography, authentication, UDP formats, and deadlines. Seven-run local medians improved 100,000 idle socket checks from 37.97 to 21.66 ms, 200,000 Ethernet encodes from 12.55 to 5.26 ms, and 10,000 localhost TCP frames from 27.65 to 14.68 ms; these measure local overhead.
+- Publish experimental Linux x86-64 binaries built with Rust 1.95 on Debian 12, requiring glibc 2.35+, with setup/license/build/performance documentation and checksums. [Published release](https://github.com/gringoestrangeiro/openrad/releases/tag/v0.1.0).

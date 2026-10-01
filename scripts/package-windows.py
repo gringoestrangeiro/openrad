@@ -32,6 +32,17 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def root_release_document(text, version):
+    """Keep links usable when release notes are also copied to the ZIP root."""
+    return (text.replace('](../../CHANGELOG.md', '](CHANGELOG.md')
+            .replace(f']({version}-changes.md)', f'](docs/releases/{version}-changes.md)')
+            .replace('](../screenshots/', '](docs/screenshots/')
+            .replace('](../linux.md)', '](docs/linux.md)')
+            .replace('](../windows.md)', '](docs/windows.md)')
+            .replace('](../desktop.md)', '](docs/desktop.md)')
+            .replace('](../cli.md)', '](docs/cli.md)'))
+
+
 def imports(path, objdump, formats=("pei-x86-64",)):
     header = command(objdump, "-f", str(path))
     if not any(format in header for format in formats):
@@ -130,6 +141,15 @@ def main():
             ("docs/cli.md", "docs/cli.md"),
             ("docs/desktop.md", "docs/desktop.md"),
             ("docs/architecture.md", "docs/architecture.md"),
+            ("README.md", "README.md"), ("CHANGELOG.md", "CHANGELOG.md"),
+            ("docs/linux.md", "docs/linux.md"), ("docs/performance.md", "docs/performance.md"),
+            (f"docs/releases/{version}.md", f"docs/releases/{version}.md"),
+            (f"docs/releases/{version}-changes.md", f"docs/releases/{version}-changes.md"),
+            ("docs/screenshots/1.0.0-networks.png", "docs/screenshots/1.0.0-networks.png"),
+            ("docs/screenshots/1.0.0-discover.png", "docs/screenshots/1.0.0-discover.png"),
+            ("docs/screenshots/1.0.0-auto-join.png", "docs/screenshots/1.0.0-auto-join.png"),
+            ("docs/screenshots/1.0.0-many-networks.png", "docs/screenshots/1.0.0-many-networks.png"),
+            ("docs/screenshots/1.0.0-identity-reset.png", "docs/screenshots/1.0.0-identity-reset.png"),
             ("docs/screenshots/windows-settings-linux-preview.png", "docs/screenshots/windows-settings-linux-preview.png"),
             ("docs/licenses/TAP-Windows6-MIT.txt", "licenses/TAP-Windows6-MIT.txt"),
             ("desktop/assets/OFL-NotoSans.txt", "licenses/OFL-NotoSans.txt"),
@@ -144,8 +164,19 @@ def main():
         root_guide.write_text(
             root_guide.read_text(encoding="utf-8")
             .replace("](cli.md)", "](docs/cli.md)")
+            .replace("](../README.md", "](README.md")
             .replace("](desktop.md)", "](docs/desktop.md)")
-            .replace("](screenshots/", "](docs/screenshots/"),
+            .replace("](screenshots/", "](docs/screenshots/")
+            .replace("](releases/", "](docs/releases/"),
+            encoding="utf-8",
+        )
+        validation = output / "VALIDATION.md"
+        validation.write_text(root_release_document(validation.read_text(encoding="utf-8"), version), encoding="utf-8")
+        credits = output / "CREDITS.md"
+        credits.write_text(
+            credits.read_text(encoding="utf-8")
+            .replace("](docs/licenses/TAP-Windows6-MIT.txt)", "](licenses/TAP-Windows6-MIT.txt)")
+            .replace("](desktop/assets/OFL-NotoSans.txt)", "](licenses/OFL-NotoSans.txt)"),
             encoding="utf-8",
         )
         license_notices(metadata, output)

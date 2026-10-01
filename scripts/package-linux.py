@@ -55,6 +55,12 @@ def main():
         for source in ['README.md', 'CHANGELOG.md', 'LICENSE', 'CREDITS.md',
                        'docs/linux.md', 'docs/windows.md', 'docs/desktop.md', 'docs/cli.md',
                        'docs/architecture.md', 'docs/performance.md', f'docs/releases/{version}.md',
+                       f'docs/releases/{version}-changes.md',
+                       'docs/screenshots/1.0.0-networks.png',
+                       'docs/screenshots/1.0.0-discover.png',
+                       'docs/screenshots/1.0.0-auto-join.png',
+                       'docs/screenshots/1.0.0-many-networks.png',
+                       'docs/screenshots/1.0.0-identity-reset.png',
                        'docs/screenshots/windows-settings-linux-preview.png',
                        'docs/licenses/TAP-Windows6-MIT.txt', 'desktop/assets/OFL-NotoSans.txt']:
             target = output / source

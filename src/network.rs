@@ -16,6 +16,9 @@ impl fmt::Debug for NetworkPassword {
     }
 }
 impl NetworkPassword {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
     pub fn new(value: String) -> Result<Self> {
         let value = Zeroizing::new(value);
         ensure!(
@@ -307,6 +310,23 @@ impl NetworkOperation {
             Purpose::Delete(_) => 7,
             Purpose::Member(_, _, a) => a.code(),
         }
+    }
+    pub(crate) fn is_join(&self) -> bool {
+        matches!(self.purpose, Purpose::Join(_))
+    }
+    /// Older servers can omit correlation on password replies. The control
+    /// worker may route such a reply only when exactly one operation accepts it.
+    pub(crate) fn accepts_auth_reply(&self, data: &[u8]) -> Result<bool> {
+        if !self.is_join() {
+            return Ok(false);
+        }
+        let outer = records(data)?;
+        let fields = records(field(&outer, 0x131c)?)?;
+        let id = optional(&fields, 0x02000340)?.map(int64).transpose()?;
+        let sequence = optional(&fields, 0x010003be)?.map(int32).transpose()?;
+        Ok(id.is_none_or(|id| id == self.id)
+            && sequence.is_none_or(|sequence| sequence == self.sequence)
+            && (id.is_some() || sequence.is_some() || self.auth.is_some()))
     }
     /// Consume a single authenticated control packet. Unrelated packets do not complete this operation.
     pub fn handle(&mut self, data: &[u8], membership: &mut Membership) -> Result<Progress> {

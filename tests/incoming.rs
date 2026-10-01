@@ -199,3 +199,80 @@ fn incoming_wait_and_tcp_preamble_are_bounded_and_cancellable() {
     assert!(f.peer_rendezvous(12, 99, 17).is_err());
     assert!(t.join().unwrap());
 }
+
+#[test]
+fn relay_only_incoming_setup_advertises_no_direct_endpoints() {
+    use openrad::incoming::{Hub, Policy};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay_port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let mut stream =
+            Framed::from_socket(listener.accept().unwrap().0, Duration::from_secs(5), None)
+                .unwrap();
+        let ticket = stream.receive(65536).unwrap();
+        assert_eq!(
+            field(&records(&ticket).unwrap(), 0x090001ca).unwrap(),
+            [23; 256]
+        );
+        stream.send(&u32v(0x010001df, 2)).unwrap();
+        initiator(PeerStream::Tcp(stream));
+    });
+    let (wire, advertisements) = std::sync::mpsc::sync_channel(8);
+    let mut hub = Hub::new("127.0.0.1".parse().unwrap(), vec![], wire);
+    hub.ingest(
+        &[
+            u32v(SERVER_OP, 11),
+            u64v(0x020001c1, 99),
+            tlv(
+                0x1235,
+                &[
+                    u64v(0x020001e1, 11),
+                    tlv(0x0a0001cd, b"synthetic-connection-password"),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    // Even supplied direct candidates cannot open listeners or UDP sockets.
+    hub.ingest(&[u32v(SERVER_OP, 6), u64v(0x020001c1, 99), tlv(0x1236, &[])].concat())
+        .unwrap();
+    hub.ingest(&[u32v(SERVER_OP, 29), u64v(0x020001c1, 99), tlv(0x127c, &[])].concat())
+        .unwrap();
+    hub.ingest(
+        &[
+            u32v(SERVER_OP, 23),
+            u64v(0x020001c1, 99),
+            tlv(
+                0x123f,
+                &[
+                    textv(0x030001cb, "127.0.0.1").unwrap(),
+                    u32v(0x010001cc, relay_port as u32),
+                    tlv(0x090001ca, &[23; 256]),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let setup = hub.take(11, Policy::Relay).unwrap();
+    let mut channel = setup
+        .accept(
+            42,
+            "26.0.0.42".parse().unwrap(),
+            peer(),
+            &ReportDirectory::disabled(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert_eq!(channel.transport.path, Some(TransportPath::Relay));
+    assert!(
+        advertisements.try_recv().is_err(),
+        "relay-only setup sends no direct advertisements"
+    );
+    let bytes = channel.receive().unwrap();
+    channel.send(&bytes).unwrap();
+    server.join().unwrap();
+}

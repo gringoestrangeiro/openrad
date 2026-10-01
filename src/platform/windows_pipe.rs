@@ -1,7 +1,7 @@
 //! Bounded, local-only named-pipe control channel with a current-user ACL.
 //! Windows uses length-prefixed messages and a reply acknowledgement because
 //! named pipes have no Unix-style write half-close.
-use openrad::{
+use crate::{
     windows_io::{self, Operation},
     windows_security::{self, Security},
 };
@@ -50,9 +50,13 @@ pub struct Connection {
     handle: Arc<OwnedHandle>,
 }
 impl Connection {
+    #[cfg(test)]
     pub fn connect(path: &Path) -> io::Result<Self> {
+        Self::connect_timeout(path, Duration::from_secs(5))
+    }
+    pub fn connect_timeout(path: &Path, timeout: Duration) -> io::Result<Self> {
         let name = name(path)?;
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + timeout;
         loop {
             // SAFETY: no inheritance; identification SQOS prevents a pipe
             // server from impersonating an elevated client token.
@@ -77,7 +81,7 @@ impl Connection {
                     if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
                         && Instant::now() < until =>
                 unsafe {
-                    WaitNamedPipeW(name.as_ptr(), 50);
+                    WaitNamedPipeW(name.as_ptr(), milliseconds(until).min(50));
                 },
                 Err(e) => return Err(e),
             }

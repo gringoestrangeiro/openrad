@@ -1,10 +1,10 @@
 //! Persistent settings contain no credentials. The whole reusable identity is
 //! stored in the OS credential store, never in an egui persistence file or log.
 use anyhow::{bail, ensure, Context, Result};
-use directories::ProjectDirs;
 use openrad::{i18n::LanguagePreference, protocol::Identity};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -12,6 +12,59 @@ use std::{
 use zeroize::Zeroizing;
 
 const PENDING: &[u8] = b"openrad-provisioning-pending-v1";
+pub const MAX_JOIN_NETWORKS: usize = 128;
+
+/// Network names and access types survive identity replacement. Passwords are
+/// deliberately absent from this file and from saved join configurations.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinNetwork {
+    pub name: String,
+    pub private: bool,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkPreferences {
+    pub favorites: BTreeSet<String>,
+    pub known_networks: BTreeMap<String, bool>,
+    pub join_configurations: BTreeMap<String, Vec<JoinNetwork>>,
+}
+impl NetworkPreferences {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.favorites.len() <= 512 && self.known_networks.len() <= 512,
+            "Too many saved networks"
+        );
+        for name in self.favorites.iter().chain(self.known_networks.keys()) {
+            openrad::network::validate_name(name)?;
+        }
+        ensure!(
+            self.join_configurations.len() <= 32,
+            "Too many saved join configurations"
+        );
+        for (name, networks) in &self.join_configurations {
+            ensure!(
+                (1..=80).contains(&name.chars().count())
+                    && !name.trim().is_empty()
+                    && !name.chars().any(char::is_control),
+                "Configuration name must contain 1–80 characters without control characters"
+            );
+            ensure!(
+                !networks.is_empty() && networks.len() <= MAX_JOIN_NETWORKS,
+                "Select between 1 and 128 networks"
+            );
+            let mut names = BTreeSet::new();
+            for network in networks {
+                openrad::network::validate_name(&network.name)?;
+                ensure!(
+                    names.insert(&network.name),
+                    "Join configuration contains a duplicate network"
+                );
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartPage {
@@ -50,6 +103,7 @@ pub struct Settings {
     pub show_peer_details: bool,
     pub show_internal_ids: bool,
     pub show_diagnostics: bool,
+    pub force_relay: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -77,6 +131,7 @@ impl Default for Settings {
             show_peer_details: false,
             show_internal_ids: false,
             show_diagnostics: false,
+            force_relay: false,
         }
     }
 }
@@ -98,14 +153,7 @@ pub struct Paths {
 }
 impl Paths {
     pub fn new(override_path: Option<PathBuf>) -> Result<Self> {
-        let directory = if let Some(path) = override_path {
-            path
-        } else {
-            ProjectDirs::from("org", "OpenRad", "openrad")
-                .context("Cannot locate the user data directory")?
-                .data_local_dir()
-                .to_owned()
-        };
+        let directory = openrad::daemon::DataDir::open(override_path)?.path;
         if !directory.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
@@ -139,11 +187,7 @@ impl Paths {
         Ok(settings.normalized())
     }
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
-        ensure!(
-            !settings.node_name.trim().is_empty(),
-            "Device name cannot be empty"
-        );
-        openrad::protocol::textv(0x03000304, &settings.node_name)?;
+        openrad::protocol::validate_node_name(&settings.node_name)?;
         ensure!(
             settings == &settings.clone().normalized(),
             "Settings are out of range"
@@ -157,6 +201,42 @@ impl Paths {
         file.sync_all()?;
         fs::rename(tmp, target)?;
         Ok(())
+    }
+    pub fn network_preferences(&self) -> Result<NetworkPreferences> {
+        let path = self.directory.join("network-preferences.json");
+        if !path.exists() {
+            return Ok(NetworkPreferences::default());
+        }
+        ensure!(
+            fs::metadata(&path)?.len() <= 1024 * 1024,
+            "Network preferences file is too large"
+        );
+        let preferences: NetworkPreferences = serde_json::from_slice(&fs::read(path)?)?;
+        preferences.validate()?;
+        Ok(preferences)
+    }
+    pub fn save_network_preferences(&self, preferences: &NetworkPreferences) -> Result<()> {
+        preferences.validate()?;
+        let bytes = serde_json::to_vec_pretty(preferences)?;
+        ensure!(
+            bytes.len() <= 1024 * 1024,
+            "Network preferences file is too large"
+        );
+        let target = self.directory.join("network-preferences.json");
+        let tmp = self
+            .directory
+            .join(format!("network-preferences-{}.tmp", std::process::id()));
+        let result = (|| -> Result<()> {
+            let mut file = private_file(&tmp, true)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&tmp, target)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result
     }
     pub fn entry(&self) -> Result<keyring::Entry> {
         keyring::Entry::new("org.openrad.desktop", &self.directory.to_string_lossy())
@@ -345,6 +425,114 @@ mod tests {
     fn settings_never_serialize_credentials() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(!json.contains("credential") && !json.contains("password"));
+    }
+    #[test]
+    fn saved_network_lists_survive_restart_and_identity_replacement_without_passwords() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-network-preferences-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::new(Some(directory.clone())).unwrap();
+        assert!(paths.network_preferences().unwrap() == NetworkPreferences::default());
+        let preferences = NetworkPreferences {
+            favorites: ["Public LAN".into(), "Private LAN".into()]
+                .into_iter()
+                .collect(),
+            known_networks: [("Public LAN".into(), false), ("Private LAN".into(), true)]
+                .into_iter()
+                .collect(),
+            join_configurations: [(
+                "Friends".into(),
+                vec![
+                    JoinNetwork {
+                        name: "Public LAN".into(),
+                        private: false,
+                    },
+                    JoinNetwork {
+                        name: "Private LAN".into(),
+                        private: true,
+                    },
+                ],
+            )]
+            .into_iter()
+            .collect(),
+        };
+        paths.save_network_preferences(&preferences).unwrap();
+        // An update must also replace an existing file on supported platforms.
+        paths.save_network_preferences(&preferences).unwrap();
+        let vault = MemoryVault::default();
+        let mut current = Some(identity());
+        save(&vault, current.as_ref().unwrap()).unwrap();
+        let mut replacement = Replacement::default();
+        replacement
+            .prepare(|| {
+                let mut next = identity();
+                next.rid = 456;
+                Ok(next)
+            })
+            .unwrap();
+        replacement.commit(&vault, &mut current).unwrap();
+        let reopened = Paths::new(Some(directory.clone())).unwrap();
+        assert!(reopened.network_preferences().unwrap() == preferences);
+        let json = fs::read_to_string(directory.join("network-preferences.json")).unwrap();
+        assert!(!json.contains("password") && !json.contains("credential"));
+        let mut invalid = preferences.clone();
+        invalid
+            .join_configurations
+            .get_mut("Friends")
+            .unwrap()
+            .push(JoinNetwork {
+                name: "Private LAN".into(),
+                private: true,
+            });
+        assert!(paths.save_network_preferences(&invalid).is_err());
+        assert!(paths.network_preferences().unwrap() == preferences);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(directory.join("network-preferences.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn malformed_and_oversized_join_configurations_are_rejected() {
+        let network = JoinNetwork {
+            name: "Synthetic LAN".into(),
+            private: true,
+        };
+        for (name, networks) in [
+            ("".into(), vec![network.clone()]),
+            ("x".repeat(81), vec![network.clone()]),
+            ("bad\nname".into(), vec![network.clone()]),
+            ("Empty".into(), vec![]),
+            ("Duplicate".into(), vec![network.clone(), network]),
+            (
+                "Too many".into(),
+                (0..129)
+                    .map(|index| JoinNetwork {
+                        name: format!("Network {index}"),
+                        private: false,
+                    })
+                    .collect(),
+            ),
+        ] {
+            let preferences = NetworkPreferences {
+                join_configurations: [(name, networks)].into_iter().collect(),
+                ..Default::default()
+            };
+            assert!(preferences.validate().is_err());
+        }
     }
     #[test]
     fn old_settings_receive_new_defaults_and_customization_round_trips() {

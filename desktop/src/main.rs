@@ -36,6 +36,8 @@ struct Args {
 }
 fn main() {
     startup_log::init();
+    #[cfg(unix)]
+    openrad::resource_limits::configure_open_file_limit();
     let args: Vec<_> = std::env::args_os().collect();
     let language = i18n::language_for_args(&args, LanguagePreference::System);
     if let Err(e) = execute() {

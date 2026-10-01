@@ -9,10 +9,10 @@ cargo build --workspace --release --locked
 A typical Debian/Ubuntu development setup needs these packages:
 
 ```sh
-sudo apt install build-essential pkg-config libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev iproute2 sudo gnome-keyring
+sudo apt install build-essential pkg-config libx11-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev iproute2 sudo gnome-keyring curl
 ```
 
-Equivalent distribution packages are fine. X11 or Wayland, a usable OpenGL driver, and a desktop D-Bus session are required for the GUI. GNOME Keyring or a compatible unlocked Secret Service provider must be running. The headless CLI does not need a display or a credential-store service.
+Equivalent distribution packages are fine. X11 or Wayland, a usable OpenGL driver, and a desktop D-Bus session are required for the GUI. GNOME Keyring or a compatible unlocked Secret Service provider must be running. The headless CLI does not need a display. A CLI-initialized private file profile works without a credential-store service; using an existing desktop identity requires its unlocked Secret Service store. The desktop uses the system `curl` HTTPS client for background release checks.
 
 ## TAP permissions
 
@@ -31,12 +31,26 @@ The helper currently expects the standard Linux locations `/usr/bin/sudo` and `/
 
 The interface is named `radminvpn0`, has MTU 1500, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
 
+## Open-file limit
+
+The desktop and CLI automatically raise their per-process soft open-file limit
+to at least 8,192 at startup. A higher inherited limit is preserved, and the VPN
+service inherits the desktop's limit. Sockets and peer wakeup descriptors count
+towards this budget, so large peer rosters need more than the usual low shell
+limit.
+
+This adjustment needs no sudo and does not change system-wide settings or the
+hard limit. If the hard limit is below 8,192, OpenRad uses the highest allowed
+value and records a warning. Startup logs record the previous, effective, and
+hard limits; failure to adjust the limit does not prevent startup. An already
+running service must be restarted to use the new startup behavior.
+
 ## Troubleshooting
 
 - **Credential store unavailable:** start and unlock Secret Service in the same user session, then restart OpenRad. Existing identities are not silently replaced.
 - **TAP helper executable missing:** build the whole workspace and keep `openrad` next to `openrad-desktop`.
 - **TAP helper failed:** verify `/dev/net/tun`, the `ip` command, and sudo authorization. Launch from a terminal to see helper errors.
-- **Interface already exists:** disconnect the other OpenRad instance or identify the interface's owner. The client deliberately leaves existing interfaces alone.
+- **Interface already exists:** identify the interface's owner. The desktop and CLI share one service per profile; a different active profile or another application may own it. The client deliberately leaves existing interfaces alone.
 - **Connected but no peer traffic:** inspect each peer's path and counters, membership, application interface selection, and firewall rules. The service connection indicator does not prove a peer channel or a working direct path.
 
 ## Optional interface test

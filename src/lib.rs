@@ -2,6 +2,8 @@
 pub mod client;
 mod config;
 pub mod crypto;
+#[cfg(any(unix, windows))]
+pub mod daemon;
 pub mod diagnostics;
 #[doc(hidden)]
 pub mod early_log;
@@ -11,6 +13,11 @@ pub mod network;
 pub mod output;
 pub mod peer;
 pub mod protocol;
+pub mod releases;
+#[cfg(unix)]
+#[doc(hidden)]
+#[path = "platform/resource_limits.rs"]
+pub mod resource_limits;
 pub mod runtime;
 mod scheduling;
 pub mod session;

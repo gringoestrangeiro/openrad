@@ -65,6 +65,11 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         ("daemon", include_str!("../src/daemon.rs")),
         ("network", include_str!("../src/network.rs")),
         ("runtime", include_str!("../src/runtime.rs")),
+        ("releases", include_str!("../src/releases.rs")),
+        (
+            "release_http",
+            include_str!("../src/platform/release_http.rs"),
+        ),
         ("session", include_str!("../src/session.rs")),
         ("peer", include_str!("../src/peer.rs")),
         ("protocol", include_str!("../src/protocol.rs")),
@@ -94,6 +99,8 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
     // universal. Everything else that reads as a sentence or label is audited.
     let universal = [
         "OpenRad",
+        "OpenRad/",
+        "Accept: application/vnd.github+json",
         "OpenRad: {e}",
         "OpenRad: {0}",
         "openrad: {0}",
@@ -123,6 +130,16 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         "{0}\nInvoke-OpenRadRadminRecovery -InterfaceIndex @({indices})",
         "Official Radmin VPN conflict; starting temporary SYSTEM recovery",
         "Official Radmin VPN SYSTEM recovery finished; retrying interface address check",
+        // These are persisted diagnostics, which deliberately stay in English.
+        "Identity reset requested; pending_save={0}",
+        "Identity reset saving replacement; elapsed_ms={0}",
+        "{message}; elapsed_ms={0}; pending_save={1}",
+        "Identity reset completed; elapsed_ms={0}",
+        "Stopping VPN service; timeout_seconds=10",
+        "VPN stop request failed; attempt={attempts}; error={error}",
+        "VPN service stopped; attempts={attempts}",
+        "Identity save retry; attempt={attempt}; error={error}",
+        "Recovered stale VPN service endpoint",
     ];
     let mut missing = Vec::new();
     for (file, source) in sources {

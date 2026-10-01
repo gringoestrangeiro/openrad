@@ -123,7 +123,7 @@ fn wgpu_setup(software: bool) -> egui_wgpu::WgpuSetupCreateNew {
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "graphics/software_test.rs"]
-mod software_test;
+pub(crate) mod software_test;
 
 fn native_options(attempt: Attempt) -> eframe::NativeOptions {
     let mut native = eframe::NativeOptions {

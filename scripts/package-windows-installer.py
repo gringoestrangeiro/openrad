@@ -116,6 +116,12 @@ def main():
             ('docs/desktop.md', 'docs/desktop.md'), ('docs/architecture.md', 'docs/architecture.md'),
             ('docs/linux.md', 'docs/linux.md'), ('docs/performance.md', 'docs/performance.md'),
             (f'docs/releases/{version}.md', f'docs/releases/{version}.md'),
+            (f'docs/releases/{version}-changes.md', f'docs/releases/{version}-changes.md'),
+            ('docs/screenshots/1.0.0-networks.png', 'docs/screenshots/1.0.0-networks.png'),
+            ('docs/screenshots/1.0.0-discover.png', 'docs/screenshots/1.0.0-discover.png'),
+            ('docs/screenshots/1.0.0-auto-join.png', 'docs/screenshots/1.0.0-auto-join.png'),
+            ('docs/screenshots/1.0.0-many-networks.png', 'docs/screenshots/1.0.0-many-networks.png'),
+            ('docs/screenshots/1.0.0-identity-reset.png', 'docs/screenshots/1.0.0-identity-reset.png'),
             ('docs/screenshots/windows-settings-linux-preview.png', 'docs/screenshots/windows-settings-linux-preview.png'),
             ('docs/licenses/TAP-Windows6-MIT.txt', 'licenses/TAP-Windows6-MIT.txt'),
             ('docs/licenses/NSIS.txt', 'licenses/NSIS.txt'),
@@ -129,8 +135,10 @@ def main():
         ]:
             copy(ROOT / source, payload / target)
         copy((args.validation or ROOT / f'docs/releases/{version}.md').resolve(), payload / 'VALIDATION.md')
+        validation = payload / 'VALIDATION.md'
+        validation.write_text(_support.root_release_document(validation.read_text(encoding='utf-8'), version), encoding='utf-8')
         guide = payload / 'README-WINDOWS.md'
-        guide.write_text(guide.read_text().replace('](cli.md)', '](docs/cli.md)').replace('](desktop.md)', '](docs/desktop.md)').replace('](screenshots/', '](docs/screenshots/').replace('](releases/', '](docs/releases/'), encoding='utf-8')
+        guide.write_text(guide.read_text().replace('](cli.md)', '](docs/cli.md)').replace('](../README.md', '](README.md').replace('](desktop.md)', '](docs/desktop.md)').replace('](screenshots/', '](docs/screenshots/').replace('](releases/', '](docs/releases/'), encoding='utf-8')
         credits = payload / 'CREDITS.md'
         credits.write_text(credits.read_text().replace('](docs/licenses/TAP-Windows6-MIT.txt)', '](licenses/TAP-Windows6-MIT.txt)').replace('](desktop/assets/OFL-NotoSans.txt)', '](licenses/OFL-NotoSans.txt)'), encoding='utf-8')
         for notice in sorted((ROOT / 'docs/licenses/windows-runtime').iterdir()):
@@ -234,7 +242,7 @@ def main():
         output = temp / f'openrad-{version}-windows-x86_64-setup'
         output.mkdir()
         copy(setup_exe, output / setup_exe.name)
-        for name in ['README.md', 'CHANGELOG.md', 'README-WINDOWS.md', 'VALIDATION.md', 'Test-Windows.ps1', 'Debug-OpenRad.cmd', 'Debug-OpenRad.ps1', 'DRIVER-PROVENANCE.json', 'DLL-IMPORTS.json', 'BUILD-INFO.json']:
+        for name in ['README.md', 'LICENSE', 'CHANGELOG.md', 'README-WINDOWS.md', 'VALIDATION.md', 'Test-Windows.ps1', 'Debug-OpenRad.cmd', 'Debug-OpenRad.ps1', 'DRIVER-PROVENANCE.json', 'DLL-IMPORTS.json', 'BUILD-INFO.json']:
             copy(payload / name, output / name)
         # Preserve the guide's relative local links for readers outside the EXE.
         shutil.copytree(payload / 'docs', output / 'docs')

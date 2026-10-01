@@ -2556,7 +2556,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openrad-client"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -2565,12 +2565,14 @@ dependencies = [
  "ctrlc",
  "directories",
  "hex",
+ "keyring",
  "libc",
  "log",
  "md4",
  "num-bigint",
  "num-traits",
  "rand",
+ "semver",
  "serde",
  "serde_json",
  "sha1",
@@ -2583,7 +2585,7 @@ dependencies = [
 
 [[package]]
 name = "openrad-desktop"
-version = "0.9.5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",

@@ -293,11 +293,16 @@ impl Tap {
         Ok(frame)
     }
     pub fn send(&mut self, frame: &[u8]) -> Result<()> {
-        let mut local = frame.to_vec();
-        contract::translate_mac(&mut local, self.wire_mac, self.adapter_mac)?;
-        self.write.write(&local)?;
         ensure!(
-            self.write.finish(1000)? == local.len(),
+            (14..=tunnel::MAX_FRAME).contains(&frame.len()),
+            "TAP Ethernet frame exceeds configured MTU"
+        );
+        let (wire_mac, adapter_mac) = (self.wire_mac, self.adapter_mac);
+        self.write.write_transformed(frame, |buffer| {
+            contract::translate_mac(buffer, wire_mac, adapter_mac)
+        })?;
+        ensure!(
+            self.write.finish(1000)? == frame.len(),
             "short TAP-Windows6 packet write"
         );
         Ok(())

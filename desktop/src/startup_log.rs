@@ -1,7 +1,7 @@
 //! Desktop checkpoints on the shared early diagnostics writer.
-pub use openrad::early_log::{event, fatal_error};
 #[cfg(windows)]
-pub use openrad::early_log::{path, stderr_file};
+pub use openrad::early_log::stderr_file;
+pub use openrad::early_log::{event, fatal_error, path};
 use std::fmt;
 
 pub fn init() {

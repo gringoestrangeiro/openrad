@@ -163,11 +163,26 @@ impl Operation {
         }
     }
     pub fn write(&mut self, data: &[u8]) -> io::Result<()> {
+        self.write_transformed(data, |_| Ok(()))
+    }
+    /// Copy and transform in owned storage before issuing the write. The
+    /// callback cannot retain or resize the kernel-borrowed buffer, and a
+    /// failed transform never starts an I/O request.
+    pub fn write_transformed<E>(
+        &mut self,
+        data: &[u8],
+        transform: impl FnOnce(&mut [u8]) -> Result<(), E>,
+    ) -> Result<(), E>
+    where
+        E: From<io::Error>,
+    {
         self.prepare()?;
         if data.len() > self.buffer.len() {
-            return Err(io::ErrorKind::InvalidInput.into());
+            return Err(io::Error::from(io::ErrorKind::InvalidInput).into());
         }
-        self.buffer[..data.len()].copy_from_slice(data);
+        let buffer = &mut self.buffer[..data.len()];
+        buffer.copy_from_slice(data);
+        transform(buffer)?;
         // SAFETY: our own copy, not caller memory, stays alive until completion.
         let success = unsafe {
             WriteFile(
@@ -178,7 +193,7 @@ impl Operation {
                 &mut *self.overlapped,
             )
         };
-        self.started(success)
+        self.started(success).map_err(E::from)
     }
     pub fn ioctl(&mut self, code: u32, input: &[u8]) -> io::Result<()> {
         self.prepare()?;
@@ -240,5 +255,68 @@ impl Operation {
 impl Drop for Operation {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+
+    #[test]
+    fn transformed_writes_keep_owned_storage_and_do_not_issue_failed_transforms() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-owned-write-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED)
+            .open(&path)
+            .unwrap();
+        let handle: OwnedHandle = file.into();
+        let mut operation = Operation::new(Arc::new(handle), crate::tunnel::MAX_FRAME).unwrap();
+        let buffer = operation.buffer.as_ptr();
+        let original = b"synthetic owned packet".to_vec();
+        let expected: Vec<_> = original.iter().map(|byte| byte ^ 0x5a).collect();
+        operation
+            .write_transformed(&original, |frame| {
+                for byte in frame {
+                    *byte ^= 0x5a;
+                }
+                Ok::<_, io::Error>(())
+            })
+            .unwrap();
+        assert_eq!(operation.finish(1000).unwrap(), original.len());
+        assert_eq!(operation.buffer.as_ptr(), buffer);
+        assert_eq!(operation.data(original.len()), expected);
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        let error = operation
+            .write_transformed(&original, |frame| {
+                frame.fill(0);
+                Err::<(), _>(io::Error::from(io::ErrorKind::InvalidData))
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!operation.pending);
+        assert_eq!(operation.finish(0).unwrap(), 0);
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        assert_eq!(
+            operation
+                .write(&vec![0; crate::tunnel::MAX_FRAME + 1])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        operation.write(&original).unwrap();
+        assert_eq!(operation.finish(1000).unwrap(), original.len());
+        assert_eq!(operation.buffer.as_ptr(), buffer);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        drop(operation);
+        std::fs::remove_file(path).unwrap();
     }
 }

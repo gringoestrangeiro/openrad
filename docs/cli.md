@@ -15,7 +15,7 @@ openrad --language vi search
 openrad --language en status
 ```
 
-The default `system` follows `LC_ALL`, `LC_MESSAGES`, and `LANG`, with GNU `LANGUAGE` preference lists when the message locale is not C/POSIX. Unsupported locales fall back to English. Desktop preferences are stored in the desktop profile; the separate CLI service profile does not inherit them. Human-readable output and argument errors are translated, while command names, flags, user-provided names and paths, `--json` replies, and diagnostic records keep their stable values.
+The default `system` follows `LC_ALL`, `LC_MESSAGES`, and `LANG`, with GNU `LANGUAGE` preference lists when the message locale is not C/POSIX. Unsupported locales fall back to English. Display language remains a frontend preference; the CLI selects its own language for each invocation. The desktop and CLI share the same VPN profile and session. Human-readable output and argument errors are translated, while command names, flags, user-provided names and paths, `--json` replies, and diagnostic records keep their stable values.
 
 ## First use
 
@@ -32,9 +32,11 @@ sudo -v
 ./target/release/openrad init --identity profiles/main/identity.json
 ```
 
-Use `--data-dir PATH` with **every command** for a separate profile. This includes the daemon process started by `start`. `init` refuses to overwrite an existing profile. A failed or interrupted registration can leave an incomplete profile; check whether an identity was issued before deciding to retry with a new profile.
+The shared registration flow retries transient connection and handshake failures before registration up to three times per server, with one- and two-second delays and a 90-second aggregate network budget. It never automatically resends a registration whose response was lost. Stages and full error chains are recorded in `cli-startup.log` in the OpenRad logs directory; `OPENRAD_LOG_DIR` overrides that directory. On Linux it is normally `~/.local/share/OpenRad/logs`. These diagnostics exclude reusable credentials and packet contents.
 
-`start` returns when the local service is ready to accept commands. Authentication can still be in progress; `status` shows `connecting`, `connected`, or `reconnecting` and the last connection error. The service continues reconnecting without a terminal. Starting twice is safe. `stop` closes the session and removes the nonpersistent TAP interface. `start --no-tap` keeps only the service and peer connections, useful when interface setup is unavailable.
+Use `--data-dir PATH` with **every command** for a separate profile. This includes the daemon process started by `start`. Both frontends use this same path. When no CLI profile has been initialized, an existing desktop profile with saved settings is reused to retain its credential-store identity. `init` refuses to overwrite an existing profile or a running session. A failed or interrupted registration can leave an incomplete profile; check whether an identity was issued before deciding to retry with a new profile.
+
+`start` returns when the local service is ready to accept commands. Authentication can still be in progress; `status` shows `connecting`, `connected`, or `reconnecting` and the last connection error. The service continues reconnecting without a terminal, using the profile’s saved retry settings. Starting twice is safe, including while the desktop is open. Opening the desktop after `start` attaches to this same session; starting the CLI after the desktop connects reuses its session. Closing the desktop window leaves the service running. **Disconnect** in the desktop or `stop` affects both frontends. A service whose retry budget is exhausted can be restarted with `start`. `stop` closes the session and removes the nonpersistent TAP interface. `start --no-tap` keeps only the service and peer connections, useful when interface setup is unavailable.
 
 The service runs as your user. Only its short-lived TAP helper invokes `sudo -n`. Run `sudo -v` before `start`; if interface setup fails, refresh sudo authorization and run `openrad retry-interface`. A sudo configuration tied to one terminal may require an administrator-managed helper authorization for detached use. Do not run the whole service as root.
 
@@ -43,11 +45,16 @@ The service runs as your user. Only its short-lived TAP helper invokes `sudo -n`
 ```sh
 ./target/release/openrad networks
 ./target/release/openrad peers
+./target/release/openrad ping PEER_RID
+./target/release/openrad rename my-new-device-name
+./target/release/openrad force-relay true
 ./target/release/openrad search minecraft
 ./target/release/openrad join 'Example Public Network'
 ```
 
 `networks` shows the exact name, network ID, and your role. A role marked **pending approval** cannot forward traffic until an administrator approves it. `peers` shows live states such as online, connecting, connected, offline, and failed, including the chosen transport when connected. `search` supports `--cursor NUMBER` for later pages. Commands return after the server acknowledges their operation; a refusal exits nonzero. If an operation times out, check `status` and `networks` after reconnection before retrying, since the remote outcome may be unknown.
+
+`ping` tests a connected peer’s authenticated tunnel path with a 3000 ms deadline. `rename` persists the node name while preserving identity, address, credentials, and memberships; an active session reconnects to advertise it. `force-relay true` persists relay-only transport policy and reconnects active channels; `force-relay false` restores normal direct transport selection. These changes are visible in the desktop.
 
 The service keeps watching for presence and membership changes. One person can create a private network, then another can join it later by its exact name and password. Both devices must be online at the same time **to exchange traffic**, but neither needs to race a short CLI session just to manage membership. Server-side administrator approval, if required by that network, still applies.
 

@@ -7,7 +7,7 @@ use crate::{
     scheduling::{HandshakeBudget, ADVERTISEMENT_QUEUE},
     session::Session,
     tap::Tap,
-    tunnel::{self, Packet},
+    tunnel::{self, OwnedPacket},
 };
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -74,7 +74,7 @@ enum Event {
     Connected(u64, [u8; 6], TransportReport, Option<String>),
     KeepaliveVerified(u64),
     ReceivedAuthenticatedFrames(u64, usize),
-    Frame(u64, Vec<u8>),
+    Frame(u64, tunnel::OwnedFrame),
     Sent(u64),
     Dropped(u64),
     Closed(u64, Option<String>),
@@ -154,27 +154,27 @@ fn worker(
                 continue;
             }
             let plain = channel.receive()?;
-            match tunnel::decode(&plain)? {
-                Packet::Keepalive {
+            match tunnel::decode_owned(plain)? {
+                OwnedPacket::Keepalive {
                     sequence,
                     reply: false,
                 } => {
                     channel.send(&tunnel::keepalive(sequence, true))?;
                 }
-                Packet::Keepalive {
+                OwnedPacket::Keepalive {
                     sequence,
                     reply: true,
                 } if sequence == seq && seq > last_verified => {
                     last_verified = seq;
                     events.send(Event::KeepaliveVerified(rid))?;
                 }
-                Packet::Frames(frames) => {
+                OwnedPacket::Frames(frames) => {
                     events.send(Event::ReceivedAuthenticatedFrames(rid, frames.len()))?;
                     if !data_enabled {
                         continue;
                     }
                     for frame in frames {
-                        if events.try_send(Event::Frame(rid, frame.to_vec())).is_err() {
+                        if events.try_send(Event::Frame(rid, frame)).is_err() {
                             let _ = events.try_send(Event::Dropped(rid));
                         }
                     }

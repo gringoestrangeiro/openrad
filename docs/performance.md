@@ -244,3 +244,58 @@ peer channels with a shared test key and checks every payload byte, delivery
 order, CBC chaining, and buffer reuse. A separate UI test queues 20,000 snapshots
 around operation/phase events and verifies that only the two latest snapshots
 and both barriers remain.
+
+## Additional allocation and repeated-work reductions
+
+- Reliable UDP tracks the oldest outstanding data sequence and next retry
+  deadline. Send-window checks no longer scan all pending commands; pumps skip
+  retransmission scans until a deadline is due and use one clock read per pass.
+  In-order messages go straight to delivery, avoiding reorder-map insertion and
+  removal. These paths preserve sequence wraparound and acknowledgement rules.
+- Fragment reassembly copies each accepted fragment into one bounded message
+  buffer and tracks receipt with a bitmap. Completion validates indexed coverage
+  before moving that same buffer into delivery. Duplicate fragments do not copy
+  their payload again. Completed messages refused by a full reorder queue retain
+  their buffer and remain unacknowledged until admission succeeds.
+- Incoming tunnel records are validated completely before delivery. Single-frame
+  records move their decrypted buffer into the engine queue; multi-frame records
+  share one immutable allocation. The queue remains bounded by frame count and
+  the record-size limit remains unchanged. A queued frame can retain its entire
+  containing record until it is consumed.
+- Outbound byte, frame, and drop counters are accumulated locally and published
+  once per worker batch. Successful sends are still counted if a later send
+  fails. Membership eligibility borrows peer records and network IDs, existing
+  peer metadata reuses allocations, and daemon status serializes a shared
+  immutable snapshot after releasing its state lock. Desktop JSON parsing takes
+  ownership of subtrees instead of cloning them; the local IPC schema is unchanged.
+- Desktop lists cache normalized names, formatted addresses, sorted peer IDs,
+  and network counts. Row layout measurements allow offscreen rows to reserve
+  their space without rebuilding controls. Relevant input changes invalidate
+  the affected caches, including filters, sort order, favorites, peer metadata,
+  status, language, and layout. Traffic-only updates reuse presentation work.
+- Windows TAP writes copy into the persistent overlapped-operation buffer and
+  translate Ethernet/ARP MAC fields there before submission. This removes an
+  intermediate frame allocation and copy while retaining the existing wire
+  identity, bounds checks, cancellation, and completion lifetime.
+
+These changes do not alter MTU, datagram formats, encryption, authentication,
+the 400 ms retransmission interval, the 20-attempt retry limit, or peer admission
+policy. The earlier measurement tables above describe earlier isolated changes;
+they are not measurements of this additional set of optimizations.
+
+Release 1.0.0 validation on Linux x86-64 with Rust 1.98.1 includes the full
+default workspace suite (252 passed, six intentionally ignored), formatting,
+Clippy with warnings denied, and a release build. Four optional desktop CPU
+rendering/screenshot tests also passed, producing eleven synthetic images.
+The Debian 12/Rust 1.95.0 distribution build retains a glibc 2.35 minimum.
+
+Windows GNU test targets and release binaries were cross-built. Under Wine
+11.11, 241 Rust tests passed and one existing named-pipe first-instance exclusivity
+check failed; the detached CLI service suite stalled and remains unverified in
+Wine. Passed checks cover reliable UDP, fixed protocol/cryptographic vectors,
+owned tunnel buffers, encrypted forwarding/RTT, peer-list rendering, and
+transformed overlapped writes. The Windows write test uses a temporary file and
+verifies that a failed transform issues no write; it does not exercise an
+installed TAP driver. See the [1.0.0 release validation](releases/1.0.0.md) for
+complete scope. Live interoperability, native Windows service/driver behavior,
+end-to-end throughput, and process RSS still require measurements on real hosts.

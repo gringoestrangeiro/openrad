@@ -7,13 +7,13 @@ use crate::{
     tunnel,
 };
 use anyhow::{bail, ensure, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     net::Ipv4Addr,
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransportPath {
     DirectTcp,
     DirectUdp,
@@ -190,6 +190,7 @@ impl PeerChannel {
             reports,
             duration,
             stop,
+            false,
             |_| {},
         )
     }
@@ -202,6 +203,7 @@ impl PeerChannel {
         reports: &ReportDirectory,
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
+        force_relay: bool,
         observe: impl FnOnce(&TransportReport),
     ) -> Result<Self> {
         let mut report = TransportReport::default();
@@ -213,6 +215,7 @@ impl PeerChannel {
             reports,
             duration,
             stop,
+            force_relay,
             &mut report,
         );
         observe(&report);
@@ -228,6 +231,7 @@ impl PeerChannel {
         reports: &ReportDirectory,
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
+        force_relay: bool,
         report: &mut TransportReport,
     ) -> Result<Self> {
         let started = Instant::now();
@@ -258,6 +262,7 @@ impl PeerChannel {
             duration.saturating_sub(started.elapsed()),
             stop,
             coord,
+            force_relay,
             report,
         )
     }
@@ -271,6 +276,7 @@ impl PeerChannel {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
         mut coord: Session,
+        force_relay: bool,
         report: &mut TransportReport,
     ) -> Result<Self> {
         let until = Instant::now() + duration;
@@ -284,8 +290,8 @@ impl PeerChannel {
         let mut udp_nonce = None;
         let mut mapped_nonce = None;
         let mut tcp_started = false;
-        let mut tcp_received = false;
-        let mut udp_received = false;
+        let mut tcp_received = force_relay;
+        let mut udp_received = force_relay;
         let mut mapped_received = true;
         let mut relay = None;
         let mut relay_started = false;
@@ -344,7 +350,7 @@ impl PeerChannel {
                         password: password.clone(),
                         reports,
                     };
-                    if !tcp_started && !report.tcp_candidates.is_empty() {
+                    if !force_relay && !tcp_started && !report.tcp_candidates.is_empty() {
                         if let Some(server_id) = server_id {
                             tcp_started = true;
                             last_direct_start = Some(Instant::now());
@@ -533,8 +539,9 @@ impl PeerChannel {
                             "invalid connection credentials"
                         );
                         pending = Some((cid, password));
-                        coord.send(&request_tcp_candidates(cid))?;
-                        match crate::udp::bind_candidates(coord.stream.socket.local_addr()?.ip()) {
+                        if !force_relay {
+                            coord.send(&request_tcp_candidates(cid))?;
+                            match crate::udp::bind_candidates(coord.stream.socket.local_addr()?.ip()) {
                             Ok((socket, endpoints)) => {
                                 coord.send(&advertise_udp(cid, &endpoints, 0)?)?;
                                 udp_socket = Some(socket);
@@ -543,10 +550,11 @@ impl PeerChannel {
                                 serde_json::json!({"phase":"local_bind","error":error.to_string()}),
                             ),
                         }
+                            mapping = Some(crate::udp::MappingDiscovery::start(ues.clone())?);
+                        }
                         coord.send(&request_relay(cid))?;
-                        mapping = Some(crate::udp::MappingDiscovery::start(ues.clone())?);
                     }
-                    operation @ (6 | 29) => {
+                    operation @ (6 | 29) if !force_relay => {
                         let cid = pending
                             .as_ref()
                             .ok_or_else(|| anyhow::anyhow!("candidates before NewConnection"))?
@@ -585,7 +593,7 @@ impl PeerChannel {
                                 .map(|n| n as u16);
                         }
                     }
-                    7 => {
+                    7 if !force_relay => {
                         let cid = pending
                             .as_ref()
                             .ok_or_else(|| {
@@ -776,6 +784,36 @@ impl PeerChannel {
         self.stream.send(buffer)?;
         Ok(true)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_pair() -> (PeerChannel, PeerChannel) {
+    use std::net::{TcpListener, TcpStream};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let local = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let remote = listener.accept().unwrap().0;
+    let make = |socket, rid| PeerChannel {
+        peer: Peer {
+            rid,
+            name: "synthetic".into(),
+            vip: Ipv4Addr::new(26, 0, 0, rid as u8),
+            server: Some("127.0.0.1".into()),
+            state: 1,
+            network_ids: Default::default(),
+        },
+        mac: tunnel::mac(Ipv4Addr::new(26, 0, 0, rid as u8)),
+        version: 8,
+        transport: TransportReport {
+            path: Some(TransportPath::DirectTcp),
+            authenticated: true,
+            service_connected: true,
+            ..Default::default()
+        },
+        stream: PeerStream::Tcp(Framed::from_socket(socket, Duration::from_secs(5), None).unwrap()),
+        channel: Channel::new(&[17; 32]).unwrap(),
+        _coordinator: None,
+    };
+    (make(local, 2), make(remote, 1))
 }
 
 #[cfg(test)]
@@ -1076,6 +1114,76 @@ mod connection_tests {
     }
 
     #[test]
+    fn force_relay_ignores_direct_candidates_and_only_requests_a_relay() {
+        let (coord, mut remote) = coordinator();
+        let direct = TcpListener::bind("127.0.0.1:0").unwrap();
+        direct.set_nonblocking(true).unwrap();
+        candidates(&mut remote, &[direct.local_addr().unwrap()]);
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        udp.set_nonblocking(true).unwrap();
+        remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 29),
+                    u64v(0x020001c1, CID),
+                    tlv(
+                        0x127c,
+                        &[
+                            u32v(0x0100020a, 123),
+                            tlv(
+                                0x127d,
+                                &[
+                                    textv(0x030001c2, "127.0.0.1").unwrap(),
+                                    u32v(0x010001c3, udp.local_addr().unwrap().port() as u32),
+                                ]
+                                .concat(),
+                            ),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        let relay = TcpListener::bind("127.0.0.1:0").unwrap();
+        relay_offer(&mut remote, relay.local_addr().unwrap().port());
+        let server = responder(relay, TransportPath::Relay);
+        let started = Instant::now();
+        let mut report = TransportReport::default();
+        let channel = PeerChannel::negotiate(
+            &identity(),
+            peer(11).vip,
+            peer(42),
+            &ReportDirectory::disabled(),
+            Duration::from_secs(5),
+            None,
+            coord,
+            true,
+            &mut report,
+        )
+        .unwrap();
+        assert!(started.elapsed() < DIRECT_HEAD_START);
+        assert_eq!(channel.transport.path, Some(TransportPath::Relay));
+        assert!(report.tcp_candidates.is_empty() && report.udp_candidates.is_empty());
+        assert!(report.attempts.iter().all(|attempt| attempt["phase"]
+            .as_str()
+            .is_none_or(|phase| !phase.contains("direct"))));
+        let request = remote.receive().unwrap();
+        assert_eq!(
+            request,
+            request_relay(CID),
+            "no direct candidate requests or UDP advertisements"
+        );
+        assert!(direct.accept().is_err(), "no direct TCP attempts");
+        assert!(
+            udp.recv_from(&mut [0; 2048]).is_err(),
+            "no direct UDP attempts"
+        );
+        exchange(channel);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn direct_tcp_starts_before_other_candidates_and_bypasses_stalled_first_address() {
         let (coord, mut remote) = coordinator();
         let (stalled, entered, loser) = stalled_listener();
@@ -1092,6 +1200,7 @@ mod connection_tests {
             Duration::from_secs(5),
             None,
             coord,
+            false,
             &mut report,
         )
         .unwrap();
@@ -1124,6 +1233,7 @@ mod connection_tests {
             Duration::from_secs(10),
             None,
             coord,
+            false,
             &mut report,
         )
         .unwrap();
@@ -1202,6 +1312,7 @@ mod connection_tests {
             Duration::from_secs(10),
             None,
             coord,
+            false,
             &mut TransportReport::default(),
         )
         .unwrap();
@@ -1233,6 +1344,7 @@ mod connection_tests {
                 Duration::from_secs(5),
                 Some(signal),
                 coord,
+                false,
                 &mut TransportReport::default(),
             )
         });

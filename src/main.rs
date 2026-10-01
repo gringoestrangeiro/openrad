@@ -1,6 +1,6 @@
 //! Commands for the persistent per-user VPN service.
 #[cfg(any(unix, windows))]
-mod daemon;
+use openrad::daemon;
 
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
@@ -118,6 +118,15 @@ enum Command {
     RetryPeers,
     /// Retry interface setup after fixing driver or privilege requirements.
     RetryInterface,
+    /// Test the RTT of a connected peer (RID from `openrad peers`).
+    Ping { peer: u64 },
+    /// Change the node name without replacing the identity.
+    Rename { node_name: String },
+    /// Use relays only, without direct UDP or TCP attempts.
+    ForceRelay {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     #[command(name = "__daemon", hide = true)]
     __Daemon {
         #[arg(long)]
@@ -155,6 +164,9 @@ impl Command {
             Self::RevokeAdmin { .. } => "revoke_admin",
             Self::RetryPeers => "retry_peers",
             Self::RetryInterface => "retry_interface",
+            Self::Ping { .. } => "ping",
+            Self::Rename { .. } => "rename",
+            Self::ForceRelay { .. } => "force_relay",
             Self::__Daemon { .. } => "daemon",
             Self::TapHelper { .. } => "tap_helper",
         }
@@ -185,8 +197,14 @@ fn initialize(
     host: String,
     modulus_path: Option<PathBuf>,
 ) -> Result<daemon::Reply> {
+    let _profile_lock = dir.profile_lock()?;
     ensure!(
-        !dir.path.join("profile").exists(),
+        !dir.path.join("profile").exists()
+            && daemon::request(dir, &daemon::Request::Status).is_err()
+            && !dir
+                .entry()
+                .and_then(|entry| entry.get_secret().map_err(anyhow::Error::from))
+                .is_ok(),
         "Profile already exists at {}. Use `openrad start` or choose another --data-dir",
         dir.path.display()
     );
@@ -245,6 +263,10 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         Command::Start { no_tap } => {
             let started = daemon::spawn(&dir, no_tap)?;
             let status = daemon::request(&dir, &Request::Status)?;
+            if status.data["phase"] == "error" {
+                let reply = daemon::request(&dir, &Request::Reconnect)?;
+                ensure!(reply.ok, "{}", reply.message);
+            }
             let mut data = status.data;
             data["started"] = Value::Bool(started);
             data["start_command"] = Value::Bool(true);
@@ -345,6 +367,40 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         )?,
         Command::RetryPeers => daemon::request(&dir, &Request::RetryPeers)?,
         Command::RetryInterface => daemon::request(&dir, &Request::RetryInterface)?,
+        Command::Ping { peer } => daemon::request(&dir, &Request::Ping { peer })?,
+        Command::Rename { node_name } => {
+            openrad::protocol::validate_node_name(&node_name)?;
+            if dir.endpoint_exists() {
+                daemon::request(&dir, &Request::Rename { node_name })?
+            } else {
+                let mut identity = dir.load_identity()?;
+                identity.node_name = node_name;
+                dir.save_identity(&identity)?;
+                daemon::Reply {
+                    ok: true,
+                    message: "Device name saved".into(),
+                    data: Value::Null,
+                }
+            }
+        }
+        Command::ForceRelay { enabled } => {
+            let mut preferences = if let Ok(reply) = daemon::request(&dir, &Request::Status) {
+                serde_json::from_value(reply.data["preferences"].clone())?
+            } else {
+                dir.preferences()?
+            };
+            preferences.force_relay = enabled;
+            if dir.endpoint_exists() {
+                daemon::request(&dir, &Request::Configure { preferences })?
+            } else {
+                dir.save_preferences(&preferences)?;
+                daemon::Reply {
+                    ok: true,
+                    message: "Settings saved".into(),
+                    data: Value::Null,
+                }
+            }
+        }
         Command::__Daemon { no_tap } => {
             daemon::run(dir, no_tap)?;
             daemon::Reply {
@@ -371,6 +427,9 @@ fn print_reply(reply: &daemon::Reply, machine: bool, language: Language) -> Resu
 
 #[cfg(any(unix, windows))]
 fn human_reply(reply: &daemon::Reply, language: Language) -> String {
+    if let Some(rtt_ms) = reply.data["rtt_ms"].as_f64() {
+        return language.format("RTT: {ms} ms", &[("ms", &format!("{rtt_ms:.1}"))]);
+    }
     let mut lines = Vec::new();
     if let Some(phase) = reply.data.get("phase").and_then(Value::as_str) {
         if reply.data["start_command"] == true {
@@ -555,6 +614,8 @@ fn main() {
     } else {
         "cli"
     });
+    #[cfg(unix)]
+    openrad::resource_limits::configure_open_file_limit();
     let language = i18n::language_for_args(&args, LanguagePreference::System);
     if let Err(error) = execute() {
         early_log::fatal_error(&error);

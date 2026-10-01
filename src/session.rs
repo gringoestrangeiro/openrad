@@ -4,7 +4,7 @@ use crate::{
     output::ReportDirectory,
     protocol::*,
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::{
     io::{self, IoSlice, Read, Write},
     net::{TcpStream, ToSocketAddrs},
@@ -95,12 +95,28 @@ impl Framed {
             !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
             "cancelled"
         );
-        let addr = (host, port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("no endpoint address"))?;
-        let socket = connect_socket(&addr, timeout.min(duration), &stop)?;
-        Self::from_socket(socket, duration, stop)
+        let started = Instant::now();
+        let until = started + timeout.min(duration);
+        let addresses = resolve_endpoints(host, port, until, &stop)?;
+        let mut last_error = anyhow::anyhow!("no endpoint address");
+        for address in addresses {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || is_cancelled(&stop) {
+                break;
+            }
+            match connect_socket(&address, remaining, &stop) {
+                Ok(socket) => {
+                    return Self::from_socket(
+                        socket,
+                        duration.saturating_sub(started.elapsed()),
+                        stop,
+                    );
+                }
+                Err(error) => last_error = error.context(format!("TCP endpoint {address}")),
+            }
+        }
+        ensure!(!is_cancelled(&stop), "cancelled");
+        Err(last_error)
     }
     pub fn from_socket(
         socket: TcpStream,
@@ -256,6 +272,42 @@ impl Framed {
                 return Ok(false);
             }
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+fn is_cancelled(stop: &Option<Arc<AtomicBool>>) -> bool {
+    stop.as_ref()
+        .is_some_and(|stop| stop.load(Ordering::Relaxed))
+}
+
+fn resolve_endpoints(
+    host: &str,
+    port: u16,
+    until: Instant,
+    stop: &Option<Arc<AtomicBool>>,
+) -> Result<Vec<std::net::SocketAddr>> {
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![std::net::SocketAddr::new(address, port)]);
+    }
+    // System DNS can block much longer than a handshake. Bound the caller's
+    // wait and keep Disconnect/Shutdown responsive even during resolution.
+    let host = host.to_owned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("openrad-dns".into())
+        .spawn(move || {
+            let result = (host.as_str(), port).to_socket_addrs().map(|v| v.collect());
+            let _ = tx.send(result);
+        })?;
+    loop {
+        ensure!(!is_cancelled(stop), "cancelled");
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "DNS resolution timeout");
+        match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
+            Ok(result) => return result.context("resolve TCP endpoint"),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => return Err(error.into()),
         }
     }
 }
@@ -504,6 +556,129 @@ pub struct Session {
     pub latency: u32,
     pub ues: Vec<std::net::Ipv4Addr>,
 }
+
+/// Provisioning progress contains endpoints and errors, never reusable secrets.
+#[derive(Debug)]
+pub enum ProvisionProgress {
+    Authenticating {
+        endpoint: String,
+        attempt: u32,
+    },
+    Retry {
+        attempt: u32,
+        delay_secs: u64,
+        error: String,
+    },
+    Registering,
+    Redirect {
+        endpoint: String,
+    },
+    ReceivingIdentity,
+    Complete,
+}
+
+const PROVISION_TIMEOUT: Duration = Duration::from_secs(90);
+const PROVISION_ATTEMPTS: u32 = 3;
+
+enum Registration {
+    Redirect(String),
+    Identity(Identity),
+}
+
+fn register_identity(
+    session: &mut Session,
+    name: &str,
+    commit: &mut dyn FnMut() -> Result<()>,
+    progress: &mut dyn FnMut(ProvisionProgress),
+) -> Result<Registration> {
+    session.stream.check_cancelled()?;
+    progress(ProvisionProgress::Registering);
+    commit()?;
+    session.send(&login(name, 0, 3, None)?)
+        .context("Sending identity registration; not retried because the server may have registered this device")?;
+    let data = session.receive()
+        .context("Waiting for identity registration response; not retried because the server may have registered this device")?;
+    if op(&data)? == 12 {
+        let r = records(&data)?;
+        let f = records(field(&r, 0x1238)?)?;
+        let f = records(field(&f, 0x1234)?)?;
+        let host = text(field(&f, 0x030001c9)?)?;
+        host.parse::<std::net::Ipv4Addr>()?;
+        progress(ProvisionProgress::Redirect {
+            endpoint: host.clone(),
+        });
+        return Ok(Registration::Redirect(host));
+    }
+    ensure!(op(&data)? == 21, "expected provisioning LoginComplete");
+    progress(ProvisionProgress::ReceivingIdentity);
+    Ok(Registration::Identity(Identity::registered(
+        &session
+            .receive()
+            .context("Receiving issued identity; registration is not retried automatically")?,
+    )?))
+}
+
+fn provision_authentication<T>(
+    endpoint: &str,
+    until: Instant,
+    stop: &Option<Arc<AtomicBool>>,
+    progress: &mut dyn FnMut(ProvisionProgress),
+    mut authenticate: impl FnMut(Duration) -> Result<T>,
+) -> Result<T> {
+    for attempt in 1..=PROVISION_ATTEMPTS {
+        ensure!(!is_cancelled(stop), "identity provisioning cancelled");
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(
+            !remaining.is_zero(),
+            "identity provisioning timed out (90 seconds)"
+        );
+        progress(ProvisionProgress::Authenticating {
+            endpoint: endpoint.into(),
+            attempt,
+        });
+        match authenticate(remaining.min(Duration::from_secs(20))) {
+            Ok(session) => return Ok(session),
+            Err(error) => {
+                ensure!(!is_cancelled(stop), "identity provisioning cancelled");
+                // Retry transport failures before the registering login only.
+                // Authentication/protocol failures need a visible error.
+                let transient = error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<io::Error>().is_some())
+                    || matches!(
+                        error.root_cause().to_string().as_str(),
+                        "DNS resolution timeout"
+                            | "TCP connect timeout"
+                            | "frame receive timeout"
+                            | "session deadline/record budget"
+                            | "remote endpoint closed the connection"
+                    );
+                if !transient || attempt == PROVISION_ATTEMPTS {
+                    return Err(error).with_context(|| format!(
+                        "Identity provisioning authentication failed at {endpoint} (attempt {attempt}/{PROVISION_ATTEMPTS})"
+                    ));
+                }
+                let delay = Duration::from_secs(u64::from(attempt));
+                progress(ProvisionProgress::Retry {
+                    attempt,
+                    delay_secs: delay.as_secs(),
+                    error: format!("{error:#}"),
+                });
+                let retry_at = (Instant::now() + delay).min(until);
+                while Instant::now() < retry_at {
+                    ensure!(!is_cancelled(stop), "identity provisioning cancelled");
+                    std::thread::sleep(
+                        retry_at
+                            .saturating_duration_since(Instant::now())
+                            .min(Duration::from_millis(50)),
+                    );
+                }
+            }
+        }
+    }
+    unreachable!()
+}
+
 impl Session {
     pub fn provision(
         modulus: &[u8],
@@ -522,7 +697,47 @@ impl Session {
         reports: &ReportDirectory,
         commit: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Identity> {
+        Self::provision_controlled(modulus, name, host, reports, commit, None, &mut |_| {})
+    }
+    /// Bounded, cancellable registration. A registering login is never retried
+    /// after an ambiguous response: the server may already have issued a device.
+    pub fn provision_controlled(
+        modulus: &[u8],
+        name: &str,
+        host: &str,
+        reports: &ReportDirectory,
+        commit: &mut dyn FnMut() -> Result<()>,
+        stop: Option<Arc<AtomicBool>>,
+        progress: &mut dyn FnMut(ProvisionProgress),
+    ) -> Result<Identity> {
+        let started = Instant::now();
+        let result =
+            Self::provision_inner(modulus, name, host, reports, commit, stop, &mut |update| {
+                crate::early_log::event(format_args!(
+                    "Identity provisioning; elapsed_ms={}; stage={update:?}",
+                    started.elapsed().as_millis()
+                ));
+                progress(update);
+            });
+        if let Err(error) = &result {
+            crate::early_log::event(format_args!(
+                "Identity provisioning failed; elapsed_ms={}; error={error:#}",
+                started.elapsed().as_millis()
+            ));
+        }
+        result
+    }
+    fn provision_inner(
+        modulus: &[u8],
+        name: &str,
+        host: &str,
+        reports: &ReportDirectory,
+        commit: &mut dyn FnMut() -> Result<()>,
+        stop: Option<Arc<AtomicBool>>,
+        progress: &mut dyn FnMut(ProvisionProgress),
+    ) -> Result<Identity> {
         let mut bootstrap = Identity::bootstrap(name, host)?;
+        let until = Instant::now() + PROVISION_TIMEOUT;
         let mut visited = std::collections::BTreeSet::new();
         for attempt in 0..3 {
             ensure!(
@@ -530,30 +745,34 @@ impl Session {
                 "provisioning redirect loop"
             );
             let c = reports.child(&format!("attempt-{attempt}"))?;
-            let mut session = Self::authenticate(
+            let mut session = provision_authentication(
                 &bootstrap.server_address,
-                &bootstrap,
-                modulus,
-                3,
-                &c,
-                Duration::from_secs(40),
+                until,
+                &stop,
+                progress,
+                |duration| {
+                    Self::authenticate_with_stop(
+                        &bootstrap.server_address,
+                        &bootstrap,
+                        modulus,
+                        3,
+                        &c,
+                        duration,
+                        stop.clone(),
+                    )
+                },
             )?;
-            commit()?;
-            session.send(&login(name, 0, 3, None)?)?;
-            let data = session.receive()?;
-            if op(&data)? == 12 {
-                let r = records(&data)?;
-                let f = records(field(&r, 0x1238)?)?;
-                let f = records(field(&f, 0x1234)?)?;
-                let host = text(field(&f, 0x030001c9)?)?;
-                host.parse::<std::net::Ipv4Addr>()?;
-                bootstrap.server_address = host;
-                continue;
+            // Authentication has its own per-attempt budget. Registration uses
+            // the remaining aggregate budget without restarting that clock.
+            session.stream.deadline = Some(until);
+            match register_identity(&mut session, name, commit, progress)? {
+                Registration::Redirect(host) => bootstrap.server_address = host,
+                Registration::Identity(identity) => {
+                    identity.save(reports)?;
+                    progress(ProvisionProgress::Complete);
+                    return Ok(identity);
+                }
             }
-            ensure!(op(&data)? == 21, "expected provisioning LoginComplete");
-            let identity = Identity::registered(&session.receive()?)?;
-            identity.save(reports)?;
-            return Ok(identity);
         }
         bail!("provisioning redirect budget exhausted")
     }
@@ -736,6 +955,144 @@ impl Session {
             .find(|n| n.name == name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("joined network missing from membership"))
+    }
+}
+
+#[cfg(test)]
+mod provision_tests {
+    use super::*;
+
+    #[test]
+    fn transient_authentication_retries_then_succeeds() {
+        let mut calls = 0;
+        let mut retries = Vec::new();
+        let value = provision_authentication(
+            "192.0.2.1",
+            Instant::now() + Duration::from_secs(5),
+            &None,
+            &mut |progress| {
+                if let ProvisionProgress::Retry { attempt, .. } = progress {
+                    retries.push(attempt);
+                }
+            },
+            |_| {
+                calls += 1;
+                if calls == 1 {
+                    return Err(io::Error::from(io::ErrorKind::ConnectionRefused).into());
+                }
+                Ok(42)
+            },
+        )
+        .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(calls, 2);
+        assert_eq!(retries, [1]);
+    }
+
+    #[test]
+    fn repeated_transport_failure_exhausts_three_attempts() {
+        let mut calls = 0;
+        let error = provision_authentication::<()>(
+            "192.0.2.1",
+            Instant::now() + Duration::from_secs(5),
+            &None,
+            &mut |_| {},
+            |_| {
+                calls += 1;
+                Err(io::Error::from(io::ErrorKind::ConnectionReset).into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(format!("{error:#}").contains("attempt 3/3"));
+    }
+
+    #[test]
+    fn rejected_authentication_is_not_retried() {
+        let mut calls = 0;
+        let error = provision_authentication::<()>(
+            "192.0.2.1",
+            Instant::now() + Duration::from_secs(5),
+            &None,
+            &mut |_| {},
+            |_| {
+                calls += 1;
+                bail!("RSession echo mismatch")
+            },
+        )
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(format!("{error:#}").contains("RSession echo mismatch"));
+    }
+
+    #[test]
+    fn retry_wait_is_cancellable_and_expired_budget_never_connects() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut calls = 0;
+        let started = Instant::now();
+        let error = provision_authentication::<()>(
+            "192.0.2.1",
+            started + Duration::from_secs(5),
+            &Some(stop.clone()),
+            &mut |progress| {
+                if matches!(progress, ProvisionProgress::Retry { .. }) {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            },
+            |_| {
+                calls += 1;
+                Err(io::Error::from(io::ErrorKind::ConnectionRefused).into())
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+        assert_eq!(calls, 1);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let error =
+            provision_authentication::<()>("192.0.2.1", Instant::now(), &None, &mut |_| {}, |_| {
+                panic!("expired budget must not connect")
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn lost_registration_response_is_reported_without_resending_login() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (remote, _) = listener.accept().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut stream = Framed::from_socket(remote, Duration::from_secs(2), None).unwrap();
+            let plain = Channel::new(&[7; 32])
+                .unwrap()
+                .decrypt(&stream.receive(4096).unwrap())
+                .unwrap();
+            assert_eq!(plain, login("synthetic-device", 0, 3, None).unwrap());
+            // The server receives registration, then closes without a response.
+        });
+        let mut session = Session {
+            stream: Framed::from_socket(socket, Duration::from_secs(2), None).unwrap(),
+            channel: Channel::new(&[7; 32]).unwrap(),
+            latency: 0,
+            ues: vec![],
+        };
+        let mut commits = 0;
+        let mut stages = Vec::new();
+        let result = register_identity(
+            &mut session,
+            "synthetic-device",
+            &mut || {
+                commits += 1;
+                Ok(())
+            },
+            &mut |progress| stages.push(progress),
+        );
+        let error = result.err().unwrap();
+        assert!(format!("{error:#}").contains("not retried because the server may have registered"));
+        assert_eq!(commits, 1);
+        assert_eq!(stages.len(), 1);
+        assert!(matches!(stages[0], ProvisionProgress::Registering));
+        server.join().unwrap();
     }
 }
 

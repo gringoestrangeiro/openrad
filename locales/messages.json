@@ -3318,5 +3318,505 @@
     "Não foi possível parar RvControlSvc.exe/desativar o adaptador oficial do Radmin VPN com permissões SYSTEM: {0}",
     "Не удалось остановить RvControlSvc.exe/отключить официальный адаптер Radmin VPN с правами SYSTEM: {0}",
     "Không thể dừng RvControlSvc.exe/tắt bộ điều hợp Radmin VPN chính thức với quyền SYSTEM: {0}"
+  ],
+  "Peer not responding — they may be using a strict firewall.": [
+    "O par não está respondendo — ele pode estar usando um firewall restritivo.",
+    "Узел не отвечает — возможно, он использует строгий межсетевой экран.",
+    "Máy ngang hàng không phản hồi — có thể họ đang dùng tường lửa nghiêm ngặt."
+  ],
+  "A ping is already running for this peer.": [
+    "Um teste de ping já está em andamento para este par.",
+    "Проверка связи с этим узлом уже выполняется.",
+    "Đang kiểm tra ping với máy ngang hàng này."
+  ],
+  "Peer channel is unavailable.": [
+    "O canal do par está indisponível.",
+    "Канал связи с узлом недоступен.",
+    "Kênh kết nối với máy ngang hàng không khả dụng."
+  ],
+  "Connect to this peer before testing RTT.": [
+    "Conecte-se a este par antes de testar o RTT.",
+    "Подключитесь к этому узлу перед проверкой RTT.",
+    "Kết nối với máy ngang hàng này trước khi kiểm tra RTT."
+  ],
+  "Peer RTT measured": [
+    "RTT do par medido",
+    "RTT узла измерено",
+    "Đã đo RTT của máy ngang hàng"
+  ],
+  "Test RTT": [
+    "Testar RTT",
+    "Проверить RTT",
+    "Kiểm tra RTT"
+  ],
+  "RTT: {ms} ms": [
+    "RTT: {ms} ms",
+    "RTT: {ms} мс",
+    "RTT: {ms} ms"
+  ],
+  "Force Relay": [
+    "Forçar retransmissão",
+    "Только ретранслятор",
+    "Buộc dùng máy chuyển tiếp"
+  ],
+  "Use relays only. Saving reconnects the session without direct UDP or TCP attempts.": [
+    "Use apenas retransmissores. Ao salvar, a sessão será reconectada sem tentativas diretas de UDP ou TCP.",
+    "Использовать только ретрансляторы. После сохранения сеанс переподключится без попыток прямого соединения по UDP или TCP.",
+    "Chỉ dùng máy chuyển tiếp. Khi lưu, phiên sẽ kết nối lại mà không thử kết nối UDP hoặc TCP trực tiếp."
+  ],
+  "Save preferences to change the name peers see. Your identity and memberships are preserved.": [
+    "Salve as preferências para alterar o nome exibido aos pares. Sua identidade e participação nas redes serão preservadas.",
+    "Сохраните настройки, чтобы изменить имя, видимое другим узлам. Ваша идентификация и членство в сетях сохранятся.",
+    "Lưu tùy chọn để đổi tên hiển thị với máy ngang hàng. Danh tính và tư cách thành viên mạng của bạn được giữ nguyên."
+  ],
+  "Results update as you type.": [
+    "Os resultados são atualizados enquanto você digita.",
+    "Результаты обновляются по мере ввода.",
+    "Kết quả cập nhật khi bạn nhập."
+  ],
+  "OpenRad {version} is available": [
+    "OpenRad {version} está disponível",
+    "Доступна версия OpenRad {version}",
+    "Đã có OpenRad {version}"
+  ],
+  "View release": [
+    "Ver versão",
+    "Открыть выпуск",
+    "Xem bản phát hành"
+  ],
+  "Dismiss update notice": [
+    "Fechar aviso de atualização",
+    "Закрыть уведомление об обновлении",
+    "Đóng thông báo cập nhật"
+  ],
+  "Device name saved. Reconnecting with the same identity…": [
+    "Nome do dispositivo salvo. Reconectando com a mesma identidade…",
+    "Имя устройства сохранено. Переподключение с прежней идентификацией…",
+    "Đã lưu tên thiết bị. Đang kết nối lại với cùng danh tính…"
+  ],
+  "Device name saved": [
+    "Nome do dispositivo salvo",
+    "Имя устройства сохранено",
+    "Đã lưu tên thiết bị"
+  ],
+  "Device name contains a control character": [
+    "O nome do dispositivo contém um caractere de controle",
+    "Имя устройства содержит управляющий символ",
+    "Tên thiết bị chứa ký tự điều khiển"
+  ],
+  "Profile is unavailable": [
+    "O perfil está indisponível",
+    "Профиль недоступен",
+    "Hồ sơ không khả dụng"
+  ],
+  "Reconnecting with the same identity…": [
+    "Reconectando com a mesma identidade…",
+    "Переподключение с прежней идентификацией…",
+    "Đang kết nối lại với cùng danh tính…"
+  ],
+  "Disconnect before importing an identity": [
+    "Desconecte antes de importar uma identidade",
+    "Отключитесь перед импортом идентификации",
+    "Ngắt kết nối trước khi nhập danh tính"
+  ],
+  "Using the shared VPN session": [
+    "Usando a sessão VPN compartilhada",
+    "Используется общий сеанс VPN",
+    "Đang dùng phiên VPN chung"
+  ],
+  "VPN service is still stopping. Try again shortly.": [
+    "O serviço VPN ainda está encerrando. Tente novamente em instantes.",
+    "Служба VPN ещё останавливается. Повторите попытку чуть позже.",
+    "Dịch vụ VPN vẫn đang dừng. Vui lòng thử lại sau ít phút."
+  ],
+  "Closing OpenRad": [
+    "Fechando o OpenRad",
+    "Закрытие OpenRad",
+    "Đang đóng OpenRad"
+  ],
+  "The VPN session stays available to the CLI. Use Disconnect to stop it.": [
+    "A sessão VPN continua disponível para a CLI. Use Desconectar para encerrá-la.",
+    "Сеанс VPN остаётся доступным из командной строки. Нажмите «Отключиться», чтобы завершить его.",
+    "Phiên VPN vẫn khả dụng qua dòng lệnh. Dùng Ngắt kết nối để dừng phiên."
+  ],
+  "Release response is too large": [
+    "A resposta da versão é muito grande",
+    "Ответ о выпуске слишком велик",
+    "Phản hồi bản phát hành quá lớn"
+  ],
+  "Invalid release link": [
+    "Link da versão inválido",
+    "Недопустимая ссылка на выпуск",
+    "Liên kết bản phát hành không hợp lệ"
+  ],
+  "Release check is unavailable": [
+    "A verificação de atualizações está indisponível",
+    "Проверка обновлений недоступна",
+    "Không thể kiểm tra bản phát hành"
+  ],
+  "Release response is unavailable": [
+    "A resposta da versão está indisponível",
+    "Ответ о выпуске недоступен",
+    "Không có phản hồi bản phát hành"
+  ],
+  "Release check failed": [
+    "A verificação de atualizações falhou",
+    "Не удалось проверить обновления",
+    "Kiểm tra bản phát hành thất bại"
+  ],
+  "Test the RTT of a connected peer (RID from `openrad peers`)": [
+    "Testar o RTT de um par conectado (RID de `openrad peers`)",
+    "Проверить RTT подключённого узла (RID из `openrad peers`)",
+    "Kiểm tra RTT của máy ngang hàng đã kết nối (RID từ `openrad peers`)"
+  ],
+  "Change the node name without replacing the identity": [
+    "Alterar o nome do dispositivo mantendo a identidade",
+    "Изменить имя узла с сохранением идентификации",
+    "Đổi tên nút mà vẫn giữ danh tính"
+  ],
+  "Use relays only, without direct UDP or TCP attempts": [
+    "Usar apenas retransmissores, sem tentativas diretas de UDP ou TCP",
+    "Использовать только ретрансляторы, без попыток прямого соединения по UDP или TCP",
+    "Chỉ dùng máy chuyển tiếp, không thử kết nối UDP hoặc TCP trực tiếp"
+  ],
+  "The desktop and CLI share this identity. It is reused each time you connect.": [
+    "A interface gráfica e a CLI compartilham esta identidade. Ela é reutilizada a cada conexão.",
+    "Графическое приложение и командная строка используют общую идентификацию. Она повторно используется при каждом подключении.",
+    "Giao diện đồ họa và dòng lệnh dùng chung danh tính này. Danh tính được dùng lại mỗi lần kết nối."
+  ],
+  "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running.": [
+    "Um auxiliar temporário configura a interface. O OpenRad é executado como seu usuário normal. Desconectar remove a interface e as rotas; fechar a janela mantém a VPN em execução.",
+    "Временный помощник настраивает интерфейс. OpenRad работает от имени обычного пользователя. Отключение удаляет интерфейс и маршруты; закрытие окна сохраняет работу VPN.",
+    "Trình hỗ trợ tạm thời cấu hình giao diện. OpenRad chạy bằng tài khoản người dùng thông thường. Ngắt kết nối sẽ xóa giao diện và tuyến; đóng cửa sổ vẫn giữ VPN hoạt động."
+  ],
+  "×": [
+    "×",
+    "×",
+    "×"
+  ],
+  "Network preferences could not be loaded. Repair network-preferences.json and restart.": [
+    "Não foi possível carregar as preferências de rede. Corrija network-preferences.json e reinicie.",
+    "Не удалось загрузить настройки сетей. Исправьте network-preferences.json и перезапустите приложение.",
+    "Không thể tải tùy chọn mạng. Hãy sửa network-preferences.json và khởi động lại."
+  ],
+  "Remove favorite": [
+    "Remover dos favoritos",
+    "Убрать из избранного",
+    "Bỏ yêu thích"
+  ],
+  "Add favorite": [
+    "Adicionar aos favoritos",
+    "Добавить в избранное",
+    "Thêm vào yêu thích"
+  ],
+  "Select between 1 and 128 networks": [
+    "Selecione entre 1 e 128 redes",
+    "Выберите от 1 до 128 сетей",
+    "Chọn từ 1 đến 128 mạng"
+  ],
+  "Select for auto join": [
+    "Selecionar para entrada automática",
+    "Выбрать для автоподключения",
+    "Chọn để tự động tham gia"
+  ],
+  "Join configuration saved": [
+    "Configuração de entrada salva",
+    "Конфигурация подключения сохранена",
+    "Đã lưu cấu hình tham gia"
+  ],
+  "Enter a valid password for every selected private network": [
+    "Digite uma senha válida para cada rede privada selecionada",
+    "Введите действительный пароль для каждой выбранной частной сети",
+    "Nhập mật khẩu hợp lệ cho từng mạng riêng đã chọn"
+  ],
+  "Join interrupted; reconnect before retrying": [
+    "Entrada interrompida; reconecte antes de tentar novamente",
+    "Подключение прервано; восстановите соединение перед повторной попыткой",
+    "Tham gia bị gián đoạn; kết nối lại trước khi thử lại"
+  ],
+  "Auto join": [
+    "Entrada automática",
+    "Автоподключение",
+    "Tự động tham gia"
+  ],
+  "{count} networks selected": [
+    "{count} redes selecionadas",
+    "Выбрано сетей: {count}",
+    "Đã chọn {count} mạng"
+  ],
+  "Select networks and join them together, with 50 ms between requests.": [
+    "Selecione redes e entre em todas, com 50 ms entre as solicitações.",
+    "Выберите сети и подключитесь ко всем с интервалом 50 мс между запросами.",
+    "Chọn các mạng và tham gia cùng lúc, cách nhau 50 ms giữa các yêu cầu."
+  ],
+  "Saved configurations": [
+    "Configurações salvas",
+    "Сохранённые конфигурации",
+    "Cấu hình đã lưu"
+  ],
+  "Choose configuration": [
+    "Escolher configuração",
+    "Выберите конфигурацию",
+    "Chọn cấu hình"
+  ],
+  "Load configuration": [
+    "Carregar configuração",
+    "Загрузить конфигурацию",
+    "Tải cấu hình"
+  ],
+  "Delete configuration": [
+    "Excluir configuração",
+    "Удалить конфигурацию",
+    "Xóa cấu hình"
+  ],
+  "Configuration name": [
+    "Nome da configuração",
+    "Название конфигурации",
+    "Tên cấu hình"
+  ],
+  "Save configuration": [
+    "Salvar configuração",
+    "Сохранить конфигурацию",
+    "Lưu cấu hình"
+  ],
+  "Saved lists stay available after changing identity. Private passwords are requested again and never saved.": [
+    "As listas salvas continuam disponíveis após mudar de identidade. As senhas privadas são solicitadas novamente e nunca são salvas.",
+    "Сохранённые списки доступны после смены идентификатора. Пароли частных сетей запрашиваются заново и никогда не сохраняются.",
+    "Danh sách đã lưu vẫn có sau khi đổi danh tính. Mật khẩu mạng riêng được yêu cầu lại và không bao giờ được lưu."
+  ],
+  "Select networks": [
+    "Selecionar redes",
+    "Выберите сети",
+    "Chọn mạng"
+  ],
+  "Exact network name": [
+    "Nome exato da rede",
+    "Точное название сети",
+    "Tên mạng chính xác"
+  ],
+  "Private network": [
+    "Rede privada",
+    "Частная сеть",
+    "Mạng riêng"
+  ],
+  "Add network": [
+    "Adicionar rede",
+    "Добавить сеть",
+    "Thêm mạng"
+  ],
+  "Select joined networks": [
+    "Selecionar redes atuais",
+    "Выбрать подключённые сети",
+    "Chọn mạng đã tham gia"
+  ],
+  "Clear selection": [
+    "Limpar seleção",
+    "Снять выделение",
+    "Bỏ chọn tất cả"
+  ],
+  "Join selected networks": [
+    "Entrar nas redes selecionadas",
+    "Подключиться к выбранным сетям",
+    "Tham gia mạng đã chọn"
+  ],
+  "Connect your device to join the selected networks.": [
+    "Conecte seu dispositivo para entrar nas redes selecionadas.",
+    "Подключите устройство, чтобы присоединиться к выбранным сетям.",
+    "Kết nối thiết bị để tham gia các mạng đã chọn."
+  ],
+  "Browse public networks or add an exact private network name to get started.": [
+    "Explore as redes públicas ou adicione o nome exato de uma rede privada para começar.",
+    "Для начала найдите публичные сети или добавьте точное название частной сети.",
+    "Duyệt mạng công khai hoặc thêm tên mạng riêng chính xác để bắt đầu."
+  ],
+  "Joining…": [
+    "Entrando…",
+    "Подключение к сети…",
+    "Đang tham gia…"
+  ],
+  "Waiting to join…": [
+    "Aguardando para entrar…",
+    "Ожидание подключения…",
+    "Đang chờ tham gia…"
+  ],
+  "WORKSPACE / AUTO JOIN": [
+    "ESPAÇO DE TRABALHO / ENTRADA AUTOMÁTICA",
+    "РАБОЧАЯ ОБЛАСТЬ / АВТОПОДКЛЮЧЕНИЕ",
+    "KHÔNG GIAN LÀM VIỆC / TỰ ĐỘNG THAM GIA"
+  ],
+  "Too many saved networks": [
+    "Muitas redes salvas",
+    "Слишком много сохранённых сетей",
+    "Quá nhiều mạng đã lưu"
+  ],
+  "Too many saved join configurations": [
+    "Muitas configurações de entrada salvas",
+    "Слишком много сохранённых конфигураций подключения",
+    "Quá nhiều cấu hình tham gia đã lưu"
+  ],
+  "Configuration name must contain 1–80 characters without control characters": [
+    "O nome da configuração deve ter de 1 a 80 caracteres, sem caracteres de controle",
+    "Название конфигурации должно содержать 1–80 символов без управляющих символов",
+    "Tên cấu hình phải có 1–80 ký tự, không có ký tự điều khiển"
+  ],
+  "Join configuration contains a duplicate network": [
+    "A configuração de entrada contém uma rede duplicada",
+    "Конфигурация подключения содержит повторяющуюся сеть",
+    "Cấu hình tham gia chứa mạng trùng lặp"
+  ],
+  "Network preferences file is too large": [
+    "O arquivo de preferências de rede é muito grande",
+    "Файл настроек сетей слишком большой",
+    "Tệp tùy chọn mạng quá lớn"
+  ],
+  "Ambiguous network password reply; reconnect and join private networks individually": [
+    "Resposta de senha de rede ambígua; reconecte e entre nas redes privadas individualmente",
+    "Неоднозначный ответ на пароль сети; восстановите соединение и подключайтесь к частным сетям по одной",
+    "Phản hồi mật khẩu mạng không rõ ràng; kết nối lại và tham gia từng mạng riêng"
+  ],
+  "Stopping the VPN service before resetting identity…": [
+    "Parando o serviço VPN antes de redefinir a identidade…",
+    "Остановка службы VPN перед сбросом идентификации…",
+    "Đang dừng dịch vụ VPN trước khi đặt lại danh tính…"
+  ],
+  "Identity reset cancelled": [
+    "Redefinição da identidade cancelada",
+    "Сброс идентификации отменён",
+    "Đã hủy đặt lại danh tính"
+  ],
+  "Loading the saved identity before reset": [
+    "Carregando a identidade salva antes da redefinição",
+    "Загрузка сохранённых данных устройства перед сбросом",
+    "Đang tải danh tính đã lưu trước khi đặt lại"
+  ],
+  "Saving your replacement identity securely…": [
+    "Salvando sua nova identidade com segurança…",
+    "Безопасное сохранение новых данных устройства…",
+    "Đang lưu danh tính thay thế an toàn…"
+  ],
+  "Identity reset failed: {error}": [
+    "Falha ao redefinir a identidade: {error}",
+    "Не удалось сбросить идентификацию: {error}",
+    "Không thể đặt lại danh tính: {error}"
+  ],
+  "VPN service is still stopping": [
+    "O serviço VPN ainda está parando",
+    "Служба VPN ещё останавливается",
+    "Dịch vụ VPN vẫn đang dừng"
+  ],
+  "VPN service did not stop within 10 seconds. Try again shortly.": [
+    "O serviço VPN não parou em 10 segundos. Tente novamente em breve.",
+    "Служба VPN не остановилась за 10 секунд. Повторите попытку чуть позже.",
+    "Dịch vụ VPN không dừng trong 10 giây. Hãy thử lại sau ít phút."
+  ],
+  "Connecting to identity server {endpoint} (attempt {attempt}/3)…": [
+    "Conectando ao servidor de identidade {endpoint} (tentativa {attempt}/3)…",
+    "Подключение к серверу идентификации {endpoint} (попытка {attempt}/3)…",
+    "Đang kết nối tới máy chủ danh tính {endpoint} (lần thử {attempt}/3)…"
+  ],
+  "Identity connection attempt {attempt}/3 failed: {error}. Retrying in {delay_secs} s…": [
+    "A tentativa de conexão da identidade {attempt}/3 falhou: {error}. Tentando novamente em {delay_secs} s…",
+    "Попытка подключения {attempt}/3 не удалась: {error}. Повтор через {delay_secs} с…",
+    "Lần kết nối danh tính {attempt}/3 thất bại: {error}. Thử lại sau {delay_secs} giây…"
+  ],
+  "Registering your new device identity…": [
+    "Registrando a identidade do seu novo dispositivo…",
+    "Регистрация нового устройства…",
+    "Đang đăng ký danh tính thiết bị mới…"
+  ],
+  "Identity server redirected registration to {endpoint}…": [
+    "O servidor de identidade redirecionou o registro para {endpoint}…",
+    "Сервер идентификации перенаправил регистрацию на {endpoint}…",
+    "Máy chủ danh tính chuyển hướng đăng ký tới {endpoint}…"
+  ],
+  "Receiving your new device identity…": [
+    "Recebendo a identidade do seu novo dispositivo…",
+    "Получение новых данных устройства…",
+    "Đang nhận danh tính thiết bị mới…"
+  ],
+  "New device identity received; preparing to save…": [
+    "Nova identidade do dispositivo recebida; preparando para salvar…",
+    "Новые данные устройства получены; подготовка к сохранению…",
+    "Đã nhận danh tính thiết bị mới; đang chuẩn bị lưu…"
+  ],
+  "Saving new identity failed (attempt {attempt}/3): {error}. Retrying…": [
+    "Falha ao salvar a nova identidade (tentativa {attempt}/3): {error}. Tentando novamente…",
+    "Не удалось сохранить новые данные (попытка {attempt}/3): {error}. Повторная попытка…",
+    "Không thể lưu danh tính mới (lần thử {attempt}/3): {error}. Đang thử lại…"
+  ],
+  "Could not save the new identity after 3 attempts. Keep the window open and retry saving.": [
+    "Não foi possível salvar a nova identidade após 3 tentativas. Mantenha a janela aberta e tente salvar novamente.",
+    "Не удалось сохранить новые данные после 3 попыток. Оставьте окно открытым и повторите сохранение.",
+    "Không thể lưu danh tính mới sau 3 lần thử. Giữ cửa sổ mở và thử lưu lại."
+  ],
+  "Another frontend is changing this identity. Try again shortly.": [
+    "Outro cliente está alterando esta identidade. Tente novamente em breve.",
+    "Другой клиент изменяет эти данные устройства. Повторите попытку чуть позже.",
+    "Ứng dụng khác đang thay đổi danh tính này. Hãy thử lại sau ít phút."
+  ],
+  "TCP endpoint {address}": [
+    "Destino TCP {address}",
+    "Адрес TCP {address}",
+    "Điểm cuối TCP {address}"
+  ],
+  "DNS resolution timeout": [
+    "Tempo limite de resolução DNS",
+    "Время разрешения DNS истекло",
+    "Hết thời gian phân giải DNS"
+  ],
+  "resolve TCP endpoint": [
+    "resolver destino TCP",
+    "разрешение адреса TCP",
+    "phân giải điểm cuối TCP"
+  ],
+  "service request timed out": [
+    "tempo limite da solicitação ao serviço",
+    "время запроса к службе истекло",
+    "yêu cầu dịch vụ đã hết thời gian"
+  ],
+  "identity provisioning cancelled": [
+    "provisionamento da identidade cancelado",
+    "создание идентификации отменено",
+    "đã hủy cấp danh tính"
+  ],
+  "identity provisioning timed out (90 seconds)": [
+    "tempo limite do provisionamento da identidade (90 segundos)",
+    "время создания идентификации истекло (90 секунд)",
+    "hết thời gian cấp danh tính (90 giây)"
+  ],
+  "Identity provisioning authentication failed at {endpoint} (attempt {attempt}/{PROVISION_ATTEMPTS})": [
+    "A autenticação para provisionar a identidade falhou em {endpoint} (tentativa {attempt}/{PROVISION_ATTEMPTS})",
+    "Ошибка аутентификации при создании идентификации на {endpoint} (попытка {attempt}/{PROVISION_ATTEMPTS})",
+    "Xác thực cấp danh tính thất bại tại {endpoint} (lần thử {attempt}/{PROVISION_ATTEMPTS})"
+  ],
+  "Sending identity registration; not retried because the server may have registered this device": [
+    "Enviando registro da identidade; sem nova tentativa porque o servidor pode ter registrado este dispositivo",
+    "Отправка регистрации; повтор не выполняется, поскольку сервер мог уже зарегистрировать устройство",
+    "Đang gửi đăng ký danh tính; không thử lại vì máy chủ có thể đã đăng ký thiết bị này"
+  ],
+  "Waiting for identity registration response; not retried because the server may have registered this device": [
+    "Aguardando resposta do registro da identidade; sem nova tentativa porque o servidor pode ter registrado este dispositivo",
+    "Ожидание ответа на регистрацию; повтор не выполняется, поскольку сервер мог уже зарегистрировать устройство",
+    "Đang chờ phản hồi đăng ký danh tính; không thử lại vì máy chủ có thể đã đăng ký thiết bị này"
+  ],
+  "Receiving issued identity; registration is not retried automatically": [
+    "Recebendo a identidade emitida; o registro não será repetido automaticamente",
+    "Получение выданной идентификации; регистрация не повторяется автоматически",
+    "Đang nhận danh tính đã cấp; đăng ký không được tự động thử lại"
+  ],
+  "Copy identity reset log path": [
+    "Copiar caminho do log de redefinição da identidade",
+    "Копировать путь к журналу сброса идентификации",
+    "Sao chép đường dẫn nhật ký đặt lại danh tính"
+  ],
+  "control socket path is too long": [
+    "o caminho do socket de controle é longo demais",
+    "путь к управляющему сокету слишком длинный",
+    "đường dẫn socket điều khiển quá dài"
+  ],
+  "refusing to remove non-socket at {0}": [
+    "recusando remover arquivo que não é socket em {0}",
+    "отказ удаления файла, который не является сокетом: {0}",
+    "từ chối xóa tệp không phải socket tại {0}"
   ]
 }

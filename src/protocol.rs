@@ -401,6 +401,16 @@ impl Identity {
     }
 }
 
+pub fn validate_node_name(name: &str) -> Result<()> {
+    ensure!(!name.trim().is_empty(), "Device name cannot be empty");
+    ensure!(
+        !name.chars().any(char::is_control),
+        "Device name contains a control character"
+    );
+    textv(0x03000304, name)?;
+    Ok(())
+}
+
 pub fn login(name: &str, latency: u32, purpose: u32, peer: Option<u64>) -> Result<Vec<u8>> {
     ensure!(
         !name.is_empty() && [3, 4, 5].contains(&purpose),
@@ -780,6 +790,15 @@ impl Membership {
         Ok(())
     }
     pub fn eligible(&self, own: u64, names: &[String]) -> Result<Vec<Peer>> {
+        Ok(self.eligible_refs(own, names)?.cloned().collect())
+    }
+
+    /// Borrow members when the caller needs routing metadata or IDs only.
+    pub(crate) fn eligible_refs<'a>(
+        &'a self,
+        own: u64,
+        names: &[String],
+    ) -> Result<impl Iterator<Item = &'a Peer> + 'a> {
         for name in names {
             ensure!(
                 self.networks.values().any(|n| &n.name == name),
@@ -790,21 +809,18 @@ impl Membership {
             .networks
             .values()
             .filter(|n| names.is_empty() || names.contains(&n.name))
-            .map(|n| n.network_id.clone())
+            .map(|n| n.network_id.as_str())
             .collect();
-        Ok(self
-            .peers
-            .values()
-            .filter(|p| {
-                p.rid != own
-                    && p.server.is_some()
-                    && [1, 5].contains(&p.state)
-                    && p.network_ids
-                        .intersection(&ids)
-                        .any(|id| self.role(id, own) != Some(0) && self.role(id, p.rid) != Some(0))
-            })
-            .cloned()
-            .collect())
+        Ok(self.peers.values().filter(move |p| {
+            p.rid != own
+                && p.server.is_some()
+                && [1, 5].contains(&p.state)
+                && p.network_ids.iter().any(|id| {
+                    ids.contains(id.as_str())
+                        && self.role(id, own) != Some(0)
+                        && self.role(id, p.rid) != Some(0)
+                })
+        }))
     }
 }
 pub fn own_vip(data: &[u8]) -> Result<Option<Ipv4Addr>> {

@@ -5,18 +5,8 @@ use eframe::egui;
 #[test]
 #[ignore = "requires a Vulkan CPU driver; performs real offscreen software rendering"]
 fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
-    let setup = wgpu_setup(true);
-    let instance = wgpu::Instance::new(setup.instance_descriptor);
-    let adapters = pollster::block_on(instance.enumerate_adapters(backend()));
-    let adapter = (setup.native_adapter_selector.as_ref().unwrap())(&adapters, None).unwrap();
-    assert_eq!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
-    assert_eq!(adapter.get_info().backend, wgpu::Backend::Vulkan);
-    eprintln!("Linux CPU rendering adapter: {}", adapter.get_info().name);
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))).unwrap();
-
     let ctx = egui::Context::default();
-    let mut output = ctx.run_ui(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -46,6 +36,35 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
             );
         },
     );
+    let pixels = render_offscreen(&ctx, output, 256, 128);
+    let pixel = |x: usize, y: usize| &pixels[(y * 256 + x) * 4..(y * 256 + x + 1) * 4];
+    assert_eq!(pixel(64, 64), [220, 40, 60, 255]);
+    assert_eq!(pixel(24, 64), [0, 0, 0, 255], "clipping must hide geometry");
+    assert_eq!(pixel(112, 64), [0, 0, 0, 255]);
+    let text_pixels = (40..68)
+        .flat_map(|y| (136..240).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y)[0] > 100)
+        .count();
+    assert!(text_pixels > 100, "font atlas must produce visible text");
+}
+
+pub(crate) fn render_offscreen(
+    ctx: &egui::Context,
+    mut output: egui::FullOutput,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    assert_eq!(width % 64, 0, "readback rows must meet WGPU alignment");
+    let setup = wgpu_setup(true);
+    let instance = wgpu::Instance::new(setup.instance_descriptor);
+    let adapters = pollster::block_on(instance.enumerate_adapters(backend()));
+    let adapter = (setup.native_adapter_selector.as_ref().unwrap())(&adapters, None).unwrap();
+    assert_eq!(adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    assert_eq!(adapter.get_info().backend, wgpu::Backend::Vulkan);
+    eprintln!("Linux CPU rendering adapter: {}", adapter.get_info().name);
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&(setup.device_descriptor)(&adapter))).unwrap();
+
     let paint_jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
     let mut renderer = egui_wgpu::Renderer::new(
         &device,
@@ -64,8 +83,8 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("CPU-rendered UI regression"),
         size: wgpu::Extent3d {
-            width: 256,
-            height: 128,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -76,7 +95,7 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
         view_formats: &[],
     });
     let screen = egui_wgpu::ScreenDescriptor {
-        size_in_pixels: [256, 128],
+        size_in_pixels: [width, height],
         pixels_per_point: output.pixels_per_point,
     };
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -103,7 +122,7 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
     }
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("UI pixel readback"),
-        size: 256 * 128 * 4,
+        size: u64::from(width) * u64::from(height) * 4,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
@@ -113,7 +132,7 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4),
+                bytes_per_row: Some(width * 4),
                 rows_per_image: None,
             },
         },
@@ -136,15 +155,8 @@ fn cpu_renderer_draws_clipped_geometry_and_font_text_without_opengl() {
         .unwrap()
         .unwrap();
     let pixels = buffer.slice(..).get_mapped_range().unwrap();
-    let pixel = |x: usize, y: usize| &pixels[(y * 256 + x) * 4..(y * 256 + x + 1) * 4];
-    assert_eq!(pixel(64, 64), [220, 40, 60, 255]);
-    assert_eq!(pixel(24, 64), [0, 0, 0, 255], "clipping must hide geometry");
-    assert_eq!(pixel(112, 64), [0, 0, 0, 255]);
-    let text_pixels = (40..68)
-        .flat_map(|y| (136..240).map(move |x| (x, y)))
-        .filter(|&(x, y)| pixel(x, y)[0] > 100)
-        .count();
-    assert!(text_pixels > 100, "font atlas must produce visible text");
+    let bytes = pixels.to_vec();
     drop(pixels);
     buffer.unmap();
+    bytes
 }

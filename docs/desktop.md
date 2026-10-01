@@ -21,10 +21,17 @@ Vulkan CPU driver and renders offscreen without a window.
 
 ## Connection and network management
 
-On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. **Settings** offers:
+![Favorites and peer RTT tests](screenshots/1.0.0-networks.png)
+
+These 1.0.0 screenshots use synthetic data rendered on Linux.
+
+
+The desktop and CLI attach to one per-user background service and share its live session, peers, networks, and interface. You can open either frontend first. Closing the desktop window leaves the VPN running; **Disconnect** or `openrad stop` stops it for both frontends. Keep `openrad` beside `openrad-desktop`, since the desktop starts that service through the sibling executable.
+
+On first connection, OpenRad provisions a new identity and saves it to the OS credential store. Later connections reuse that identity. If the CLI already initialized this profile, the desktop uses its existing private identity file without registering another device. Both frontends resolve the same default profile: `$XDG_STATE_HOME/openrad` (usually `~/.local/state/openrad`) on Linux or `%LOCALAPPDATA%\openrad` on Windows. An existing desktop profile with saved settings is reused when the default CLI profile has not been initialized. Use the same `--data-dir PATH` for both binaries when selecting a custom profile. **Settings** offers:
 
 - **Language:** automatic system-language selection, English, Português, Русский, or Tiếng Việt. The language changes immediately, including dialogs, notifications and retained activity. Use **Save preferences** to keep the selection after restart. **Discard changes** restores the saved language; **Restore defaults** selects the system language again. Existing profiles without a language preference use automatic selection.
-- **Connection:** connect on launch, reconnect after failures, maximum retry attempts (1–10), and the initial retry delay (1–30 seconds). Later retries double the delay, capped at five minutes. The device name is editable until the identity is created.
+- **Connection:** connect on launch, reconnect after failures, maximum retry attempts (1–10), and the initial retry delay (1–30 seconds). Later retries double the delay, capped at five minutes. The device name remains editable after registration. Saving a new name reconnects with the same identity and keeps the VPN address and network memberships. **Force Relay** uses only relay connections in both directions; saving it cancels existing channels and reconnects without direct TCP, UDP, or endpoint-discovery attempts.
 - **Workspace:** the page shown at startup, interface scale, traffic overview and graphs, decimal or binary traffic units, visibility of offline peers, peer sorting, and the number of recent activity events shown.
 - **Developer view:** inline peer connection details, internal IDs, and live session, interface, peer, and frame counters. **Copy diagnostic summary** copies aggregate counters without credentials or packet contents.
 
@@ -41,6 +48,63 @@ Select a network to see your role and each member's role. Administrators have a 
 **Leave network** removes your own membership. The service may prevent the last administrator from leaving: grant admin to another member first, or use **Delete network**. Deletion requires confirmation and removes the network for everyone. Removing a member is not a permanent ban; someone who still knows the password may rejoin.
 
 Server refusals and password failures appear in the notification and Recent activity. If an operation times out, reconnect to load the service's current membership before retrying. A network that requires administrator approval is shown as **Pending approval** and is excluded from forwarding until approved.
+
+Public-network results filter as you type. Server searches start after a 300 ms pause, including an initial browse when opening **Discover**. The field stays editable during requests, and replies for older queries are discarded. **Load more networks** still pages through the current query.
+
+Use the **☆** button beside a public or joined network to add it to your
+favorites; **★** removes it. Favorites appear first in public results, joined
+network selectors, and the sidebar. When several favorites are visible, they
+are ordered by member count, highest first, with names breaking ties. Public
+results use the server's reported count; joined networks use their current
+membership roster. Favorites are saved immediately per profile and survive
+restarts, leaving a network, and identity replacement. Search filters still
+apply to favorites.
+
+The sidebar lists all joined networks in a scrollable area while the device
+name, interface status, and version stay at the bottom. Drag its right edge to
+resize it; the width is kept while the desktop stays open and adjusts to fit
+smaller windows. The network selector above the peer list scrolls horizontally
+when its buttons do not fit. Long network names are shortened to fit their
+buttons; hover to see the full name.
+
+**Auto join** lets you select multiple public and private networks and click
+**Join selected networks**. Select public results with **Select for auto join**,
+select a joined network from its detail view, use **Select joined networks**, or
+add an exact network name on the Auto join page. Mark networks that need a
+password as **Private network** and enter their passwords. Networks joined
+outside this desktop may need their access type adjusted before saving a list.
+All required passwords are checked before any requests are sent. Already
+joined networks are skipped, including memberships pending approval. Joins
+overlap, starting at least 50 ms apart instead of waiting for previous joins to
+finish. Each row reports success, pending approval, or failure independently.
+One refusal does not cancel the other joins. Disconnecting, changing identity,
+or closing the desktop stops requests that have not yet been submitted; requests
+already sent can still take effect on the server. A timed-out membership change
+still requires reconnection to reload the server's current state.
+
+![Saved multi-network join configuration](screenshots/1.0.0-auto-join.png)
+
+Enter a **Configuration name** and choose **Save configuration** to save the
+selection. Saving with an existing name updates that configuration. Choose a
+saved list and click **Load configuration** to restore it after restarting or
+changing identity, then enter any required private passwords and join. Loading
+a configuration replaces the current selection. **Delete configuration**
+removes the saved list. Up to 32 configurations of 128 networks each are
+supported. Names, access types, and favorites are stored separately from device
+credentials and display settings in `network-preferences.json`; passwords
+remain in zeroized memory and are never saved with a configuration. Loading a
+list or changing identity clears entered passwords. No joins run automatically
+on launch or when loading a list: the Join button starts the batch.
+
+Concurrent private joins use the existing request ID or authentication sequence
+to route each server password reply. Legacy replies that omit both fields remain
+supported for one private join at a time. If multiple private joins make an
+uncorrelated reply ambiguous, OpenRad ends the session before applying the
+password proof. Reconnect and join those private networks individually.
+
+Each connected peer has a **Test RTT** button. It measures the round trip of a correlated, authenticated tunnel keepalive and displays milliseconds beside the peer. After 3000 ms without a matching reply, the row shows “Peer not responding — they may be using a strict firewall.” Results remain until the next test or session change. This measures the active peer transport and does not require ICMP privileges or a TAP interface.
+
+The desktop checks GitHub’s latest published release at launch and hourly, compares semantic versions, and shows a release link when a newer stable version is available. The notice remains through navigation, session changes, and failed checks; only its **×** button dismisses it. The same version stays dismissed for the rest of that launch. Checks use the system `curl` HTTPS client (included in current Windows installations); install `curl` on Linux if needed. Requests have a 15-second limit and never block the UI.
 
 The peer table distinguishes Direct TCP, Direct UDP, and Relay. These labels represent authenticated peer channels. They are separate from the overall service connection status. Incoming channels and outgoing channels use the same authentication and Ethernet forwarding checks.
 
@@ -81,7 +145,7 @@ IP/MAC validation and membership restrictions still apply.
 The desktop automatically records connection diagnostics in the profile's
 `diagnostics` directory. **Settings → Copy connection log path** copies its exact
 location, including for profiles selected with `--data-dir`. On a standard Linux
-profile this is normally `~/.local/share/openrad/diagnostics`.
+profile this is normally `~/.local/state/openrad/diagnostics` (or the retained desktop profile’s directory).
 
 The current log is `connection.jsonl`. Three older files, `connection.1.jsonl`
 through `connection.3.jsonl`, retain earlier events, with `.1` the most recent
@@ -124,12 +188,18 @@ also includes the peer failure detail instead of only the status label.
 
 The **Reset identity** action opens a confirmation dialog explaining that the device identity and network memberships will change. Confirming it:
 
-1. Disconnects the running session and closes the TAP interface.
-2. Provisions a replacement through the normal registration flow.
-3. Saves the new identity in the credential store only after provisioning succeeds.
+1. Cancels queued connection work, disconnects the running session and closes the TAP interface. Stop requests are retried for up to 10 seconds.
+2. Provisions a replacement through the normal registration flow. Connection and handshake failures before registration receive up to three attempts per server, with one- and two-second retry delays and a 90-second aggregate network budget.
+3. Saves the new identity in the credential store only after provisioning succeeds, retrying a failed save up to three times.
 4. Updates the active identity only after the credential-store write succeeds.
 
 If provisioning fails, the existing saved identity remains intact. If provisioning succeeds but the credential store cannot save it, the replacement remains in memory for a storage retry; retrying does not provision another identity. Keep the window open until the credential store is unlocked and the save succeeds. The confirmation UI and close handling warn about an unsaved replacement.
+
+Progress and **Recent activity** show the current server, attempt number, retry delay, registration, and save stages. A failed reset leaves the busy phase and displays its error; status from the previous session cannot hide it behind “Connecting”. Reset finishes disconnected. Use **Connect** to start a session with the saved replacement.
+
+Registration is not retried automatically once its login may have reached the server. A missing response can mean the server issued a device identity that OpenRad did not receive; the error explains this uncertainty. Authentication or protocol rejection also fails immediately instead of repeating the request.
+
+**Settings → Copy identity reset log path** copies the desktop diagnostic file, normally `~/.local/share/OpenRad/logs/desktop-startup.log` on Linux or `%LOCALAPPDATA%\OpenRad\logs\desktop-startup.log` on Windows. `OPENRAD_LOG_DIR` (or the desktop-only `OPENRAD_DESKTOP_LOG_DIR`) overrides the directory. These JSON records include elapsed times, servers, redirects, attempts, full error chains, and whether a replacement still needs saving. They exclude passwords, issued credentials, session keys, and packet contents. Keep this file alongside the connection logs when reporting a reset failure.
 
 New identities do not inherit the previous identity's memberships. Resetting is not a way to recover access to a lost identity.
 

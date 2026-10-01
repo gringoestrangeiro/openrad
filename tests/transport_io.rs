@@ -96,6 +96,22 @@ fn tcp_connect_handles_both_address_families_refusal_and_cancellation() {
     }
 }
 
+#[test]
+fn hostname_connect_uses_available_local_addresses_and_respects_cancellation() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stream = Framed::connect("localhost", port, Duration::from_secs(2)).unwrap();
+    let (_remote, _) = listener.accept().unwrap();
+    assert_eq!(
+        stream.socket.peer_addr().unwrap(),
+        listener.local_addr().unwrap()
+    );
+    let stop = Arc::new(AtomicBool::new(true));
+    assert!(
+        Framed::connect_with_stop("localhost", port, Duration::from_secs(2), Some(stop)).is_err()
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn tcp_connect_to_a_full_local_backlog_can_be_cancelled() {

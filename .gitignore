@@ -24,6 +24,12 @@ identity*.json
 credentials*
 settings.json
 settings-*.tmp
+network-preferences.json
+network-preferences-*.tmp
+service.json
+service.*.tmp
+identity.lock
+startup.lock
 desktop.lock
 membership*.json
 result.json

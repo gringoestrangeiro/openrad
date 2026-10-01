@@ -1,17 +1,17 @@
-//! Per-user CLI service and bounded local control protocol.
+//! Shared per-user VPN service and bounded local control protocol.
 #![cfg(any(unix, windows))]
 #[cfg(windows)]
 #[path = "platform/windows_pipe.rs"]
 mod windows_pipe;
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use openrad::{
+use crate::{
     diagnostics::Diagnostics,
     early_log::{self, Stage},
     network::{MemberAction, NetworkPassword, NetworkRequest},
     protocol::Identity,
     runtime::{self, Command, Snapshot, Update},
 };
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(unix)]
@@ -61,7 +61,17 @@ impl DataDir {
                 let base = std::env::var_os("LOCALAPPDATA")
                     .map(PathBuf::from)
                     .context("Set LOCALAPPDATA or use --data-dir")?;
-                base.join("openrad")
+                let canonical = base.join("openrad");
+                let legacy = directories::ProjectDirs::from("org", "OpenRad", "openrad")
+                    .map(|dirs| dirs.data_local_dir().to_path_buf());
+                if !canonical.join("profile").exists() && !canonical.join("settings.json").exists()
+                {
+                    legacy
+                        .filter(|path| path.join("settings.json").exists())
+                        .unwrap_or(canonical)
+                } else {
+                    canonical
+                }
             }
         };
         let path = if path.is_absolute() {
@@ -93,7 +103,7 @@ impl DataDir {
             path.join(SOCKET).as_os_str().len() < 100,
             "data directory path is too long for a Unix socket"
         );
-        openrad::output::secure_directory(&path)?;
+        crate::output::secure_directory(&path)?;
         Ok(Self { path })
     }
     #[cfg(unix)]
@@ -128,7 +138,37 @@ impl DataDir {
             .context("OpenRad service is already running for this profile")?;
         Ok(file)
     }
-    fn load_identity(&self) -> Result<Identity> {
+    /// Hold while replacing a profile to exclude a running VPN service.
+    pub fn stopped_lock(&self) -> Result<File> {
+        self.lock()
+    }
+    /// Recover a leftover socket only after proving no service owns this profile.
+    pub fn cleanup_stopped_endpoint(&self) -> Result<bool> {
+        let Ok(_lock) = self.lock() else {
+            return Ok(false);
+        };
+        #[cfg(unix)]
+        match fs::symlink_metadata(self.socket()) {
+            Ok(meta) if meta.file_type().is_socket() => fs::remove_file(self.socket())?,
+            Ok(_) => bail!(
+                "refusing to remove non-socket at {}",
+                self.socket().display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(!self.endpoint_exists())
+    }
+    pub fn load_identity(&self) -> Result<Identity> {
+        if !self.identity().exists() {
+            let entry = self.entry()?;
+            let secret = zeroize::Zeroizing::new(entry.get_secret().map_err(|_| {
+                anyhow!("Could not read the saved identity. Unlock your credential store; your identity has not been replaced.")
+            })?);
+            ensure!(secret.as_slice() != b"openrad-provisioning-pending-v1",
+                "An earlier registration did not finish saving. Import a saved identity to recover; OpenRad will not create another identity automatically.");
+            return Identity::from_secret(&secret);
+        }
         Identity::load(&self.identity()).with_context(|| {
             format!(
                 "No saved identity at {}. Run `openrad init` first",
@@ -145,8 +185,128 @@ impl DataDir {
             );
             Ok(fs::read(self.modulus())?)
         } else {
-            Ok(openrad::SERVER_MODULUS.to_vec())
+            Ok(crate::SERVER_MODULUS.to_vec())
         }
+    }
+    pub fn entry(&self) -> Result<keyring::Entry> {
+        Ok(keyring::Entry::new(
+            "org.openrad.desktop",
+            &self.path.to_string_lossy(),
+        )?)
+    }
+    pub fn save_identity(&self, identity: &Identity) -> Result<()> {
+        let secret = zeroize::Zeroizing::new(serde_json::to_vec(identity)?);
+        if self.identity().exists() {
+            atomic_save(&self.identity(), &secret)
+        } else {
+            self.entry()?.set_secret(&secret).map_err(|_| anyhow!(
+                "Could not save the identity in the credential store. Keep this window open, unlock your keyring, then retry."
+            ))
+        }
+    }
+    pub fn profile_lock(&self) -> Result<File> {
+        let file = self.profile_lock_file()?;
+        file.lock()?;
+        Ok(file)
+    }
+    /// Desktop operations must fail visibly instead of waiting indefinitely
+    /// for another frontend to finish changing the identity.
+    pub fn try_profile_lock(&self) -> Result<File> {
+        let file = self.profile_lock_file()?;
+        file.try_lock()
+            .context("Another frontend is changing this identity. Try again shortly.")?;
+        Ok(file)
+    }
+    fn profile_lock_file(&self) -> Result<File> {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let file = options.open(self.path.join("identity.lock"))?;
+        Ok(file)
+    }
+    pub fn preferences(&self) -> Result<ServicePreferences> {
+        let path = self.path.join("service.json");
+        if !path.exists() {
+            return Ok(ServicePreferences::default());
+        }
+        ensure!(
+            fs::metadata(&path)?.len() <= 64 * 1024,
+            "Settings file is too large"
+        );
+        let preferences: ServicePreferences = serde_json::from_slice(&fs::read(path)?)?;
+        preferences.validate()?;
+        Ok(preferences)
+    }
+    pub fn save_preferences(&self, preferences: &ServicePreferences) -> Result<()> {
+        preferences.validate()?;
+        atomic_save(
+            &self.path.join("service.json"),
+            &serde_json::to_vec(preferences)?,
+        )
+    }
+}
+
+/// Atomic private writes also preserve the previous identity on storage errors.
+fn atomic_save(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let temporary = path.with_extension(format!(
+        "{}-{}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let result = (|| -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let mut file = options.open(&temporary)?;
+        std::io::Write::write_all(&mut file, bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServicePreferences {
+    pub force_relay: bool,
+    pub auto_reconnect: bool,
+    pub reconnect_attempts: u32,
+    pub reconnect_base_delay_seconds: u64,
+    pub traffic_peers: Option<std::collections::BTreeSet<u64>>,
+}
+impl Default for ServicePreferences {
+    fn default() -> Self {
+        Self {
+            force_relay: false,
+            auto_reconnect: true,
+            reconnect_attempts: 3,
+            reconnect_base_delay_seconds: 2,
+            traffic_peers: None,
+        }
+    }
+}
+impl ServicePreferences {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=10).contains(&self.reconnect_attempts)
+                && (1..=30).contains(&self.reconnect_base_delay_seconds)
+                && self
+                    .traffic_peers
+                    .as_ref()
+                    .is_none_or(|peers| peers.len() <= 1024 && !peers.contains(&0)),
+            "Settings are out of range"
+        );
+        Ok(())
     }
 }
 
@@ -181,6 +341,16 @@ pub enum Request {
     },
     RetryPeers,
     RetryInterface,
+    Ping {
+        peer: u64,
+    },
+    Rename {
+        node_name: String,
+    },
+    Configure {
+        preferences: ServicePreferences,
+    },
+    Reconnect,
     Stop,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -197,6 +367,47 @@ impl From<MemberActionWire> for MemberAction {
             MemberActionWire::GrantAdmin => Self::GrantAdmin,
             MemberActionWire::RevokeAdmin => Self::RevokeAdmin,
         }
+    }
+}
+impl Request {
+    pub fn from_runtime(command: Command) -> Result<Self> {
+        Ok(match command {
+            Command::Search { query, cursor } => Self::Search { query, cursor },
+            Command::Ping { peer } => Self::Ping { peer },
+            Command::RetryPeers => Self::RetryPeers,
+            Command::RetryInterface => Self::RetryInterface,
+            Command::Join(name) => Self::Join {
+                name,
+                password: None,
+            },
+            Command::Leave(network) => Self::Leave { network },
+            Command::Network(request) => match request {
+                NetworkRequest::Join { name, password } => Self::Join {
+                    name,
+                    password: password.map(|p| p.as_str().to_owned()),
+                },
+                NetworkRequest::Create { name, password } => Self::Create {
+                    name,
+                    password: password.as_str().to_owned(),
+                },
+                NetworkRequest::Leave { network } => Self::Leave { network },
+                NetworkRequest::Delete { network } => Self::Delete { network },
+                NetworkRequest::Member {
+                    network,
+                    member,
+                    action,
+                } => Self::Member {
+                    network,
+                    member,
+                    action: match action {
+                        MemberAction::Kick => MemberActionWire::Kick,
+                        MemberAction::GrantAdmin => MemberActionWire::GrantAdmin,
+                        MemberAction::RevokeAdmin => MemberActionWire::RevokeAdmin,
+                    },
+                },
+            },
+            Command::Tagged { .. } => bail!("unsupported control command"),
+        })
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -233,36 +444,161 @@ fn read_bounded(stream: &mut UnixStream, limit: u64) -> Result<Vec<u8>> {
 }
 #[cfg(unix)]
 pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
-    let mut stream = UnixStream::connect(dir.socket())
-        .context("Service is stopped. Run `openrad start` first")?;
-    stream.set_read_timeout(Some(Duration::from_secs(35)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    request_with_timeout(dir, command, Duration::from_secs(35))
+}
+
+#[cfg(target_os = "linux")]
+fn connect_control(dir: &DataDir, until: Instant) -> Result<UnixStream> {
+    use std::os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::ffi::OsStrExt,
+    };
+    // A blocking Unix connect can hang on a full service backlog before socket
+    // read/write timeouts apply. Poll it within the same request deadline.
+    let raw = unsafe {
+        libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )
+    };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: the newly created descriptor is owned only by this guard.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as _;
+    let socket = dir.socket();
+    let path = socket.as_os_str().as_bytes();
+    ensure!(
+        path.len() < address.sun_path.len(),
+        "control socket path is too long"
+    );
+    for (target, byte) in address.sun_path.iter_mut().zip(path) {
+        *target = *byte as _;
+    }
+    loop {
+        ensure!(Instant::now() < until, "service request timed out");
+        // SAFETY: pointer/size describe the initialized sockaddr_un; the path
+        // fits its zero-terminated field and the fd stays owned above.
+        let result = unsafe {
+            libc::connect(
+                fd.as_raw_fd(),
+                (&address as *const libc::sockaddr_un).cast(),
+                std::mem::size_of_val(&address) as _,
+            )
+        };
+        if result == 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EISCONN) => break,
+            // AF_UNIX reports a full listen backlog as EAGAIN, without queuing
+            // the connect. Retrying here cannot duplicate an accepted request.
+            Some(libc::EAGAIN | libc::EINTR) => {
+                thread::sleep(
+                    until
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(10)),
+                );
+            }
+            Some(libc::EINPROGRESS | libc::EALREADY) => {
+                let mut poll = libc::pollfd {
+                    fd: fd.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                };
+                let millis = until
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, 50) as i32;
+                let result = unsafe { libc::poll(&mut poll, 1, millis) };
+                if result < 0
+                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+                {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+            _ => return Err(error.into()),
+        }
+    }
+    let stream = UnixStream::from(fd);
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn connect_control(dir: &DataDir, _until: Instant) -> Result<UnixStream> {
+    Ok(UnixStream::connect(dir.socket())?)
+}
+
+#[cfg(unix)]
+pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration) -> Result<Reply> {
+    ensure!(!timeout.is_zero(), "service request timed out");
+    let until = Instant::now() + timeout;
+    let mut stream =
+        connect_control(dir, until).context("Service is stopped. Run `openrad start` first")?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout.min(Duration::from_secs(5))))?;
     stream.write_all(&serde_json::to_vec(command)?)?;
     stream.shutdown(std::net::Shutdown::Write)?;
-    let bytes = read_bounded(&mut stream, REPLY_LIMIT)?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "service request timed out");
+        stream.set_read_timeout(Some(remaining))?;
+        let length = stream.read(&mut buffer)?;
+        if length == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..length]);
+        ensure!(
+            bytes.len() as u64 <= REPLY_LIMIT,
+            "local control message too large"
+        );
+    }
     ensure!(!bytes.is_empty(), "service closed the control connection");
     Ok(serde_json::from_slice(&bytes)?)
 }
 
 #[cfg(windows)]
 pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
-    let mut stream = windows_pipe::Connection::connect(&dir.path)
-        .context("Service is stopped. Run `openrad start` first")?;
+    request_with_timeout(dir, command, Duration::from_secs(35))
+}
+
+#[cfg(windows)]
+pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration) -> Result<Reply> {
+    let until = Instant::now() + timeout;
+    let mut stream =
+        windows_pipe::Connection::connect_timeout(&dir.path, timeout.min(Duration::from_secs(5)))
+            .context("Service is stopped. Run `openrad start` first")?;
     let payload = serde_json::to_vec(command)?;
     ensure!(
         payload.len() as u64 <= REQUEST_LIMIT,
         "local control message too large"
     );
-    stream.write_message(&payload, Duration::from_secs(5))?;
-    let bytes = stream.read_message(REPLY_LIMIT, Duration::from_secs(35))?;
+    stream.write_message(
+        &payload,
+        until
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(5)),
+    )?;
+    let bytes =
+        stream.read_message(REPLY_LIMIT, until.saturating_duration_since(Instant::now()))?;
     stream.acknowledge()?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
 struct State {
+    identity: Option<Identity>,
+    preferences: ServicePreferences,
+    restart: bool,
     phase: &'static str,
     error: Option<String>,
-    snapshot: Option<Snapshot>,
+    snapshot: Option<Arc<Snapshot>>,
     sender: Option<Sender<Command>>,
     session_stop: Option<Arc<AtomicBool>>,
     pending: BTreeMap<u64, Sender<Reply>>,
@@ -272,13 +608,16 @@ struct Shared {
     shutdown: AtomicBool,
     next_id: AtomicU64,
     rid: u64,
-    node_name: String,
+    directory: Option<DataDir>,
     disable_interface: bool,
 }
 impl Shared {
     fn new(id: &Identity, disable_interface: bool) -> Self {
         Self {
             state: Mutex::new(State {
+                identity: Some(id.clone()),
+                preferences: ServicePreferences::default(),
+                restart: false,
                 phase: "connecting",
                 error: None,
                 snapshot: None,
@@ -289,7 +628,7 @@ impl Shared {
             shutdown: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             rid: id.rid,
-            node_name: id.node_name.clone(),
+            directory: None,
             disable_interface,
         }
     }
@@ -301,11 +640,26 @@ impl Shared {
     }
     fn update(&self, update: Update) {
         match update {
+            Update::Ping {
+                peer,
+                id: Some(id),
+                rtt_ms,
+                error,
+            } => {
+                if let Some(waiter) = self.state.lock().unwrap().pending.remove(&id) {
+                    let _ = waiter.send(Reply {
+                        ok: error.is_none(),
+                        message: error.unwrap_or_else(|| "Peer RTT measured".into()),
+                        data: json!({"peer": peer, "rtt_ms": rtt_ms}),
+                    });
+                }
+            }
+            Update::Ping { .. } => {}
             Update::State(snapshot) => {
                 let mut state = self.state.lock().unwrap();
                 state.phase = "connected";
                 state.error = None;
-                state.snapshot = Some(snapshot);
+                state.snapshot = Some(Arc::new(snapshot));
             }
             Update::CommandResult {
                 id,
@@ -345,17 +699,34 @@ impl Shared {
         }
     }
     fn status(&self) -> Reply {
-        let state = self.state.lock().unwrap();
+        // Keep the immutable snapshot alive without cloning the roster or
+        // holding the engine state lock throughout JSON construction.
+        let (phase, node_name, preferences, error, snapshot) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.phase,
+                state.identity.as_ref().map(|id| id.node_name.clone()),
+                state.preferences.clone(),
+                state.error.clone(),
+                state.snapshot.clone(),
+            )
+        };
         Reply::ok(
-            state.phase,
+            phase,
             json!({
-            "phase":state.phase,"rid":self.rid,"node_name":self.node_name,
+            "phase":phase,"rid":self.rid,"node_name":node_name,
+            "process_id": std::process::id(),
+            "preferences": preferences,
             "interface_disabled":self.disable_interface,
-                "error":state.error,"snapshot":state.snapshot,
+                "error":error,"snapshot":snapshot.as_deref(),
             }),
         )
     }
     fn command(&self, command: Command) -> Reply {
+        let ping = match &command {
+            Command::Ping { peer } => Some(*peer),
+            _ => None,
+        };
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         let sender = {
@@ -381,11 +752,25 @@ impl Shared {
             self.state.lock().unwrap().pending.remove(&id);
             return Reply::error("Service connection is unavailable");
         }
-        match rx.recv_timeout(Duration::from_secs(27)) {
+        match rx.recv_timeout(if ping.is_some() {
+            runtime::PING_TIMEOUT
+        } else {
+            Duration::from_secs(27)
+        }) {
             Ok(reply) => reply,
             Err(_) => {
                 self.state.lock().unwrap().pending.remove(&id);
-                Reply::error("Network command timed out; check `openrad status` before retrying")
+                if let Some(peer) = ping {
+                    Reply {
+                        ok: false,
+                        message: runtime::PING_TIMEOUT_MESSAGE.into(),
+                        data: json!({"peer": peer, "rtt_ms": null}),
+                    }
+                } else {
+                    Reply::error(
+                        "Network command timed out; check `openrad status` before retrying",
+                    )
+                }
             }
         }
     }
@@ -442,7 +827,10 @@ impl Shared {
                     "name":n.name,"id":n.network_id,
                     "role": snapshot.roles.get(&n.network_id).and_then(|roles| roles.get(&self.rid)).copied(),
                 })).collect();
-                Reply::ok(format!("{} networks", networks.len()), json!(networks))
+                Reply::ok(
+                    format!("{} networks", networks.len()),
+                    Value::Array(networks),
+                )
             }
             Request::Peers => {
                 let state = self.state.lock().unwrap();
@@ -513,6 +901,52 @@ impl Shared {
             }
             Request::RetryPeers => self.queue(Command::RetryPeers),
             Request::RetryInterface => self.queue(Command::RetryInterface),
+            Request::Ping { peer } => self.command(Command::Ping { peer }),
+            Request::Rename { node_name } => {
+                crate::protocol::validate_node_name(&node_name)?;
+                let mut state = self.state.lock().unwrap();
+                let mut identity = state.identity.clone().context("No identity loaded")?;
+                identity.node_name = node_name;
+                self.directory
+                    .as_ref()
+                    .context("Profile is unavailable")?
+                    .save_identity(&identity)?;
+                state.identity = Some(identity);
+                state.restart = true;
+                if let Some(stop) = &state.session_stop {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                Reply::ok(
+                    "Device name saved. Reconnecting with the same identity…",
+                    Value::Null,
+                )
+            }
+            Request::Configure { preferences } => {
+                preferences.validate()?;
+                let mut state = self.state.lock().unwrap();
+                self.directory
+                    .as_ref()
+                    .context("Profile is unavailable")?
+                    .save_preferences(&preferences)?;
+                let restart = preferences.force_relay != state.preferences.force_relay
+                    || preferences.traffic_peers != state.preferences.traffic_peers;
+                state.preferences = preferences;
+                if restart {
+                    state.restart = true;
+                    if let Some(stop) = &state.session_stop {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                }
+                Reply::ok("Settings saved", Value::Null)
+            }
+            Request::Reconnect => {
+                let mut state = self.state.lock().unwrap();
+                state.restart = true;
+                if let Some(stop) = &state.session_stop {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                Reply::ok("Reconnecting with the same identity…", Value::Null)
+            }
             Request::Stop => Reply::ok("Service stopping", Value::Null),
         })
     }
@@ -531,18 +965,25 @@ fn supervisor(
     while !shared.shutdown.load(Ordering::Relaxed) {
         let (tx, rx) = mpsc::channel();
         let session_stop = Arc::new(AtomicBool::new(false));
-        {
+        let (identity, preferences) = {
             let mut state = shared.state.lock().unwrap();
             state.phase = "connecting";
             state.sender = Some(tx);
             state.session_stop = Some(session_stop.clone());
-        }
+            state.restart = false;
+            state.snapshot = None;
+            (
+                state.identity.clone().unwrap_or_else(|| identity.clone()),
+                state.preferences.clone(),
+            )
+        };
         let shared_updates = shared.clone();
         let options = runtime::Options {
             helper: std::env::current_exe().ok(),
             disable_interface,
             diagnostics: diagnostics.clone(),
-            ..Default::default()
+            force_relay: preferences.force_relay,
+            traffic_peers: preferences.traffic_peers.clone(),
         };
         let started = Instant::now();
         let outcome = runtime::run(
@@ -556,6 +997,11 @@ fn supervisor(
         if shared.shutdown.load(Ordering::Relaxed) {
             break;
         }
+        if shared.state.lock().unwrap().restart {
+            failures = 0;
+            shared.disconnected("Reconnecting with the same identity…".into());
+            continue;
+        }
         if let Err(error) = &outcome {
             early_log::fatal_error(error);
         }
@@ -568,9 +1014,25 @@ fn supervisor(
             failures = 0;
         }
         failures = failures.saturating_add(1);
-        let delay = Duration::from_secs((1u64 << failures.min(6)).min(60));
+        if !preferences.auto_reconnect || failures > preferences.reconnect_attempts {
+            shared.state.lock().unwrap().phase = "error";
+            while !shared.shutdown.load(Ordering::Relaxed) && !shared.state.lock().unwrap().restart
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            continue;
+        }
+        let delay = Duration::from_secs(
+            preferences
+                .reconnect_base_delay_seconds
+                .saturating_mul(1u64 << failures.saturating_sub(1).min(9))
+                .min(300),
+        );
         let until = Instant::now() + delay;
-        while !shared.shutdown.load(Ordering::Relaxed) && Instant::now() < until {
+        while !shared.shutdown.load(Ordering::Relaxed)
+            && !shared.state.lock().unwrap().restart
+            && Instant::now() < until
+        {
             thread::sleep(Duration::from_millis(100));
         }
     }
@@ -601,6 +1063,7 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
 #[cfg(unix)]
 pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
+    let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
     let modulus = dir.load_modulus()?;
     early_log::checkpoint(Stage::ServiceLock);
@@ -615,7 +1078,11 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
-    let shared = Arc::new(Shared::new(&identity, disable_interface));
+    drop(profile_lock);
+    let mut shared = Shared::new(&identity, disable_interface);
+    shared.directory = Some(dir.clone());
+    shared.state.get_mut().unwrap().preferences = dir.preferences()?;
+    let shared = Arc::new(shared);
     let on_signal = shared.clone();
     ctrlc::set_handler(move || on_signal.stop())?;
     let worker_shared = shared.clone();
@@ -670,13 +1137,18 @@ fn serve_connection(mut stream: windows_pipe::Connection, shared: Arc<Shared>) -
 #[cfg(windows)]
 pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
+    let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
     let modulus = dir.load_modulus()?;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let mut listener = windows_pipe::Listener::bind(&dir.path)?;
+    drop(profile_lock);
     early_log::checkpoint(Stage::ServiceListening);
-    let shared = Arc::new(Shared::new(&identity, disable_interface));
+    let mut shared = Shared::new(&identity, disable_interface);
+    shared.directory = Some(dir.clone());
+    shared.state.get_mut().unwrap().preferences = dir.preferences()?;
+    let shared = Arc::new(shared);
     let worker_shared = shared.clone();
     let worker =
         thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
@@ -701,8 +1173,29 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
 }
 
 pub fn spawn(dir: &DataDir, disable_interface: bool) -> Result<bool> {
+    spawn_with_executable(dir, disable_interface, &std::env::current_exe()?)
+}
+pub fn spawn_with_executable(
+    dir: &DataDir,
+    disable_interface: bool,
+    executable: &std::path::Path,
+) -> Result<bool> {
     early_log::checkpoint(Stage::ServiceStarting);
+    if request(dir, &Request::Status).is_ok() {
+        return Ok(false);
+    }
     dir.load_identity()?;
+    let _startup_lock = {
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let lock = options.open(dir.path.join("startup.lock"))?;
+        lock.lock()?;
+        lock
+    };
     if request(dir, &Request::Status).is_ok() {
         return Ok(false);
     }
@@ -713,7 +1206,7 @@ pub fn spawn(dir: &DataDir, disable_interface: bool) -> Result<bool> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     let log = options.open(dir.path.join("service.log"))?;
-    let mut command = ProcessCommand::new(std::env::current_exe()?);
+    let mut command = ProcessCommand::new(executable);
     command.arg("--data-dir").arg(&dir.path).arg("__daemon");
     if disable_interface {
         command.arg("--no-tap");
@@ -796,20 +1289,20 @@ mod tests {
         {
             let mut state = shared.state.lock().unwrap();
             state.phase = "connected";
-            state.snapshot = Some(Snapshot {
+            state.snapshot = Some(Arc::new(Snapshot {
                 vip: Some(Ipv4Addr::new(26, 0, 0, 5)),
                 networks: vec![
-                    openrad::protocol::Network {
+                    crate::protocol::Network {
                         name: "Same".into(),
                         network_id: "a".into(),
                     },
-                    openrad::protocol::Network {
+                    crate::protocol::Network {
                         name: "Same".into(),
                         network_id: "b".into(),
                     },
                 ],
                 ..Default::default()
-            });
+            }));
         }
         assert!(shared.resolve_network("Same").is_err());
         assert_eq!(shared.resolve_network("a").unwrap(), "a");
@@ -820,14 +1313,14 @@ mod tests {
         {
             let mut state = shared.state.lock().unwrap();
             state.phase = "connected";
-            state.snapshot = Some(Snapshot {
-                networks: vec![openrad::protocol::Network {
+            state.snapshot = Some(Arc::new(Snapshot {
+                networks: vec![crate::protocol::Network {
                     name: "Friends".into(),
                     network_id: "a".into(),
                 }],
                 roles: BTreeMap::from([("a".into(), BTreeMap::from([(123, 2)]))]),
                 ..Default::default()
-            });
+            }));
         }
         let reply = shared.handle(Request::Join {
             name: "Friends".into(),
@@ -837,6 +1330,36 @@ mod tests {
         assert_eq!(reply.message, "Already joined");
         assert!(shared.state.lock().unwrap().pending.is_empty());
     }
+    #[test]
+    fn status_preserves_snapshot_json_and_previous_snapshot_ownership() {
+        let shared = shared();
+        let snapshot = Snapshot {
+            vip: Some(Ipv4Addr::new(26, 0, 0, 5)),
+            networks: vec![crate::protocol::Network {
+                name: "Synthetic LAN".into(),
+                network_id: "synthetic-id".into(),
+            }],
+            roles: BTreeMap::from([("synthetic-id".into(), BTreeMap::from([(123, 2)]))]),
+            ..Default::default()
+        };
+        let expected = serde_json::to_value(&snapshot).unwrap();
+        shared.update(Update::State(snapshot));
+        let previous = shared.state.lock().unwrap().snapshot.clone().unwrap();
+        let reply = shared.status();
+        assert!(reply.ok);
+        assert_eq!(reply.message, "connected");
+        assert_eq!(reply.data["snapshot"], expected);
+        assert_eq!(reply.data["rid"], 123);
+        assert_eq!(reply.data["phase"], "connected");
+        assert!(serde_json::from_value::<Snapshot>(reply.data["snapshot"].clone()).is_ok());
+        shared.update(Update::State(Snapshot::default()));
+        assert_eq!(serde_json::to_value(previous.as_ref()).unwrap(), expected);
+        assert!(shared.status().data["snapshot"]["networks"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn tagged_result_reaches_only_its_waiter() {
         let shared = shared();

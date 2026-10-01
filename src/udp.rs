@@ -346,6 +346,7 @@ const RECEIVE_WINDOW: u16 = 512;
 /// Stop draining the socket while this many messages await the caller; the
 /// kernel buffer holds the rest instead of the channel failing.
 const READY_HIGH_WATER: usize = 128;
+const RETRY_INTERVAL: Duration = Duration::from_millis(400);
 
 struct Pending {
     command: Vec<u8>,
@@ -355,7 +356,10 @@ struct Pending {
 struct Fragment {
     total: usize,
     count: u16,
-    parts: BTreeMap<u32, (usize, Vec<u8>)>,
+    data: Vec<u8>,
+    parts: Vec<(usize, usize)>,
+    received: u128,
+    received_count: u16,
 }
 pub struct Enet {
     pub socket: UdpSocket,
@@ -368,6 +372,8 @@ pub struct Enet {
     outgoing: u16,
     incoming: u16,
     pending: BTreeMap<(u8, u16), Pending>,
+    oldest_pending: Option<u16>,
+    next_retry: Option<Instant>,
     ordered: BTreeMap<u16, (u16, Vec<u8>)>,
     fragments: BTreeMap<u16, Fragment>,
     ready: VecDeque<Vec<u8>>,
@@ -526,6 +532,8 @@ impl Enet {
             outgoing: 0,
             incoming: 0,
             pending: BTreeMap::new(),
+            oldest_pending: None,
+            next_retry: None,
             ordered: BTreeMap::new(),
             fragments: BTreeMap::new(),
             ready: VecDeque::new(),
@@ -599,22 +607,46 @@ impl Enet {
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
         ensure!(self.pending.len() < 256, "UDP send window exhausted");
         self.transmit(&command)?;
+        let key = (command[1], u16be(&command, 2));
+        let last = Instant::now();
+        if key.0 == 0 && self.oldest_pending.is_none() {
+            self.oldest_pending = Some(key.1);
+        }
+        let retry = last + RETRY_INTERVAL;
+        self.next_retry = Some(self.next_retry.map_or(retry, |next| next.min(retry)));
         self.pending.insert(
-            (command[1], u16be(&command, 2)),
+            key,
             Pending {
                 command,
-                last: Instant::now(),
+                last,
                 tries: 1,
             },
         );
         Ok(())
     }
+    fn remove_pending(&mut self, key: (u8, u16)) -> Option<Pending> {
+        let removed = self.pending.remove(&key)?;
+        if key.0 == 0 && self.oldest_pending == Some(key.1) {
+            // Commands are queued in wrapping sequence order. Two tree lookups
+            // find the next outstanding command, skipping any acknowledged holes.
+            self.oldest_pending = self
+                .pending
+                .range((0, key.1)..=(0, u16::MAX))
+                .next()
+                .or_else(|| self.pending.range((0, 0)..(0, key.1)).next())
+                .map(|((_, sequence), _)| *sequence);
+        }
+        if self.pending.is_empty() {
+            self.next_retry = None;
+        }
+        // Otherwise the cached deadline may be earlier than necessary after an
+        // ACK. Keep that conservative bound until the due pass recalculates it,
+        // avoiding a timer scan on every acknowledgement.
+        Some(removed)
+    }
     fn in_flight(&self) -> usize {
-        self.pending
-            .keys()
-            .filter(|(channel, _)| *channel == 0)
-            .map(|(_, seq)| self.outgoing.wrapping_sub(*seq) as usize + 1)
-            .max()
+        self.oldest_pending
+            .map(|sequence| self.outgoing.wrapping_sub(sequence) as usize + 1)
             .unwrap_or(0)
     }
     /// Whether a message of `len` bytes fits the send window now. Callers drop
@@ -699,8 +731,8 @@ impl Enet {
         if let Some(deadline) = self.deadline {
             next = next.min(deadline);
         }
-        for pending in self.pending.values() {
-            next = next.min(pending.last + Duration::from_millis(400));
+        if let Some(retry) = self.next_retry {
+            next = next.min(retry);
         }
         let mut remaining = next.saturating_duration_since(now);
         // Public callers only expose an atomic stop flag. Peer workers provide a
@@ -752,19 +784,27 @@ impl Enet {
                 Err(e) => return Err(e.into()),
             }
         }
+        let now = Instant::now();
         ensure!(
-            self.last_receive.elapsed() < Duration::from_secs(35),
+            now.duration_since(self.last_receive) < Duration::from_secs(35),
             "UDP liveness timeout"
         );
-        for p in self.pending.values_mut() {
-            if p.last.elapsed() < Duration::from_millis(400) {
-                continue;
-            }
-            ensure!(p.tries < 20, "UDP acknowledgement timeout");
-            p.tries += 1;
-            p.last = Instant::now();
-            Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)?;
+        if self.next_retry.is_none_or(|next| now < next) {
+            return Ok(());
         }
+        let mut next_retry: Option<Instant> = None;
+        for p in self.pending.values_mut() {
+            let mut retry = p.last + RETRY_INTERVAL;
+            if now >= retry {
+                ensure!(p.tries < 20, "UDP acknowledgement timeout");
+                p.tries += 1;
+                p.last = now;
+                Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)?;
+                retry = now + RETRY_INTERVAL;
+            }
+            next_retry = Some(next_retry.map_or(retry, |next| next.min(retry)));
+        }
+        self.next_retry = next_retry;
         Ok(())
     }
     fn ingest(&mut self, b: &[u8]) -> Result<()> {
@@ -865,7 +905,7 @@ impl Enet {
                     self.remote_id = u16be(c, 4);
                     ensure!(self.remote_id < 0x7fff, "ENET peer id");
                     self.mtu = (u16be(c, 6) as usize).clamp(576, self.mtu);
-                    self.pending.remove(&(255, 1));
+                    self.remove_pending((255, 1));
                     self.connected = true;
                 }
             }
@@ -873,7 +913,7 @@ impl Enet {
             // so the sender retransmits it, instead of failing the channel.
             let accepted = match kind {
                 1 => {
-                    let acknowledged = self.pending.remove(&(channel, u16be(c, 4)));
+                    let acknowledged = self.remove_pending((channel, u16be(c, 4)));
                     if self.incoming_nonce.is_some()
                         && channel == 255
                         && u16be(c, 4) == 1
@@ -907,15 +947,23 @@ impl Enet {
         if ahead == 0 || ahead > 0x8000 {
             return true;
         }
-        // The next expected message is always taken: refusing it once the
-        // reorder buffer is full would stall the channel for good.
-        let full = self.ordered.len() >= 256 || self.ready.len() >= 256;
-        if ahead > RECEIVE_WINDOW || (full && ahead != 1) {
+        if !self.ordered_has_room(start) {
             return false;
         }
-        self.ordered
-            .entry(start)
-            .or_insert_with(|| (count, data.into_owned()));
+        if ahead == 1 {
+            // Preserve first-arrival precedence if this sequence was already
+            // buffered, while avoiding tree insertion on the usual in-order path.
+            let (count, data) = self
+                .ordered
+                .remove(&start)
+                .unwrap_or_else(|| (count, data.into_owned()));
+            self.incoming = self.incoming.wrapping_add(count);
+            self.ready.push_back(data);
+        } else {
+            self.ordered
+                .entry(start)
+                .or_insert_with(|| (count, data.into_owned()));
+        }
         while let Some((n, data)) = self.ordered.remove(&self.incoming.wrapping_add(1)) {
             self.incoming = self.incoming.wrapping_add(n);
             self.ready.push_back(data);
@@ -926,6 +974,13 @@ impl Enet {
         self.fragments
             .retain(|start, _| !matches!(start.wrapping_sub(incoming), 0 | 0x8001..));
         true
+    }
+    fn ordered_has_room(&self, start: u16) -> bool {
+        let ahead = start.wrapping_sub(self.incoming);
+        // The next expected message is always taken: refusing it once the
+        // reorder buffer is full would stall the channel for good.
+        ahead <= RECEIVE_WINDOW
+            && (ahead == 1 || (self.ordered.len() < 256 && self.ready.len() < 256))
     }
     fn fragment(&mut self, c: &[u8], payload: &[u8]) -> Result<bool> {
         let start = u16be(c, 4);
@@ -956,29 +1011,36 @@ impl Enet {
         let f = self.fragments.entry(start).or_insert_with(|| Fragment {
             total,
             count: count as u16,
-            parts: BTreeMap::new(),
+            data: vec![0; total],
+            parts: vec![(0, 0); count as usize],
+            received: 0,
+            received_count: 0,
         });
         ensure!(
             f.total == total && f.count == count as u16,
             "inconsistent UDP fragments"
         );
-        f.parts
-            .entry(index)
-            .or_insert_with(|| (offset, payload.to_vec()));
-        if f.parts.len() == count as usize {
-            let mut out = Vec::with_capacity(total);
-            for (offset, data) in f.parts.values() {
-                ensure!(*offset == out.len(), "overlapping/gapped UDP fragments");
-                out.extend_from_slice(data);
+        let bit = 1u128 << index;
+        if f.received & bit == 0 {
+            f.data[offset..offset + payload.len()].copy_from_slice(payload);
+            f.parts[index as usize] = (offset, payload.len());
+            f.received |= bit;
+            f.received_count += 1;
+        }
+        if f.received_count == f.count {
+            let mut assembled = 0;
+            for &(offset, len) in &f.parts {
+                ensure!(offset == assembled, "overlapping/gapped UDP fragments");
+                assembled += len;
             }
-            ensure!(out.len() == total, "UDP fragment total mismatch");
+            ensure!(assembled == total, "UDP fragment total mismatch");
             // Earlier parts have already been acknowledged. Keep them if the
             // reorder queue is full: the sender only retries the final part.
-            let accepted = self.accept_ordered(start, count as u16, Cow::Owned(out));
-            if accepted {
-                self.fragments.remove(&start);
+            if !self.ordered_has_room(start) {
+                return Ok(false);
             }
-            return Ok(accepted);
+            let complete = self.fragments.remove(&start).unwrap();
+            return Ok(self.accept_ordered(start, count as u16, Cow::Owned(complete.data)));
         }
         Ok(true)
     }
@@ -1177,6 +1239,14 @@ mod tests {
         assert_eq!(u32be(&wire, 0), crate::session::enet_checksum(&wire[..len]));
         wire[8..len].to_vec()
     }
+    fn refresh_retry_deadline(enet: &mut Enet) {
+        // Tests move command timestamps backwards to avoid real retry waits.
+        enet.next_retry = enet
+            .pending
+            .values()
+            .map(|pending| pending.last + RETRY_INTERVAL)
+            .min();
+    }
     #[test]
     fn readiness_wait_keeps_retransmission_deadlines_without_incoming_data() {
         let (mut e, remote) = pair();
@@ -1202,6 +1272,7 @@ mod tests {
         let pending = e.pending.get_mut(&(0, 1)).unwrap();
         pending.tries = 20;
         pending.last = Instant::now() - Duration::from_millis(250);
+        refresh_retry_deadline(&mut e);
         let worker = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             remote.send(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
@@ -1329,6 +1400,7 @@ mod tests {
         let new = received_command(&remote);
         // Only the first command is due; fresh entries must stay untouched.
         e.pending.get_mut(&(0, u16::MAX)).unwrap().last = Instant::now() - Duration::from_secs(1);
+        refresh_retry_deadline(&mut e);
         e.pump().unwrap();
         assert_eq!(received_command(&remote), old);
         assert_eq!(e.pending[&(0, 0)].tries, 1);
@@ -1336,6 +1408,7 @@ mod tests {
         for p in e.pending.values_mut() {
             p.last = Instant::now() - Duration::from_secs(1);
         }
+        refresh_retry_deadline(&mut e);
         e.pump().unwrap();
         assert_eq!(received_command(&remote), new);
         assert_eq!(received_command(&remote), old);
@@ -1407,6 +1480,7 @@ mod tests {
             pending.tries = 20;
             pending.last = Instant::now() - Duration::from_secs(1);
         }
+        refresh_retry_deadline(&mut e);
         remote
             .send_to(
                 &packet(&[1, 0, 0, 0, 0, 1, 0, 42]),
@@ -1434,6 +1508,7 @@ mod tests {
             pending.tries = 20;
             pending.last = Instant::now() - Duration::from_secs(1);
         }
+        refresh_retry_deadline(&mut e);
         assert!(e
             .pump()
             .unwrap_err()
@@ -1455,11 +1530,21 @@ mod tests {
     }
 
     fn fragment_of(start: u16, index: u32, data: &[u8]) -> Vec<u8> {
+        fragment_message(start, 2, index, 4, index * 2, data)
+    }
+    fn fragment_message(
+        start: u16,
+        count: u32,
+        index: u32,
+        total: u32,
+        offset: u32,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut b = vec![0x88, 0];
         b.extend(start.wrapping_add(index as u16).to_be_bytes());
         b.extend(start.to_be_bytes());
         b.extend((data.len() as u16).to_be_bytes());
-        for n in [2u32, index, 4, index * 2] {
+        for n in [count, index, total, offset] {
             b.extend(n.to_be_bytes());
         }
         b.extend(data);
@@ -1571,5 +1656,178 @@ mod tests {
         assert!(!e.has_room((SEND_WINDOW - 1) * (e.mtu - 32)));
         e.ingest(&packet(&[1, 0, 0, 0, 255, 255, 0, 42])).unwrap();
         assert_eq!(e.in_flight(), 0);
+    }
+
+    #[test]
+    fn cached_send_window_skips_acknowledged_holes_and_ignores_control_commands() {
+        let (mut e, _remote) = pair();
+        e.outgoing = u16::MAX - 2;
+        for data in [b"a", b"b", b"c", b"d"] {
+            e.send(data).unwrap();
+        }
+        e.queue(vec![0x85, 255, 0, 1]).unwrap();
+        assert_eq!(e.oldest_pending, Some(u16::MAX - 1));
+        assert_eq!(e.in_flight(), 4);
+        for sequence in [u16::MAX, 0] {
+            let mut ack = [1, 0, 0, 0, 0, 0, 0, 42];
+            ack[4..6].copy_from_slice(&sequence.to_be_bytes());
+            e.ingest(&packet(&ack)).unwrap();
+            assert_eq!(e.in_flight(), 4);
+        }
+        e.ingest(&packet(&[1, 0, 0, 0, 255, 254, 0, 42])).unwrap();
+        assert_eq!(e.oldest_pending, Some(1));
+        assert_eq!(e.in_flight(), 1);
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 99, 0, 42])).unwrap();
+        assert_eq!(e.oldest_pending, Some(1));
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+        assert!(e.oldest_pending.is_none());
+        assert_eq!(e.in_flight(), 0);
+        assert_eq!(e.pending.len(), 1);
+        assert!(e.next_retry.is_some());
+        e.ingest(&packet(&[1, 255, 0, 0, 0, 1, 0, 42])).unwrap();
+        assert!(e.pending.is_empty());
+        assert!(e.next_retry.is_none());
+    }
+
+    #[test]
+    fn acknowledged_retry_deadline_does_not_send_fresh_commands_early() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.send(b"old").unwrap();
+        received_command(&remote);
+        e.send(b"fresh").unwrap();
+        received_command(&remote);
+        e.pending.get_mut(&(0, 1)).unwrap().last = Instant::now() - Duration::from_secs(1);
+        refresh_retry_deadline(&mut e);
+        let fresh = e.pending[&(0, 2)].last;
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+        e.pump().unwrap();
+        assert_eq!(e.pending[&(0, 2)].last, fresh);
+        assert_eq!(e.pending[&(0, 2)].tries, 1);
+        assert_eq!(e.next_retry, Some(fresh + RETRY_INTERVAL));
+        remote.set_nonblocking(true).unwrap();
+        assert_eq!(
+            remote.recv(&mut [0; 4096]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 2, 0, 42])).unwrap();
+        assert!(e.next_retry.is_none());
+    }
+
+    #[test]
+    fn in_order_delivery_moves_owned_buffers_and_drains_buffered_messages() {
+        let (mut e, _remote) = pair();
+        let second = b"second".to_vec();
+        let second_ptr = second.as_ptr();
+        assert!(e.accept_ordered(2, 1, Cow::Owned(second)));
+        let first = b"first".to_vec();
+        let first_ptr = first.as_ptr();
+        assert!(e.accept_ordered(1, 1, Cow::Owned(first)));
+        assert!(e.ordered.is_empty());
+        assert_eq!(e.incoming, 2);
+        assert_eq!(e.ready[0].as_slice(), b"first");
+        assert_eq!(e.ready[0].as_ptr(), first_ptr);
+        assert_eq!(e.ready[1].as_slice(), b"second");
+        assert_eq!(e.ready[1].as_ptr(), second_ptr);
+    }
+
+    #[test]
+    fn reassembly_ignores_duplicate_payloads_and_moves_the_original_buffer() {
+        let (mut e, _remote) = pair();
+        e.ingest(&packet(&fragment_of(1, 0, b"ab"))).unwrap();
+        let buffer = e.fragments[&1].data.as_ptr();
+        e.ingest(&packet(&fragment_of(1, 0, b"XY"))).unwrap();
+        assert_eq!(e.fragments[&1].received_count, 1);
+        e.ingest(&packet(&fragment_of(1, 1, b"cd"))).unwrap();
+        assert!(e.fragments.is_empty());
+        assert_eq!(e.ready[0].as_slice(), b"abcd");
+        assert_eq!(e.ready[0].as_ptr(), buffer);
+    }
+
+    #[test]
+    fn reassembly_bitmap_handles_128_fragments_across_sequence_wraparound() {
+        let (mut e, _remote) = pair();
+        e.incoming = u16::MAX - 1;
+        let start = u16::MAX;
+        e.ingest(&packet(&fragment_message(
+            start,
+            128,
+            127,
+            128,
+            127,
+            &[127],
+        )))
+        .unwrap();
+        let buffer = e.fragments[&start].data.as_ptr();
+        for index in (0..127u32).rev() {
+            e.ingest(&packet(&fragment_message(
+                start,
+                128,
+                index,
+                128,
+                index,
+                &[index as u8],
+            )))
+            .unwrap();
+        }
+        assert!(e.fragments.is_empty());
+        assert_eq!(e.incoming, start.wrapping_add(127));
+        let expected: Vec<_> = (0..128u8).collect();
+        assert_eq!(e.ready[0].as_slice(), expected.as_slice());
+        assert_eq!(e.ready[0].as_ptr(), buffer);
+    }
+
+    #[test]
+    fn completed_reassembly_keeps_its_buffer_and_refuses_acks_under_queue_pressure() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.ingest(&packet(&fragment_of(300, 0, b"ab"))).unwrap();
+        assert_eq!(received_command(&remote), [1, 0, 0, 0, 1, 44, 0, 42]);
+        let buffer = e.fragments[&300].data.as_ptr();
+        for sequence in 2..=257 {
+            e.ordered.insert(sequence, (1, b"queued".to_vec()));
+        }
+        for _ in 0..2 {
+            e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+            assert_eq!(e.fragments[&300].data.as_ptr(), buffer);
+            assert_eq!(e.fragments[&300].data, b"abcd");
+            assert_eq!(e.fragments[&300].received_count, 2);
+        }
+        remote.set_nonblocking(true).unwrap();
+        assert_eq!(
+            remote.recv(&mut [0; 4096]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        remote.set_nonblocking(false).unwrap();
+        e.ordered.clear();
+        e.incoming = 299;
+        e.ingest(&packet(&fragment_of(300, 1, b"cd"))).unwrap();
+        assert_eq!(received_command(&remote), [1, 0, 0, 0, 1, 45, 0, 42]);
+        assert!(e.fragments.is_empty());
+        assert_eq!(e.ready[0].as_slice(), b"abcd");
+        assert_eq!(e.ready[0].as_ptr(), buffer);
+    }
+
+    #[test]
+    fn reassembly_rejects_gaps_overlaps_and_incomplete_totals_before_delivery() {
+        for (total, offset, expected) in [
+            (5, 3, "overlapping/gapped"),
+            (4, 1, "overlapping/gapped"),
+            (5, 2, "total mismatch"),
+        ] {
+            let (mut e, _remote) = pair();
+            e.ingest(&packet(&fragment_message(1, 2, 0, total, 0, b"ab")))
+                .unwrap();
+            let error = e
+                .ingest(&packet(&fragment_message(1, 2, 1, total, offset, b"cd")))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected));
+            assert!(e.ready.is_empty());
+            assert!(e.ordered.is_empty());
+        }
     }
 }

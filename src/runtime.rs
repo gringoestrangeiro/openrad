@@ -16,7 +16,7 @@ use crate::{
     wake::Wake,
 };
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -41,13 +41,16 @@ pub enum Command {
     Network(NetworkRequest),
     RetryPeers,
     RetryInterface,
+    Ping {
+        peer: u64,
+    },
     /// Correlate a CLI request with its eventual service acknowledgement.
     Tagged {
         id: u64,
         command: Box<Command>,
     },
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerState {
     #[default]
     Offline,
@@ -71,14 +74,14 @@ impl PeerState {
         }
     }
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PeerView {
     pub peer: Peer,
     pub status: PeerState,
     pub detail: String,
     pub transport: Option<TransportPath>,
 }
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Traffic {
     pub sent_bytes: u64,
     pub received_bytes: u64,
@@ -86,7 +89,7 @@ pub struct Traffic {
     pub received_frames: u64,
     pub dropped: u64,
 }
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub vip: Option<Ipv4Addr>,
     pub networks: Vec<Network>,
@@ -100,9 +103,16 @@ pub struct Snapshot {
     pub restricted_traffic: bool,
     pub retry_queued: usize,
     pub retry_active: usize,
+    pub force_relay: bool,
 }
 #[derive(Clone)]
 pub enum Update {
+    Ping {
+        peer: u64,
+        id: Option<u64>,
+        rtt_ms: Option<f64>,
+        error: Option<String>,
+    },
     State(Snapshot),
     Catalog {
         query: String,
@@ -130,6 +140,7 @@ pub struct Options {
     pub helper: Option<std::path::PathBuf>,
     /// Permit a headless control-only session when interface setup is unavailable.
     pub disable_interface: bool,
+    pub force_relay: bool,
     pub diagnostics: Diagnostics,
 }
 impl Options {
@@ -145,6 +156,18 @@ enum Message {
     Connected(u64, [u8; 6], TransportPath, bool),
     PeerRecord(Vec<u8>),
     Closed(u64, Option<String>),
+    Pong(u64, u64, f64),
+}
+
+pub const PING_TIMEOUT: Duration = Duration::from_millis(3000);
+pub const PING_TIMEOUT_MESSAGE: &str = "Peer not responding — they may be using a strict firewall.";
+pub const NETWORK_JOIN_DELAY: Duration = Duration::from_millis(50);
+const MAX_CONCURRENT_JOINS: usize = 128;
+
+#[derive(Clone, Copy)]
+struct PingProbe {
+    token: u64,
+    started: Instant,
 }
 
 /// Packet accounting cannot block peer keepalives behind the engine event queue.
@@ -154,6 +177,45 @@ struct TrafficCounters {
     sent_frames: AtomicU64,
     dropped: AtomicU64,
     receive_queue_dropped: AtomicU64,
+}
+
+/// Publish once per send batch, including progress before an I/O error.
+struct TrafficBatch<'a> {
+    counters: &'a TrafficCounters,
+    sent_bytes: u64,
+    sent_frames: u64,
+    dropped: u64,
+}
+impl<'a> TrafficBatch<'a> {
+    fn new(counters: &'a TrafficCounters) -> Self {
+        Self {
+            counters,
+            sent_bytes: 0,
+            sent_frames: 0,
+            dropped: 0,
+        }
+    }
+    fn sent(&mut self, len: usize) {
+        self.sent_bytes += len as u64;
+        self.sent_frames += 1;
+    }
+}
+impl Drop for TrafficBatch<'_> {
+    fn drop(&mut self) {
+        if self.sent_frames != 0 {
+            self.counters
+                .sent_bytes
+                .fetch_add(self.sent_bytes, Ordering::Relaxed);
+            self.counters
+                .sent_frames
+                .fetch_add(self.sent_frames, Ordering::Relaxed);
+        }
+        if self.dropped != 0 {
+            self.counters
+                .dropped
+                .fetch_add(self.dropped, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Retain lifecycle events in order while continuing attachment heartbeats.
@@ -194,6 +256,13 @@ struct Pending {
     id: u64,
     client_id: Option<u64>,
     until: Instant,
+}
+fn is_join_command(command: &Command) -> bool {
+    match command {
+        Command::Join(_) | Command::Network(NetworkRequest::Join { .. }) => true,
+        Command::Tagged { command, .. } => is_join_command(command),
+        _ => false,
+    }
 }
 struct ControlConfig {
     diagnostics: Diagnostics,
@@ -253,7 +322,9 @@ fn control_loop(
     let result = (|| -> Result<()> {
         let mut next_id = 100;
         let mut sequence = 0u32;
-        let mut pending: Option<Pending> = None;
+        let mut pending: Vec<Pending> = Vec::new();
+        let mut deferred = None;
+        let mut next_join = Instant::now();
         let mut heartbeat = Instant::now();
         let mut health = Instant::now() + Duration::from_secs(30);
         loop {
@@ -278,7 +349,7 @@ fn control_loop(
                     "records_received": received, "last_operation": last_operation,
                     "last_receive_age_ms": last_receive.elapsed().as_millis(),
                     "heartbeats_sent": heartbeats, "max_heartbeat_late_ms": heartbeat_late_ms,
-                    "pending_events": outbox.pending.len(), "operation_pending": pending.is_some(),
+                    "pending_events": outbox.pending.len(), "operation_pending": !pending.is_empty(),
                 }));
                 health = Instant::now() + Duration::from_secs(30);
             }
@@ -307,8 +378,20 @@ fn control_loop(
                     break;
                 }
             }
-            if pending.is_none() {
-                if let Ok(command) = commands.try_recv() {
+            if deferred.is_none() && pending.len() < MAX_CONCURRENT_JOINS {
+                deferred = commands.try_recv().ok();
+            }
+            if deferred.as_ref().is_some_and(|command| {
+                let join = is_join_command(command);
+                (pending.is_empty()
+                    || (join
+                        && pending
+                            .iter()
+                            .all(|p| matches!(&p.kind, PendingKind::Network(n) if n.is_join()))))
+                    && (!join || Instant::now() >= next_join)
+                    && pending.len() < MAX_CONCURRENT_JOINS
+            }) {
+                if let Some(command) = deferred.take() {
                     let (client_id, command) = match command {
                         Command::Tagged { id, command } => (Some(id), *command),
                         command => (None, command),
@@ -333,11 +416,14 @@ fn control_loop(
                     match prepared {
                         Ok((kind, bytes)) => {
                             session.send(&bytes).context("sending network command")?;
+                            if matches!(&kind, PendingKind::Network(n) if n.is_join()) {
+                                next_join = Instant::now() + NETWORK_JOIN_DELAY;
+                            }
                             diagnostics.event("control_operation_started", json!({
                                 "request_id": next_id,
                                 "kind": if matches!(&kind, PendingKind::Search { .. }) { "search" } else { "network" },
                             }));
-                            pending = Some(Pending {
+                            pending.push(Pending {
                                 kind,
                                 id: next_id,
                                 client_id,
@@ -361,8 +447,8 @@ fn control_loop(
                     }
                 }
             }
-            if pending.as_ref().is_some_and(|p| Instant::now() >= p.until) {
-                let expired = pending.take().unwrap();
+            if let Some(index) = pending.iter().position(|p| Instant::now() >= p.until) {
+                let expired = pending.remove(index);
                 diagnostics.event("control_operation_timeout", json!({
                     "request_id": expired.id,
                     "kind": if matches!(&expired.kind, PendingKind::Search { .. }) { "search" } else { "network" },
@@ -388,9 +474,18 @@ fn control_loop(
                 // allowing more commands; never optimistically report a successful leave.
                 bail!("network operation timed out; reconnect to reload server membership");
             }
+            let poll_ms =
+                if deferred.as_ref().is_some_and(is_join_command) && Instant::now() < next_join {
+                    next_join
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .clamp(1, 20) as i32
+                } else {
+                    20
+                };
             if !session
                 .stream
-                .ready(20)
+                .ready(poll_ms)
                 .context("polling attachment connection")?
             {
                 continue;
@@ -425,60 +520,88 @@ fn control_loop(
                 11 | 6 | 7 | 23 | 29 => outbox.push(Message::PeerRecord(data.clone())),
                 _ => {}
             }
-            let Some(p) = pending.as_mut() else {
-                continue;
+            let auth_target = if operation == 40 {
+                let mut targets = Vec::new();
+                for (index, p) in pending.iter().enumerate() {
+                    if let PendingKind::Network(network) = &p.kind {
+                        if network.accepts_auth_reply(&data)? {
+                            targets.push(index);
+                        }
+                    }
+                }
+                anyhow::ensure!(targets.len() <= 1, "Ambiguous network password reply; reconnect and join private networks individually");
+                let Some(index) = targets.first().copied() else {
+                    continue;
+                };
+                Some(index)
+            } else {
+                None
             };
-            let mut complete = None;
-            let mut catalog = None;
-            match &mut p.kind {
-                PendingKind::Search { query, cursor } if operation == 45 => {
-                    if listing_id(&data)? != p.id {
-                        diagnostics.event(
-                            "stale_search_reply",
-                            json!({"request_id": listing_id(&data)?, "expected_id": p.id}),
-                        );
-                        continue;
-                    }
-                    let (networks, next) = listing(&data, p.id)?;
-                    if p.client_id.is_some() {
-                        catalog = Some((networks, next));
-                    } else {
-                        outbox.push(Message::Update(Update::Catalog {
-                            query: query.clone(),
-                            networks,
-                            cursor: next,
-                            append: *cursor != 0,
-                        }));
-                    }
-                    complete = Some(("Public networks updated".to_owned(), false));
+            let mut index = 0;
+            while index < pending.len() {
+                if auth_target.is_some_and(|target| target != index) {
+                    index += 1;
+                    continue;
                 }
-                PendingKind::Network(network) => {
-                    let progress = network.handle(&data, &mut membership)?;
-                    if let Some(bytes) = progress.send {
-                        session.send(&bytes)?;
+                let p = &mut pending[index];
+                let mut complete = None;
+                let mut catalog = None;
+                match &mut p.kind {
+                    PendingKind::Search { query, cursor } if operation == 45 => {
+                        if listing_id(&data)? != p.id {
+                            diagnostics.event(
+                                "stale_search_reply",
+                                json!({"request_id": listing_id(&data)?, "expected_id": p.id}),
+                            );
+                            index += 1;
+                            continue;
+                        }
+                        let (networks, next) = listing(&data, p.id)?;
+                        if p.client_id.is_some() {
+                            catalog = Some((networks, next));
+                        } else {
+                            outbox.push(Message::Update(Update::Catalog {
+                                query: query.clone(),
+                                networks,
+                                cursor: next,
+                                append: *cursor != 0,
+                            }));
+                        }
+                        complete = Some(("Public networks updated".to_owned(), false));
                     }
-                    if let Some(result) = progress.complete {
-                        complete = Some((result.message, result.error));
+                    PendingKind::Network(network) => {
+                        let progress = network.handle(&data, &mut membership)?;
+                        if let Some(bytes) = progress.send {
+                            session.send(&bytes)?;
+                        }
+                        if let Some(result) = progress.complete {
+                            complete = Some((result.message, result.error));
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
-            }
-            if let Some((message, error)) = complete {
-                diagnostics.event(
-                    "control_operation_completed",
-                    json!({"request_id": p.id, "error": error}),
-                );
-                outbox.push(Message::Membership(membership.clone()));
-                outbox.push(Message::Update(match p.client_id {
-                    Some(id) => Update::CommandResult {
-                        id,
-                        message,
-                        error,
-                        catalog,
-                    },
-                    None => Update::Operation { message, error },
-                }));
-                pending = None;
+                if let Some((message, error)) = complete {
+                    diagnostics.event(
+                        "control_operation_completed",
+                        json!({"request_id": p.id, "error": error}),
+                    );
+                    outbox.push(Message::Membership(membership.clone()));
+                    outbox.push(Message::Update(match p.client_id {
+                        Some(id) => Update::CommandResult {
+                            id,
+                            message,
+                            error,
+                            catalog,
+                        },
+                        None => Update::Operation { message, error },
+                    }));
+                    pending.remove(index);
+                } else {
+                    index += 1;
+                }
+                if auth_target.is_some() {
+                    break;
+                }
             }
         }
         Ok(())
@@ -506,6 +629,7 @@ fn control_loop(
 struct Worker {
     stop: Arc<AtomicBool>,
     sender: SyncSender<Arc<Vec<u8>>>,
+    ping: SyncSender<PingProbe>,
     join: JoinHandle<()>,
     mac: Option<[u8; 6]>,
     incoming: bool,
@@ -690,15 +814,15 @@ fn request_peer_retries(
 
 struct PeerEvents {
     lifecycle: SyncSender<Message>,
-    packets: SyncSender<(u64, Vec<u8>)>,
+    packets: SyncSender<(u64, tunnel::OwnedFrame)>,
     traffic: Arc<TrafficCounters>,
     diagnostics: Diagnostics,
     attempt: u64,
     wake: Arc<Wake>,
 }
 impl PeerEvents {
-    fn packet(&self, rid: u64, frame: &[u8]) {
-        if self.packets.try_send((rid, frame.to_vec())).is_err() {
+    fn packet(&self, rid: u64, frame: tunnel::OwnedFrame) {
+        if self.packets.try_send((rid, frame)).is_err() {
             self.traffic.dropped.fetch_add(1, Ordering::Relaxed);
             self.traffic
                 .receive_queue_dropped
@@ -717,15 +841,15 @@ fn peer_loop(
     stop: Arc<AtomicBool>,
     events: PeerEvents,
     frames: Receiver<Arc<Vec<u8>>>,
+    pings: Receiver<PingProbe>,
     incoming: Option<Setup>,
+    force_relay: bool,
     wake: Arc<Wake>,
 ) {
     let rid = peer.rid;
     let started = Instant::now();
     let mut connected_at = None;
-    let mut last_receive = None;
-    let mut keepalives = 0u64;
-    let mut keepalive_replies = 0u64;
+    let mut activity = PeerActivity::default();
     let mut transport = None;
     let observe = |transport: &crate::peer::TransportReport| {
         events.diagnostics.event(
@@ -755,6 +879,7 @@ fn peer_loop(
                     &ReportDirectory::disabled(),
                     Duration::from_secs(45),
                     Some(stop.clone()),
+                    force_relay,
                     observe,
                 )?
             };
@@ -773,69 +898,15 @@ fn peer_loop(
                 channel.transport.incoming,
             ))?;
             events.wake.notify();
-            let mut heartbeat = Instant::now();
-            let mut sequence = 0u32;
-            let mut send_buffer =
-                Vec::with_capacity((10 + tunnel::MAX_FRAME + 9).div_ceil(16) * 16);
-            while !stop.load(Ordering::Relaxed) {
-                wake.clear();
-                if Instant::now() >= heartbeat {
-                    sequence = sequence.wrapping_add(1);
-                    if channel.send(&tunnel::keepalive(sequence, false))? {
-                        keepalives += 1;
-                        heartbeat = Instant::now() + Duration::from_secs(15);
-                    } else {
-                        heartbeat = Instant::now() + Duration::from_millis(200);
-                    }
-                }
-                let send_started = Instant::now();
-                let mut sent = 0;
-                for frame in frames.try_iter().take(32) {
-                    sent += 1;
-                    if channel.send_frame(&frame, &mut send_buffer)? {
-                        events
-                            .traffic
-                            .sent_bytes
-                            .fetch_add(frame.len() as u64, Ordering::Relaxed);
-                        events.traffic.sent_frames.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        events.traffic.dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    if send_started.elapsed() >= Duration::from_millis(20) {
-                        break;
-                    }
-                }
-                let busy = sent == 32 || send_started.elapsed() >= Duration::from_millis(20);
-                let wait_ms = if busy {
-                    0
-                } else {
-                    heartbeat
-                        .saturating_duration_since(Instant::now())
-                        .as_nanos()
-                        .div_ceil(1_000_000)
-                        .min(i32::MAX as u128) as i32
-                };
-                if !channel.stream.ready_or_wake(wait_ms, &wake)? {
-                    continue;
-                }
-                let data = channel.receive()?;
-                last_receive = Some(Instant::now());
-                match tunnel::decode(&data)? {
-                    tunnel::Packet::Keepalive {
-                        sequence,
-                        reply: false,
-                    } => {
-                        channel.send(&tunnel::keepalive(sequence, true))?;
-                    }
-                    tunnel::Packet::Keepalive { reply: true, .. } => keepalive_replies += 1,
-                    tunnel::Packet::Frames(frames) => {
-                        for frame in frames {
-                            events.packet(rid, frame);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            forward_peer(
+                &mut channel,
+                &events,
+                frames,
+                pings,
+                &stop,
+                &wake,
+                &mut activity,
+            )?;
             Ok(())
         })();
     let error = if stop.load(Ordering::Relaxed) {
@@ -850,12 +921,153 @@ fn peer_loop(
             "cancelled": stop.load(Ordering::Relaxed), "error": error,
             "lifetime_ms": started.elapsed().as_millis(),
             "connected_ms": connected_at.map(|t| t.elapsed().as_millis()),
-            "last_receive_age_ms": last_receive.map(|t| t.elapsed().as_millis()),
-            "keepalives_sent": keepalives, "keepalive_replies": keepalive_replies,
+            "last_receive_age_ms": activity.last_receive.map(|t| t.elapsed().as_millis()),
+            "keepalives_sent": activity.keepalives, "keepalive_replies": activity.keepalive_replies,
         }),
     );
     let _ = events.lifecycle.send(Message::Closed(rid, error));
     events.wake.notify();
+}
+
+fn expire_pings(pings: &mut BTreeMap<u64, (PingProbe, Option<u64>)>, now: Instant) -> Vec<Update> {
+    let expired: Vec<_> = pings
+        .iter()
+        .filter(|(_, (ping, _))| now.saturating_duration_since(ping.started) >= PING_TIMEOUT)
+        .map(|(peer, _)| *peer)
+        .collect();
+    expired
+        .into_iter()
+        .map(|peer| {
+            let (_, id) = pings.remove(&peer).unwrap();
+            Update::Ping {
+                peer,
+                id,
+                rtt_ms: None,
+                error: Some(PING_TIMEOUT_MESSAGE.into()),
+            }
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct PeerActivity {
+    last_receive: Option<Instant>,
+    keepalives: u64,
+    keepalive_replies: u64,
+}
+
+fn forward_peer(
+    channel: &mut PeerChannel,
+    events: &PeerEvents,
+    frames: Receiver<Arc<Vec<u8>>>,
+    pings: Receiver<PingProbe>,
+    stop: &AtomicBool,
+    wake: &Wake,
+    activity: &mut PeerActivity,
+) -> Result<()> {
+    let rid = channel.peer.rid;
+    let mut heartbeat = Instant::now();
+    let mut sequence = 0u32;
+    let mut probe: Option<(PingProbe, Option<(u32, Instant)>)> = None;
+    let mut send_buffer = Vec::with_capacity((10 + tunnel::MAX_FRAME + 9).div_ceil(16) * 16);
+    while !stop.load(Ordering::Relaxed) {
+        wake.clear();
+        if probe.is_some_and(|(p, _)| p.started.elapsed() >= PING_TIMEOUT) {
+            probe = None;
+        }
+        if let Ok(ping) = pings.try_recv() {
+            if ping.started.elapsed() < PING_TIMEOUT {
+                probe = Some((ping, None));
+            }
+        }
+        if let Some((_, probe_sequence)) = probe.as_mut() {
+            if probe_sequence.is_none() {
+                sequence = sequence.wrapping_add(1);
+                if channel.send(&tunnel::keepalive(sequence, false))? {
+                    *probe_sequence = Some((sequence, Instant::now()));
+                }
+            }
+        }
+        if Instant::now() >= heartbeat {
+            sequence = sequence.wrapping_add(1);
+            if channel.send(&tunnel::keepalive(sequence, false))? {
+                activity.keepalives += 1;
+                heartbeat = Instant::now() + Duration::from_secs(15);
+            } else {
+                heartbeat = Instant::now() + Duration::from_millis(200);
+            }
+        }
+        let send_started = Instant::now();
+        let mut sent = 0;
+        {
+            let mut batch = TrafficBatch::new(&events.traffic);
+            for frame in frames.try_iter().take(32) {
+                sent += 1;
+                if channel.send_frame(&frame, &mut send_buffer)? {
+                    batch.sent(frame.len());
+                } else {
+                    batch.dropped += 1;
+                }
+                if send_started.elapsed() >= Duration::from_millis(20) {
+                    break;
+                }
+            }
+        }
+        let busy = sent == 32 || send_started.elapsed() >= Duration::from_millis(20);
+        let wait_ms = if busy {
+            0
+        } else {
+            heartbeat
+                .min(probe.map_or(heartbeat, |(p, sent)| {
+                    if sent.is_some() {
+                        p.started + PING_TIMEOUT
+                    } else {
+                        Instant::now() + Duration::from_millis(10)
+                    }
+                }))
+                .saturating_duration_since(Instant::now())
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min(i32::MAX as u128) as i32
+        };
+        if !channel.stream.ready_or_wake(wait_ms, wake)? {
+            continue;
+        }
+        let data = channel.receive()?;
+        activity.last_receive = Some(Instant::now());
+        match tunnel::decode_owned(data)? {
+            tunnel::OwnedPacket::Keepalive {
+                sequence,
+                reply: false,
+            } => {
+                channel.send(&tunnel::keepalive(sequence, true))?;
+            }
+            tunnel::OwnedPacket::Keepalive {
+                reply: true,
+                sequence,
+            } => {
+                activity.keepalive_replies += 1;
+                if let Some((ping, Some((expected, sent_at)))) = probe {
+                    if sequence == expected && ping.started.elapsed() < PING_TIMEOUT {
+                        events.lifecycle.send(Message::Pong(
+                            rid,
+                            ping.token,
+                            sent_at.elapsed().as_secs_f64() * 1000.0,
+                        ))?;
+                        events.wake.notify();
+                        probe = None;
+                    }
+                }
+            }
+            tunnel::OwnedPacket::Frames(frames) => {
+                for frame in frames {
+                    events.packet(rid, frame);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 pub fn base_peer_state(peer: &Peer) -> PeerState {
@@ -899,12 +1111,18 @@ fn refresh_membership(
                 .iter()
                 .any(|id| membership.networks.contains_key(id))
     }) {
-        let view = snapshot.peers.entry(p.rid).or_insert_with(|| PeerView {
-            peer: p.clone(),
-            status: base_peer_state(p),
-            detail: String::new(),
-            transport: None,
-        });
+        let view = match snapshot.peers.entry(p.rid) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(PeerView {
+                    peer: p.clone(),
+                    status: base_peer_state(p),
+                    detail: String::new(),
+                    transport: None,
+                });
+                continue;
+            }
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+        };
         // States 1 and 5 are both eligible online states. A presence refresh
         // between them does not invalidate an authenticated identity/VIP binding.
         if base_peer_state(&view.peer) != base_peer_state(p)
@@ -925,11 +1143,19 @@ fn refresh_membership(
                 }
             }
         }
-        view.peer = p.clone();
+        // Derived Clone on Peer replaces the whole struct. Refresh fields
+        // directly to reuse strings and leave unchanged memberships allocated.
+        view.peer.rid = p.rid;
+        view.peer.name.clone_from(&p.name);
+        view.peer.vip = p.vip;
+        view.peer.server.clone_from(&p.server);
+        view.peer.state = p.state;
+        if view.peer.network_ids != p.network_ids {
+            view.peer.network_ids.clone_from(&p.network_ids);
+        }
     }
     let eligible: BTreeSet<_> = membership
-        .eligible(own_rid, &[])?
-        .into_iter()
+        .eligible_refs(own_rid, &[])?
         .map(|p| p.rid)
         .collect();
     for (rid, w) in workers {
@@ -976,11 +1202,12 @@ pub fn run(
         vip: Some(vip),
         latency_ms: session.latency,
         restricted_traffic: options.traffic_peers.is_some(),
+        force_relay: options.force_relay,
         ..Default::default()
     };
     let (tx, rx) = mpsc::sync_channel(512);
     let wake = Arc::new(Wake::new()?);
-    let (packet_tx, packets) = mpsc::sync_channel::<(u64, Vec<u8>)>(512);
+    let (packet_tx, packets) = mpsc::sync_channel::<(u64, tunnel::OwnedFrame)>(512);
     let traffic = Arc::new(TrafficCounters::default());
     let (control_tx, control_rx) = mpsc::sync_channel(8);
     let (wire_tx, wire_rx) = mpsc::sync_channel(ADVERTISEMENT_QUEUE);
@@ -1009,6 +1236,8 @@ pub fn run(
     });
     let modulus = Arc::new(modulus);
     let mut workers: BTreeMap<u64, Worker> = BTreeMap::new();
+    let mut pings: BTreeMap<u64, (PingProbe, Option<u64>)> = BTreeMap::new();
+    let mut ping_token = 0u64;
     let mut retired = Vec::new();
     let mut tap: Option<Tap> = None;
     let mut attempted_interface = false;
@@ -1044,7 +1273,44 @@ pub fn run(
             if command_received {
                 schedule_dirty = true;
             }
+            let (client_id, command) = match command {
+                Ok(Command::Tagged { id, command }) => (Some(id), Ok(*command)),
+                other => (None, other),
+            };
             match command {
+                Ok(Command::Ping { peer }) => {
+                    let error = match pings.entry(peer) {
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            Some("A ping is already running for this peer.")
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            if let Some(worker) = workers.get(&peer).filter(|w| w.mac.is_some()) {
+                                ping_token = ping_token.wrapping_add(1);
+                                let probe = PingProbe {
+                                    token: ping_token,
+                                    started: Instant::now(),
+                                };
+                                if worker.ping.try_send(probe).is_ok() {
+                                    entry.insert((probe, client_id));
+                                    worker.wake.notify();
+                                    None
+                                } else {
+                                    Some("Peer channel is unavailable.")
+                                }
+                            } else {
+                                Some("Connect to this peer before testing RTT.")
+                            }
+                        }
+                    };
+                    if let Some(error) = error {
+                        report(Update::Ping {
+                            peer,
+                            id: client_id,
+                            rtt_ms: None,
+                            error: Some(error.into()),
+                        });
+                    }
+                }
                 Ok(Command::RetryInterface) => {
                     attempted_interface = false;
                 }
@@ -1062,6 +1328,13 @@ pub fn run(
                     });
                 }
                 Ok(c) => {
+                    let c = match client_id {
+                        Some(id) => Command::Tagged {
+                            id,
+                            command: Box::new(c),
+                        },
+                        None => c,
+                    };
                     if let Some(update) = forward_command(&control_tx, c)? {
                         diagnostics.event("control_command_queue_full", json!({}));
                         report(update);
@@ -1070,10 +1343,26 @@ pub fn run(
                 Err(mpsc::TryRecvError::Disconnected) => break,
                 Err(mpsc::TryRecvError::Empty) => {}
             }
+            for update in expire_pings(&mut pings, Instant::now()) {
+                report(update);
+            }
             let mut new_channels = BTreeSet::new();
             for message in rx.try_iter().take(512) {
                 schedule_dirty = true;
                 match message {
+                    Message::Pong(peer, token, rtt_ms) => {
+                        if pings.get(&peer).is_some_and(|(p, _)| {
+                            p.token == token && p.started.elapsed() < PING_TIMEOUT
+                        }) {
+                            let (_, id) = pings.remove(&peer).unwrap();
+                            report(Update::Ping {
+                                peer,
+                                id,
+                                rtt_ms: Some(rtt_ms),
+                                error: None,
+                            });
+                        }
+                    }
                     Message::Membership(m) => {
                         membership = m;
                         membership_changed = true;
@@ -1285,10 +1574,18 @@ pub fn run(
                         remaining_retries -= 1;
                     }
                     let peer = snapshot.peers[&rid].peer.clone();
-                    let setup = incoming.take(rid, Policy::All);
+                    let setup = incoming.take(
+                        rid,
+                        if options.force_relay {
+                            Policy::Relay
+                        } else {
+                            Policy::All
+                        },
+                    );
                     let is_incoming = setup.is_some();
                     snapshot.peers.get_mut(&rid).unwrap().status = PeerState::Connecting;
                     let (sender, frames) = mpsc::sync_channel(64);
+                    let (ping, probes) = mpsc::sync_channel(1);
                     let peer_stop = Arc::new(AtomicBool::new(false));
                     let peer_wake = Arc::new(Wake::new()?);
                     attempt += 1;
@@ -1303,14 +1600,28 @@ pub fn run(
                         wake: wake.clone(),
                     };
                     let notify = peer_wake.clone();
+                    let force_relay = options.force_relay;
                     let join = thread::spawn(move || {
-                        peer_loop(id, key, vip, peer, cancel, events, frames, setup, notify)
+                        peer_loop(
+                            id,
+                            key,
+                            vip,
+                            peer,
+                            cancel,
+                            events,
+                            frames,
+                            probes,
+                            setup,
+                            force_relay,
+                            notify,
+                        )
                     });
                     workers.insert(
                         rid,
                         Worker {
                             stop: peer_stop,
                             sender,
+                            ping,
                             join,
                             mac: None,
                             incoming: is_incoming,
@@ -1524,6 +1835,13 @@ mod control_tests {
             Self::with_diagnostics(block_events, Diagnostics::default())
         }
         fn with_diagnostics(block_events: bool, diagnostics: Diagnostics) -> Self {
+            Self::with_timeout(block_events, diagnostics, Duration::from_millis(300))
+        }
+        fn with_timeout(
+            block_events: bool,
+            diagnostics: Diagnostics,
+            operation_timeout: Duration,
+        ) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
             let (remote, _) = listener.accept().unwrap();
@@ -1563,7 +1881,7 @@ mod control_tests {
                     ControlConfig {
                         diagnostics,
                         heartbeat_interval: Duration::from_millis(25),
-                        operation_timeout: Duration::from_millis(300),
+                        operation_timeout,
                         wake: None,
                     },
                 )
@@ -1633,6 +1951,328 @@ mod control_tests {
             h.events.recv_timeout(Duration::from_secs(2)).unwrap(),
             Message::Membership(_)
         ));
+    }
+    fn join_acknowledgement(id: u64, name: &str, guid: [u8; 16]) -> Vec<u8> {
+        [
+            u32v(SERVER_OP, 37),
+            tlv(
+                0x131a,
+                &[
+                    u32v(0x0100030c, 2),
+                    u64v(0x02000340, id),
+                    tlv(
+                        0x1316,
+                        &tlv(
+                            0x1315,
+                            &[
+                                tlv(0x0d000309, &guid),
+                                textv(0x03000306, name).unwrap(),
+                                u32v(0x0100030a, 1),
+                            ]
+                            .concat(),
+                        ),
+                    ),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat()
+    }
+    fn join_approval(guid: [u8; 16]) -> Vec<u8> {
+        [
+            u32v(SERVER_OP, 42),
+            tlv(
+                0x131f,
+                &tlv(
+                    0x131e,
+                    &[tlv(0x0d000309, &guid), u64v(0x020001e1, 2)].concat(),
+                ),
+            ),
+        ]
+        .concat()
+    }
+    #[test]
+    fn overlapping_public_joins_are_paced_and_acknowledged_out_of_order() {
+        let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
+        for (id, name) in [(21, "First LAN"), (22, "Second LAN")] {
+            h.commands
+                .send(Command::Tagged {
+                    id,
+                    command: Box::new(Command::Join(name.into())),
+                })
+                .unwrap();
+        }
+        h.receive_operation(39);
+        let first = Instant::now();
+        h.receive_operation(39);
+        assert!(
+            first.elapsed() >= Duration::from_millis(45),
+            "join starts must be spaced by 50 ms (allowing socket observation jitter)"
+        );
+        // Both requests are on the wire before either server response arrives.
+        for (id, name, guid) in [(102, "Second LAN", [2; 16]), (101, "First LAN", [1; 16])] {
+            h.remote
+                .send(&join_acknowledgement(id, name, guid))
+                .unwrap();
+            h.remote.send(&join_approval(guid)).unwrap();
+        }
+        let mut results = Vec::new();
+        let mut membership = Membership::default();
+        while results.len() < 2 {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(m) => membership = m,
+                Message::Update(Update::CommandResult {
+                    id, message, error, ..
+                }) => {
+                    assert!(!error);
+                    results.push((id, message));
+                }
+                _ => panic!("concurrent joins disrupted the attachment"),
+            }
+        }
+        assert_eq!(
+            results,
+            [
+                (22, "Joined Second LAN".into()),
+                (21, "Joined First LAN".into())
+            ]
+        );
+        assert_eq!(membership.networks.len(), 2);
+        h.receive_operation(4);
+    }
+    #[test]
+    fn overlapping_private_joins_keep_password_handshakes_correlated() {
+        use crate::{
+            crypto::ShServer,
+            network::{network_identity, NetworkPassword},
+        };
+        let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(5));
+        for (id, name) in [(31, "Private one"), (32, "Private two")] {
+            h.commands
+                .send(Command::Tagged {
+                    id,
+                    command: Box::new(Command::Network(NetworkRequest::Join {
+                        name: name.into(),
+                        password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
+                    })),
+                })
+                .unwrap();
+        }
+        let hello_one = h.receive_operation(39);
+        let hello_two = h.receive_operation(39);
+        let blob = |data: &[u8]| {
+            field(
+                &records(field(&records(data).unwrap(), 0x131c).unwrap()).unwrap(),
+                0x0a00030e,
+            )
+            .unwrap()
+            .to_vec()
+        };
+        let mut servers = ["Private one", "Private two"].map(|name| {
+            ShServer::with_private(
+                network_identity(name),
+                b"synthetic password\0",
+                vec![3; 16],
+                num_bigint::BigUint::from(789123u32),
+            )
+            .unwrap()
+        });
+        let parameters = [
+            servers[0].hello(&blob(&hello_one)).unwrap(),
+            servers[1].hello(&blob(&hello_two)).unwrap(),
+        ];
+        let auth = |blob: &[u8], sequence: u32| {
+            [
+                u32v(SERVER_OP, 40),
+                tlv(
+                    0x131c,
+                    &[
+                        u64v(0x02000303, 0),
+                        u32v(0x010003be, sequence),
+                        tlv(0x0a00030e, blob),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat()
+        };
+        // Sequence alone is sufficient for legacy servers that omit request IDs.
+        for (index, name, guid) in [(1, "Private two", [2; 16]), (0, "Private one", [1; 16])] {
+            let sequence = index as u32 + 1;
+            h.remote.send(&auth(&parameters[index], sequence)).unwrap();
+            let public = h.receive_operation(39);
+            let challenge = servers[index].public(&blob(&public)).unwrap();
+            h.remote.send(&auth(&challenge, sequence)).unwrap();
+            let proof = h.receive_operation(39);
+            let confirmation = servers[index].proof(&blob(&proof)).unwrap().0;
+            h.remote.send(&auth(&confirmation, sequence)).unwrap();
+            h.remote
+                .send(&join_acknowledgement(101 + index as u64, name, guid))
+                .unwrap();
+            h.remote.send(&join_approval(guid)).unwrap();
+        }
+        let mut results = Vec::new();
+        while results.len() < 2 {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(_) => {}
+                Message::Update(Update::CommandResult {
+                    id, message, error, ..
+                }) => {
+                    assert!(!error);
+                    results.push((id, message));
+                }
+                _ => panic!("password response was routed to the wrong network"),
+            }
+        }
+        assert_eq!(
+            results,
+            [
+                (32, "Joined Private two".into()),
+                (31, "Joined Private one".into())
+            ]
+        );
+    }
+    #[test]
+    fn a_join_refusal_does_not_cancel_another_pending_join() {
+        let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
+        for (id, name) in [(41, "Refused LAN"), (42, "Allowed LAN")] {
+            h.commands
+                .send(Command::Tagged {
+                    id,
+                    command: Box::new(Command::Join(name.into())),
+                })
+                .unwrap();
+        }
+        h.receive_operation(39);
+        h.receive_operation(39);
+        h.remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 37),
+                    tlv(
+                        0x131a,
+                        &[
+                            u32v(0x0100030c, 2),
+                            u64v(0x02000340, 101),
+                            u32v(0x010001d2, 20),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        h.remote
+            .send(&join_acknowledgement(102, "Allowed LAN", [2; 16]))
+            .unwrap();
+        h.remote.send(&join_approval([2; 16])).unwrap();
+        let mut results = BTreeMap::new();
+        while results.len() < 2 {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(_) => {}
+                Message::Update(Update::CommandResult { id, error, .. }) => {
+                    results.insert(id, error);
+                }
+                _ => panic!("a refused join disrupted the attachment"),
+            }
+        }
+        assert!(results[&41]);
+        assert!(!results[&42]);
+        h.receive_operation(4);
+    }
+    #[test]
+    fn uncorrelated_password_reply_remains_compatible_with_one_private_join() {
+        use crate::network::NetworkPassword;
+        let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
+        h.commands
+            .send(Command::Tagged {
+                id: 51,
+                command: Box::new(Command::Network(NetworkRequest::Join {
+                    name: "Private LAN".into(),
+                    password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
+                })),
+            })
+            .unwrap();
+        h.commands
+            .send(Command::Tagged {
+                id: 52,
+                command: Box::new(Command::Join("Public LAN".into())),
+            })
+            .unwrap();
+        h.receive_operation(39);
+        h.receive_operation(39);
+        h.remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 40),
+                    tlv(
+                        0x131c,
+                        &[
+                            u64v(0x02000303, 0),
+                            tlv(
+                                0x0a00030e,
+                                &crate::crypto::sh_record(0x10000000, &0u32.to_be_bytes()),
+                            ),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        h.remote
+            .send(&join_acknowledgement(102, "Public LAN", [2; 16]))
+            .unwrap();
+        h.remote.send(&join_approval([2; 16])).unwrap();
+        let mut results = BTreeMap::new();
+        while results.len() < 2 {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(_) => {}
+                Message::Update(Update::CommandResult { id, error, .. }) => {
+                    results.insert(id, error);
+                }
+                _ => panic!("legacy password reply interfered with the public join"),
+            }
+        }
+        assert!(results[&51]);
+        assert!(!results[&52]);
+    }
+    #[test]
+    fn ambiguous_password_replies_cannot_advance_multiple_private_joins() {
+        use crate::network::NetworkPassword;
+        let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
+        for name in ["Private one", "Private two"] {
+            h.commands
+                .send(Command::Network(NetworkRequest::Join {
+                    name: name.into(),
+                    password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
+                }))
+                .unwrap();
+        }
+        h.receive_operation(39);
+        h.receive_operation(39);
+        h.remote
+            .send(
+                &[
+                    u32v(SERVER_OP, 40),
+                    tlv(
+                        0x131c,
+                        &[
+                            u64v(0x02000303, 0),
+                            tlv(
+                                0x0a00030e,
+                                &crate::crypto::sh_record(0x10000000, &0u32.to_be_bytes()),
+                            ),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+            .unwrap();
+        assert!(
+            matches!(h.events.recv_timeout(Duration::from_secs(3)).unwrap(), Message::ControlFailed(error) if error.contains("Ambiguous network password reply"))
+        );
     }
 
     #[test]
@@ -1765,7 +2405,12 @@ mod control_tests {
             wake: Arc::new(Wake::new().unwrap()),
         };
         for rid in 1..=150 {
-            events.packet(rid, &[1, 2, 3]);
+            let tunnel::OwnedPacket::Frames(mut packet) =
+                tunnel::decode_owned(tunnel::encode(&[1; 14]).unwrap()).unwrap()
+            else {
+                unreachable!();
+            };
+            events.packet(rid, packet.next().unwrap());
         }
         assert_eq!(
             events.traffic.receive_queue_dropped.load(Ordering::Relaxed),
@@ -1779,6 +2424,28 @@ mod control_tests {
             .ok()
             .unwrap();
         assert!(matches!(notices.recv().unwrap(), Message::Closed(42, _)));
+    }
+
+    #[test]
+    fn send_batch_publishes_completed_traffic_even_on_an_io_error() {
+        fn send_then_fail(counters: &TrafficCounters) -> Result<()> {
+            let mut batch = TrafficBatch::new(counters);
+            batch.sent(42);
+            batch.sent(1514);
+            batch.dropped += 1;
+            bail!("synthetic send failure");
+        }
+        let counters = TrafficCounters::default();
+        assert!(send_then_fail(&counters).is_err());
+        {
+            let mut batch = TrafficBatch::new(&counters);
+            batch.sent(60);
+            batch.dropped += 2;
+        }
+        assert_eq!(counters.sent_bytes.load(Ordering::Relaxed), 1616);
+        assert_eq!(counters.sent_frames.load(Ordering::Relaxed), 3);
+        assert_eq!(counters.dropped.load(Ordering::Relaxed), 3);
+        assert_eq!(counters.receive_queue_dropped.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1848,6 +2515,7 @@ mod membership_tests {
 
     fn worker() -> Worker {
         Worker {
+            ping: mpsc::sync_channel(1).0,
             stop: Arc::new(AtomicBool::new(false)),
             sender: mpsc::sync_channel(1).0,
             join: thread::spawn(|| {}),
@@ -2256,5 +2924,99 @@ mod membership_tests {
             }
             workers.into_values().next().unwrap().join.join().unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::*;
+
+    #[test]
+    fn encrypted_ping_measures_only_the_correlated_reply_and_keeps_forwarding() {
+        let (mut local, mut remote) = crate::peer::synthetic_pair();
+        local.stream.sustain();
+        let (lifecycle, results) = mpsc::sync_channel(16);
+        let (packets, _) = mpsc::sync_channel(16);
+        let wake = Arc::new(Wake::new().unwrap());
+        let events = PeerEvents {
+            lifecycle,
+            packets,
+            traffic: Arc::default(),
+            diagnostics: Diagnostics::default(),
+            attempt: 1,
+            wake: wake.clone(),
+        };
+        let (frames_tx, frames) = mpsc::sync_channel(16);
+        let (probe_tx, probes) = mpsc::sync_channel(1);
+        probe_tx
+            .send(PingProbe {
+                token: 123,
+                started: Instant::now(),
+            })
+            .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (cancel, notify) = (stop.clone(), wake.clone());
+        let worker = thread::spawn(move || {
+            forward_peer(
+                &mut local,
+                &events,
+                frames,
+                probes,
+                &cancel,
+                &notify,
+                &mut PeerActivity::default(),
+            )
+        });
+        let packet = remote.receive().unwrap();
+        let tunnel::Packet::Keepalive {
+            sequence,
+            reply: false,
+        } = tunnel::decode(&packet).unwrap()
+        else {
+            panic!("expected an encrypted probe");
+        };
+        remote
+            .send(&tunnel::keepalive(sequence.wrapping_add(20), true))
+            .unwrap();
+        assert!(
+            results.recv_timeout(Duration::from_millis(20)).is_err(),
+            "unrelated replies cannot complete RTT"
+        );
+        remote.send(&tunnel::keepalive(sequence, true)).unwrap();
+        let Message::Pong(peer, token, rtt_ms) =
+            results.recv_timeout(Duration::from_secs(1)).unwrap()
+        else {
+            panic!("expected the RTT result");
+        };
+        assert_eq!((peer, token), (2, 123));
+        assert!((10. ..1000.).contains(&rtt_ms));
+        let frame = tunnel::gratuitous_arp(Ipv4Addr::new(26, 0, 0, 1));
+        frames_tx.send(Arc::new(frame.clone())).unwrap();
+        wake.notify();
+        loop {
+            let packet = remote.receive().unwrap();
+            if let tunnel::Packet::Frames(frames) = tunnel::decode(&packet).unwrap() {
+                assert_eq!(frames, vec![frame.as_slice()]);
+                break;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        wake.notify();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn ping_timeout_is_exactly_three_seconds_and_results_keep_the_request_id() {
+        let started = Instant::now();
+        let probe = PingProbe { token: 1, started };
+        let mut pings = BTreeMap::from([(2, (probe, Some(47)))]);
+        assert!(expire_pings(&mut pings, started + Duration::from_millis(2999)).is_empty());
+        let expired = expire_pings(&mut pings, started + Duration::from_millis(3000));
+        assert!(
+            matches!(&expired[..], [Update::Ping { peer: 2, id: Some(47), rtt_ms: None, error: Some(message) }]
+            if message == PING_TIMEOUT_MESSAGE)
+        );
+        assert!(pings.is_empty());
+        assert!(expire_pings(&mut pings, started + Duration::from_secs(10)).is_empty());
     }
 }

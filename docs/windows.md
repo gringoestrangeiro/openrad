@@ -1,19 +1,20 @@
 # Windows with TAP-Windows6
 
-OpenRad **0.9.5** includes **experimental Windows x64 support**. Windows has
+OpenRad **1.0.0** includes **experimental Windows x64 support**. Windows has
 been tested only on **Windows 10** so far; the tester reports it working perfectly
 in that setup after the native Direct3D/WARP startup fix. Windows 11 and other
 Windows environments still need validation. Please [open an issue](https://github.com/gringoestrangeiro/openrad/issues/new)
 with your configuration, results and relevant logs so Windows support can become
-stable for 1.0.0.
+stable in a later release.
 
 Both the desktop and persistent CLI use the shared VPN engine. The Layer 2
 interface uses the official OpenVPN TAP-Windows6 driver, component ID `tap0901`.
 No Radmin driver, Wintun driver, OpenVPN service, or vendor VPN runtime is used.
 
-The published binaries were built on Linux; no Windows runtime was executed by
-the release builder. The Windows 10 success and performance figures are
-user-provided test feedback. [Release details](releases/0.9.5.md) distinguish this
+The published binaries were built on Linux. Automated Windows test executables
+ran under Wine, but the release builder did not exercise a native Windows
+installation or TAP driver. The Windows 10 success and performance figures are
+user-provided test feedback. [Release details](releases/1.0.0.md) distinguish this
 feedback from Linux verification and list the remaining validation work.
 
 [Windows settings UI preview](screenshots/windows-settings-linux-preview.png) was
@@ -100,9 +101,10 @@ CLI shortcut opens an elevated PowerShell in the installation folder:
 
 CLI data defaults to `%LOCALAPPDATA%\openrad`; `--data-dir PATH` selects a
 dedicated profile. Files inherit an ACL granting access to the current user and
-SYSTEM. Desktop identities use Windows Credential Manager. CLI and desktop
-profiles are separate. The TAP device is exclusive, so use one TAP-enabled
-application at a time. The CLI background process is per-user, not an installed
+SYSTEM. Desktop identities use Windows Credential Manager; CLI-initialized identities
+retain their private file storage. The desktop and CLI share one profile and
+background session, so either frontend can be opened first and both can remain
+open. The TAP device is exclusive across different profiles. The CLI background process is per-user, not an installed
 Windows Service. Closing a terminal leaves it running; `openrad stop` shuts it down.
 For other commands see [CLI usage](cli.md) and [desktop usage](desktop.md).
 
@@ -513,7 +515,7 @@ rustup target add x86_64-pc-windows-gnu
 cargo build --workspace --release --target x86_64-pc-windows-gnu --locked
 cargo test --workspace --target x86_64-pc-windows-gnu --no-run --locked
 cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu --locked -- -D warnings
-python3 scripts/package-windows-installer.py --build-date 2026-09-30
+python3 scripts/package-windows-installer.py --build-date 2026-10-01
 ```
 
 Install NSIS 3.11+ and 7-Zip on the build host. Use `--makensis PATH` and set
