@@ -1241,6 +1241,7 @@ pub fn run(
     let mut retired = Vec::new();
     let mut tap: Option<Tap> = None;
     let mut attempted_interface = false;
+    let mut interface_worker: Option<JoinHandle<Result<Tap>>> = None;
     let started = Instant::now();
     let mut next_report = Instant::now();
     let mut membership_changed = true;
@@ -1312,7 +1313,9 @@ pub fn run(
                     }
                 }
                 Ok(Command::RetryInterface) => {
-                    attempted_interface = false;
+                    if interface_worker.is_none() {
+                        attempted_interface = false;
+                    }
                 }
                 Ok(Command::RetryPeers) => {
                     let count = request_peer_retries(
@@ -1632,7 +1635,7 @@ pub fn run(
                     );
                 }
             }
-            if !attempted_interface && !options.disable_interface {
+            if !attempted_interface && !options.disable_interface && interface_worker.is_none() {
                 // Keep the /8 interface stable across membership changes. Dynamic
                 // peer selection below governs forwarding without resetting sockets.
                 drop(tap.take());
@@ -1644,7 +1647,30 @@ pub fn run(
                     .clone()
                     .map(Ok)
                     .unwrap_or_else(std::env::current_exe)?;
-                match Tap::create_lan_with_helper(vip, &helper) {
+                let interface_stop = stop.clone();
+                interface_worker = Some(thread::spawn(move || {
+                    #[cfg(target_os = "linux")]
+                    {
+                        Tap::create_lan_with_helper_cancellable(vip, &helper, &interface_stop)
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        let _ = interface_stop;
+                        Tap::create_lan_with_helper(vip, &helper)
+                    }
+                }));
+                attempted_interface = true;
+            }
+            if interface_worker
+                .as_ref()
+                .is_some_and(|worker| worker.is_finished())
+            {
+                match interface_worker
+                    .take()
+                    .unwrap()
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("TAP setup worker failed")))
+                {
                     Ok(t) => {
                         tap = Some(t);
                         snapshot.interface_ready = true;
@@ -1654,11 +1680,11 @@ pub fn run(
                         new_channels.clear();
                     }
                     Err(e) => {
-                        snapshot.interface_error = Some(e.to_string());
+                        snapshot.interface_error = Some(format!("{e:#}"));
                         diagnostics.event("interface_failed", json!({"error": format!("{e:#}")}));
                     }
                 }
-                attempted_interface = true;
+                next_report = Instant::now();
             }
             if options.disable_interface {
                 attempted_interface = true;
@@ -1767,6 +1793,9 @@ pub fn run(
     }));
     drop(tap);
     stop.store(true, Ordering::Relaxed);
+    if let Some(worker) = interface_worker {
+        let _ = worker.join(); // Drops any interface completed during shutdown.
+    }
     for worker in workers.values() {
         worker.cancel();
     }

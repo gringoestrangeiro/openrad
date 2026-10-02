@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0 — 2026-10-02
+
+Fresh Linux and Windows builds include every change since v1.0.0. See the
+[release notes](docs/releases/1.1.0.md) and
+[file-by-file inventory](docs/releases/1.1.0-changes.md). Windows remains experimental.
+
+- Fix Linux TAP authorization from the detached shared service: fall back from noninteractive sudo to the session Polkit permission dialog instead of relying on a terminal-bound sudo timestamp. Resolve relative helper paths before elevation and keep administrator passwords outside OpenRad.
+- Run interface setup in a single worker so status, stop, and peer forwarding remain responsive during authorization. Bound dialogs to 120 seconds and elevated setup to 15 seconds, cancel pending Linux setup on Disconnect/Stop, ignore duplicate pending retries, and distinguish authorization refusal from actual setup failure before retrying. Update four-language guidance and add synthetic descriptor/fallback/cancellation/timeout regressions.
+- Limit local service clients to 32 workers and 128 queued commands. Enforce aggregate Unix read/write deadlines, reject oversized outgoing requests, and avoid exhausting Windows named-pipe instances under load.
+- Resolve curl and elevated PowerShell from protected system paths. Restrict PowerShell module lookup to system modules and embed the adapter configuration script in the setup helper, validating identifiers before executing it.
+- Reject loopback peer candidates on remote control-server routes and validate IPv4-mapped IPv6 candidates as IPv4. Preserve private LAN candidates and explicitly local control-server deployments.
+- Replace terminal control characters in remote display names while retaining Unicode and truncated-emoji tolerance; reject control characters in strict protocol text.
+- Read identities, passwords, settings, public moduli, and installer records with bounded regular-file reads. Reject FIFOs without waiting for a writer and retain broken/corrupt preferences for repair.
+- Keep private network passwords in zeroizing types across local IPC and clear serialized requests and Windows I/O buffers after use, preserving overlapped buffer ownership through completion/cancellation.
+- Refuse automatic identity registration when a saved credential-store identity cannot be ruled out because the store is locked/unavailable. Keep incomplete private profiles and broken identity links on their original storage path instead of treating them as fresh profiles; retain explicit private-file identity imports without requiring a credential store.
+
+- Validate with 279 default Linux tests, four offscreen rendering tests, formatting and Clippy for both targets, Windows test compilation, 30 mocked PowerShell cases, eight isolated Wine installer-flow cases, and two selected Windows I/O/security tests under Wine. Build fresh Debian 12/Rust 1.95 Linux and Rust 1.98/MinGW Windows binaries; native privileged Linux/Polkit and native Windows TAP/UAC validation remain outstanding.
+
 ## 1.0.0 — 2026-10-01
 
 This release includes all local changes since remote `main` at

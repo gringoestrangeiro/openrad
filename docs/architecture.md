@@ -60,6 +60,37 @@ RTT probes reuse authenticated tunnel keepalives with distinct sequence numbers,
 
 Operational reporting does not log session keys, authentication passwords, handshake secrets, or Ethernet payloads. Synthetic fixtures exercise protocol and cryptographic behavior without real accounts or live recordings.
 
+The service admits at most 32 concurrent local control workers and queues at most
+128 engine commands. Excess connections wait in the OS backlog; a full command
+queue returns an error so a frontend can retry. Unix request reads and reply
+writes have five-second aggregate deadlines. Password-bearing control requests
+use zeroizing storage, including serialized buffers. Windows overlapped buffers
+are cleared only after completion or cancellation has finished.
+
+Remote peer candidates cannot name loopback destinations unless the local
+control-server connection itself uses a loopback route. IPv4-mapped IPv6
+addresses are normalized before applying destination checks. Private IPv4 and
+IPv6 LAN candidates remain available for direct connections. Remote display
+names replace terminal control characters without rejecting ordinary Unicode
+or a member's truncated emoji. Local identity and preference readers check the
+opened regular file and cap the actual read, even if the file grows after the
+size check; Unix FIFOs cannot block those readers.
+
+Release checks use `/usr/bin/curl` on Linux and the Windows system directory's
+`curl.exe`, without executable lookup through PATH or the current directory.
+Elevated Windows setup/recovery uses system PowerShell and system modules.
+Adapter configuration executes the script embedded at build time; it does not
+execute a script from the installation directory after checking its hash.
+
 ## Current scope
 
 Linux TAP is runtime-tested. Windows TAP-Windows6 is experimental and cross-built on Linux. The tester reports successful operation on Windows 10; other Windows versions and broader networking configurations still need validation. Windows dual-stack TCP/UDP listeners explicitly permit IPv4-mapped traffic, and interface inventory uses `GetAdaptersAddresses`. Relay is a valid outcome for peers that cannot establish a direct channel. Difficult NAT combinations, long-running recovery behavior, Windows deployment, and other operating-system data planes remain areas for further testing/work. Protocol compatibility is not a claim of a completed security audit.
+
+Linux interface setup runs in a single cancellable worker so permission dialogs
+do not stall engine commands, snapshots, or peer forwarding. The helper sends a
+startup marker over the inherited Unix socket after elevation, distinguishing an
+authorization refusal (sudo-to-Polkit fallback) from setup errors (no fallback).
+Polkit uses the session agent; the socket is never used for administrator
+passwords. Stop cancels pending setup; a descriptor completed during shutdown is
+dropped with its ephemeral interface. Duplicate retries while setup is pending
+are ignored.

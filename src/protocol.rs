@@ -66,13 +66,21 @@ fn utf16(b: &[u8]) -> Result<Vec<u16>> {
 }
 pub fn text(b: &[u8]) -> Result<String> {
     let s = String::from_utf16(&utf16(b)?)?;
-    ensure!(!s.contains('\0'), "embedded NUL in text");
+    ensure!(
+        !s.chars().any(char::is_control),
+        "control character in text"
+    );
     Ok(s)
 }
 /// Names chosen by other users are decoded leniently: one member's truncated
 /// emoji must not make the whole membership message, and the session, fail.
 pub fn display_text(b: &[u8]) -> Result<String> {
-    Ok(String::from_utf16_lossy(&utf16(b)?).replace('\0', "\u{fffd}"))
+    // These names reach terminals as well as the desktop. Do not allow remote
+    // members to emit escape sequences, overwrite lines or spoof CLI output.
+    Ok(String::from_utf16_lossy(&utf16(b)?)
+        .chars()
+        .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+        .collect())
 }
 pub fn tlv(tag: u32, b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + b.len());
@@ -89,7 +97,7 @@ pub fn u64v(tag: u32, v: u64) -> Vec<u8> {
 }
 pub fn textv(tag: u32, s: &str) -> Result<Vec<u8>> {
     ensure!(
-        s.chars().all(|c| c as u32 >= 32),
+        !s.chars().any(char::is_control),
         "control character in text"
     );
     let mut b: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
@@ -123,6 +131,24 @@ pub fn direct_candidates(
     operation: u32,
     root: u32,
 ) -> Result<(Vec<TcpCandidate>, Vec<String>)> {
+    direct_candidates_on_route(
+        data,
+        connection_id,
+        operation,
+        root,
+        std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+    )
+}
+
+/// Loopback candidates are only usable in an explicitly local control-server
+/// deployment. A remote member cannot opt into that exception with a flag.
+pub(crate) fn direct_candidates_on_route(
+    data: &[u8],
+    connection_id: u64,
+    operation: u32,
+    root: u32,
+    route_ip: std::net::IpAddr,
+) -> Result<(Vec<TcpCandidate>, Vec<String>)> {
     let outer = records(data)?;
     ensure!(op(data)? == operation, "unexpected candidate operation");
     ensure!(
@@ -139,16 +165,9 @@ pub fn direct_candidates(
         ensure!(index < 32, "direct candidate limit");
         let parsed = (|| -> Result<TcpCandidate> {
             let f = records(r.value)?;
-            let ip: std::net::IpAddr = text(field(&f, 0x030001c2)?)?.parse()?;
+            let ip = candidate_address(text(field(&f, 0x030001c2)?)?.parse()?, route_ip)?;
             let port = int32(field(&f, 0x010001c3)?)?;
             ensure!((1..=65535).contains(&port), "invalid candidate port");
-            ensure!(
-                !ip.is_unspecified()
-                    && !ip.is_multicast()
-                    && !matches!(ip, std::net::IpAddr::V4(v) if v.is_broadcast())
-                    && !matches!(ip, std::net::IpAddr::V6(v) if v.is_unicast_link_local()),
-                "invalid candidate address"
-            );
             let server_flag = optional(&f, 0x0b000360)?
                 .map(int32)
                 .transpose()?
@@ -166,6 +185,30 @@ pub fn direct_candidates(
         }
     }
     Ok((candidates, exclusions))
+}
+
+pub(crate) fn candidate_address(
+    ip: std::net::IpAddr,
+    route_ip: std::net::IpAddr,
+) -> Result<std::net::IpAddr> {
+    // Validate the actual IPv4 destination of an IPv4-mapped IPv6 address.
+    // Otherwise ::ffff:127.0.0.1, multicast and broadcast bypass IPv4 checks.
+    let ip = match ip {
+        std::net::IpAddr::V6(value) => value
+            .to_ipv4_mapped()
+            .map(std::net::IpAddr::V4)
+            .unwrap_or(ip),
+        _ => ip,
+    };
+    ensure!(
+        !ip.is_unspecified()
+            && !ip.is_multicast()
+            && (!ip.is_loopback() || route_ip.is_loopback())
+            && !matches!(ip, std::net::IpAddr::V4(v) if v.is_broadcast() || v.octets()[0] == 0)
+            && !matches!(ip, std::net::IpAddr::V6(v) if v.is_unicast_link_local()),
+        "invalid candidate address"
+    );
+    Ok(ip)
 }
 /// The outgoing-only role advertises no listener addresses.
 pub fn request_tcp_candidates(connection_id: u64) -> Vec<u8> {
@@ -280,6 +323,13 @@ pub fn advertise_mapped_udp_with_nonce(
     .concat())
 }
 pub fn mapped_udp_candidate(data: &[u8], cid: u64) -> Result<(TcpCandidate, u16)> {
+    mapped_udp_candidate_on_route(data, cid, std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+}
+pub(crate) fn mapped_udp_candidate_on_route(
+    data: &[u8],
+    cid: u64,
+    route_ip: std::net::IpAddr,
+) -> Result<(TcpCandidate, u16)> {
     let f = records(data)?;
     ensure!(
         op(data)? == 7 && int64(field(&f, 0x020001c1)?)? == cid,
@@ -287,6 +337,7 @@ pub fn mapped_udp_candidate(data: &[u8], cid: u64) -> Result<(TcpCandidate, u16)
     );
     let f = records(field(&f, 0x1237)?)?;
     let ip: std::net::Ipv4Addr = text(field(&f, 0x030001c4)?)?.parse()?;
+    candidate_address(ip.into(), route_ip)?;
     let port = int32(field(&f, 0x010001c5)?)?;
     let nonce = int32(field(&f, 0x0100020a)?)?;
     ensure!(
@@ -356,6 +407,7 @@ impl Identity {
             identity.address.len() == 32 && (6..=4096).contains(&identity.password()?.len()),
             "invalid assigned credential/address"
         );
+        validate_node_name(&identity.node_name)?;
         identity.server_address.parse::<Ipv4Addr>()?;
         Ok(identity)
     }
@@ -365,11 +417,7 @@ impl Identity {
             "server_address":self.server_address,"legacy_credential":""}))
     }
     pub fn load(path: &Path) -> Result<Self> {
-        ensure!(
-            std::fs::metadata(path)?.len() <= 65536,
-            "identity file too large"
-        );
-        Self::from_secret(&std::fs::read(path)?)
+        Self::from_secret(&crate::file_io::read_bounded(path, 65536)?)
     }
     /// Parse a credential-store record without ever formatting its contents.
     pub fn from_secret(bytes: &[u8]) -> Result<Self> {
@@ -393,7 +441,7 @@ impl Identity {
             "invalid credential length"
         );
         identity.server_address.parse::<Ipv4Addr>()?;
-        ensure!(!identity.node_name.is_empty(), "empty node name");
+        validate_node_name(&identity.node_name)?;
         Ok(identity)
     }
     pub fn password(&self) -> Result<Vec<u8>> {
@@ -847,6 +895,36 @@ pub fn own_vip(data: &[u8]) -> Result<Option<Ipv4Addr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_local_control_server_routes_allow_loopback_candidates() {
+        for ip in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            let ip = ip.parse().unwrap();
+            assert!(candidate_address(ip, "192.0.2.5".parse().unwrap()).is_err());
+            assert!(candidate_address(ip, "127.0.0.1".parse().unwrap()).is_ok());
+        }
+        for ip in [
+            "192.168.1.10",
+            "10.1.2.3",
+            "169.254.1.2",
+            "fd00::1",
+            "2001:db8::1",
+        ] {
+            assert!(candidate_address(ip.parse().unwrap(), "192.0.2.5".parse().unwrap()).is_ok());
+        }
+    }
+
+    #[test]
+    fn imported_identities_cannot_inject_terminal_controls_through_the_device_name() {
+        let mut record = serde_json::json!({"format":"openrad-identity-v1","rid":123,
+            "vip":"26.0.0.5","node_name":"Synthetic","address":"00000000000000000000000000000000",
+            "credential":"010203040506","server_address":"192.0.2.1"});
+        assert!(Identity::from_secret(&serde_json::to_vec(&record).unwrap()).is_ok());
+        for name in ["\x1b[2J", "forged\nline", "   "] {
+            record["node_name"] = serde_json::json!(name);
+            assert!(Identity::from_secret(&serde_json::to_vec(&record).unwrap()).is_err());
+        }
+    }
 
     fn peer(rid: u64, name_utf16: &[u8]) -> Vec<u8> {
         let mut name = name_utf16.to_vec();

@@ -55,6 +55,9 @@ impl Connection {
         Self::connect_timeout(path, Duration::from_secs(5))
     }
     pub fn connect_timeout(path: &Path, timeout: Duration) -> io::Result<Self> {
+        if timeout.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
         let name = name(path)?;
         let until = Instant::now() + timeout;
         loop {
@@ -90,6 +93,9 @@ impl Connection {
     fn read_exact(&mut self, bytes: &mut [u8], until: Instant) -> io::Result<()> {
         let mut at = 0;
         while at < bytes.len() {
+            if Instant::now() >= until {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
             let mut read = Operation::new(self.handle.clone(), bytes.len() - at)?;
             read.read()?;
             let len = read.finish(milliseconds(until))?;
@@ -109,18 +115,21 @@ impl Connection {
         if len == 0 || len as u64 > limit {
             return Err(io::ErrorKind::InvalidData.into());
         }
-        let mut bytes = vec![0; len];
+        let mut bytes = zeroize::Zeroizing::new(vec![0; len]);
         self.read_exact(&mut bytes, until)?;
-        Ok(bytes)
+        Ok(std::mem::take(&mut *bytes))
     }
     pub fn write_message(&mut self, bytes: &[u8], timeout: Duration) -> io::Result<()> {
         let len = u32::try_from(bytes.len()).map_err(|_| io::ErrorKind::InvalidInput)?;
-        let mut framed = len.to_le_bytes().to_vec();
+        let mut framed = zeroize::Zeroizing::new(len.to_le_bytes().to_vec());
         framed.extend_from_slice(bytes);
         let until = Instant::now() + timeout;
         let mut write = Operation::new(self.handle.clone(), framed.len())?;
         let mut at = 0;
         while at < framed.len() {
+            if Instant::now() >= until {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
             write.write(&framed[at..])?;
             let len = write.finish(milliseconds(until))?;
             if len == 0 {
@@ -219,10 +228,24 @@ mod tests {
             rand::random::<u64>()
         ));
         let mut listener = Listener::bind(&path).unwrap();
+        assert_eq!(
+            Connection::connect_timeout(&path, Duration::ZERO)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
         assert!(exists(&path));
         assert!(Listener::bind(&path).is_err());
         let worker = std::thread::spawn(move || {
             let mut client = Connection::connect(&path).unwrap();
+            assert_eq!(
+                client
+                    .write_message(b"request", Duration::ZERO)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::TimedOut
+            );
             client
                 .write_message(b"request", Duration::from_secs(2))
                 .unwrap();
@@ -240,6 +263,13 @@ mod tests {
             assert!(Instant::now() < until);
             std::thread::yield_now();
         };
+        assert_eq!(
+            connection
+                .read_message(64, Duration::ZERO)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
         assert_eq!(
             connection.read_message(64, Duration::from_secs(2)).unwrap(),
             b"request"

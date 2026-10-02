@@ -1,6 +1,9 @@
 # Embedded in OpenRad; never loaded from a writable installation at runtime.
 function Invoke-OpenRadRadminRecoveryWorker {
     param([uint32[]]$InterfaceIndex)
+    # The scheduled SYSTEM worker starts a separate PowerShell process. Reset
+    # its module path too, before resolving the network/service cmdlets.
+    $env:PSModulePath = [IO.Path]::Combine([Environment]::SystemDirectory, 'WindowsPowerShell\v1.0\Modules')
     $ErrorActionPreference = 'Stop'
     $description = 'Famatech Radmin VPN Ethernet Adapter'
     $targets = @()

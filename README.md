@@ -42,11 +42,11 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **1.0.0** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **1.1.0** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, build metadata, dependency notices, and checksums.
-Read the [1.0.0 release notes](docs/releases/1.0.0.md) for upgrade behavior,
+Read the [1.1.0 release notes](docs/releases/1.1.0.md) for upgrade behavior,
 validation, and platform limitations, and the
-[complete change inventory](docs/releases/1.0.0-changes.md) for every changed file.
+[complete change inventory](docs/releases/1.1.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
@@ -59,13 +59,15 @@ validation, and platform limitations, and the
 On Linux, after extracting the release archive:
 
 ```sh
-sudo -v
 ./openrad-desktop
 ```
 
 Run the application as your normal user. The desktop stores credentials in the
 OS credential store, which must be available and unlocked. The short-lived TAP
-helper uses `sudo` when setting up the virtual interface.
+helper requests authorization in the system permission dialog using Polkit,
+after trying existing noninteractive sudo authorization. Allow that dialog when
+connecting; the detached service cannot reliably reuse a terminal's `sudo -v`.
+Polkit and a session authentication agent must be running.
 
 Closing the desktop window leaves the VPN service running. Use **Disconnect**
 or `./openrad stop` to stop the shared session and remove its session interface
@@ -77,7 +79,6 @@ For headless use, initialize a CLI profile and start its background service:
 
 ```sh
 ./openrad init --node-name my-device
-sudo -v
 ./openrad start
 ./openrad status
 ```
@@ -112,7 +113,7 @@ dependencies listed below, then build the workspace:
 
 ```sh
 sudo apt install build-essential pkg-config libx11-dev libxkbcommon-dev \
-  libwayland-dev libgl1-mesa-dev iproute2 sudo gnome-keyring curl
+  libwayland-dev libgl1-mesa-dev iproute2 sudo pkexec gnome-keyring curl
 git clone https://github.com/gringoestrangeiro/openrad.git
 cd openrad
 cargo build --workspace --release --locked
@@ -149,8 +150,8 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [1.0.0 release](docs/releases/1.0.0.md) | Packages, upgrading, verification, and limitations |
-| [1.0.0 change inventory](docs/releases/1.0.0-changes.md) | File-by-file account of all changes since remote v0.9.5 |
+| [1.1.0 release](docs/releases/1.1.0.md) | Packages, upgrading, verification, and limitations |
+| [1.1.0 change inventory](docs/releases/1.1.0-changes.md) | File-by-file account of all changes since v1.0.0 |
 
 ## Development
 

@@ -1686,7 +1686,7 @@ impl App {
             ui.add_space(12.);
             egui::Frame::new().fill(Color32::from_rgb(49,39,29)).corner_radius(10).inner_margin(16).show(ui, |ui| {
                 ui.label(RichText::new(language.message(&error)).color(AMBER));
-                ui.label(RichText::new(language.text(if self.windows_platform() { "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically." } else { "Linux: authorize the setup helper with sudo -v in the launching terminal, then retry. The desktop stays unprivileged." })).size(12.).color(MUTED));
+                ui.label(RichText::new(language.text(if self.windows_platform() { "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically." } else { "Linux: allow the system permission dialog for TAP setup, then retry if needed. A running Polkit authentication agent is required. The desktop stays unprivileged." })).size(12.).color(MUTED));
                 ui.add_space(6.); if ui.button(language.text("Retry interface setup")).clicked() { self.command(Command::RetryInterface); }
             });
         }
@@ -3078,7 +3078,7 @@ impl App {
             ui.label(RichText::new(language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" })).size(18.).strong()); ui.add_space(10.);
             ui.label(if self.windows_platform() { "OpenRad · TAP-Windows6 · MTU 1500" } else { "radminvpn0 · Ethernet TAP · MTU 1500" });
             ui.label(RichText::new(language.text(if self.windows_platform() { "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains." } else { "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running." })).size(12.).color(MUTED));
-            ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup." })).size(12.).color(MUTED));
+            ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup." })).size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new(language.text("Windows uses TAP-Windows6 and awaits Windows runtime validation. macOS has no data plane. Each connected peer shows its authenticated transport; relay remains available when direct connection fails.")).size(12.).color(MUTED));
             ui.add_space(10.); ui.label(RichText::new(language.message(&format!("Settings: {}", self.paths.directory.display()))).size(11.).color(MUTED));
             if ui.button(language.text("Copy profile path")).clicked() {
@@ -5430,7 +5430,16 @@ mod tests {
                 LanguagePreference::Portuguese,
                 768,
             ),
+            (
+                Page::Networks,
+                "tap-authorization-portuguese",
+                LanguagePreference::Portuguese,
+                768,
+            ),
         ] {
+            app.snapshot.interface_ready = filename != "tap-authorization-portuguese";
+            app.snapshot.interface_error = (filename == "tap-authorization-portuguese").then(||
+                "TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.".into());
             app.page = page;
             app.settings.language = language;
             let ctx = egui::Context::default();

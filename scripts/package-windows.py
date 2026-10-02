@@ -145,6 +145,7 @@ def main():
             ("docs/linux.md", "docs/linux.md"), ("docs/performance.md", "docs/performance.md"),
             (f"docs/releases/{version}.md", f"docs/releases/{version}.md"),
             (f"docs/releases/{version}-changes.md", f"docs/releases/{version}-changes.md"),
+            ('docs/screenshots/1.1.0-tap-authorization.png', 'docs/screenshots/1.1.0-tap-authorization.png'),
             ("docs/screenshots/1.0.0-networks.png", "docs/screenshots/1.0.0-networks.png"),
             ("docs/screenshots/1.0.0-discover.png", "docs/screenshots/1.0.0-discover.png"),
             ("docs/screenshots/1.0.0-auto-join.png", "docs/screenshots/1.0.0-auto-join.png"),

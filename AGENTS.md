@@ -22,7 +22,7 @@ Use Rust 1.95+ from the repository root. See `docs/linux.md` and `docs/windows.m
 | Command | Purpose |
 | --- | --- |
 | `cargo build --workspace --release --locked` | Build CLI, desktop, and setup helper. |
-| `./target/release/openrad-desktop` | Launch the Linux desktop; run `sudo -v` before connecting. |
+| `./target/release/openrad-desktop` | Launch the Linux desktop; allow the system Polkit permission dialog when connecting. |
 | `./target/release/openrad --help` | Explore the CLI, including `ping`, `rename`, and `force-relay`. |
 | `./target/release/openrad stop` | Stop the shared service before replacing binaries. |
 | `cargo test --workspace --locked` | Run default headless, unprivileged workspace tests. |

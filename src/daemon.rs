@@ -28,7 +28,7 @@ use std::{
     process::{Child, Command as ProcessCommand, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, Sender},
+        mpsc::{self, Sender, SyncSender},
         Arc, Mutex,
     },
     thread,
@@ -37,6 +37,8 @@ use std::{
 
 const REQUEST_LIMIT: u64 = 64 * 1024;
 const REPLY_LIMIT: u64 = 8 * 1024 * 1024;
+const CONTROL_CONNECTION_LIMIT: usize = 32;
+const COMMAND_QUEUE_LIMIT: usize = 128;
 #[cfg(unix)]
 const SOCKET: &str = "control.sock";
 
@@ -123,6 +125,22 @@ impl DataDir {
     pub fn identity(&self) -> PathBuf {
         self.path.join("profile/identity.json")
     }
+    /// A private-profile marker, broken link or inaccessible file must not
+    /// switch storage backends or authorize a second device registration. An
+    /// interrupted CLI initialization can leave a profile without an identity.
+    /// The loader reports that error instead of treating the profile as fresh.
+    pub fn identity_file_present(&self) -> bool {
+        match fs::symlink_metadata(self.identity()) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match fs::symlink_metadata(self.path.join("profile")) {
+                    Ok(_) => true,
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                }
+            }
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        }
+    }
     pub fn modulus(&self) -> PathBuf {
         self.path.join("profile/modulus.bin")
     }
@@ -160,7 +178,7 @@ impl DataDir {
         Ok(!self.endpoint_exists())
     }
     pub fn load_identity(&self) -> Result<Identity> {
-        if !self.identity().exists() {
+        if !self.identity_file_present() {
             let entry = self.entry()?;
             let secret = zeroize::Zeroizing::new(entry.get_secret().map_err(|_| {
                 anyhow!("Could not read the saved identity. Unlock your credential store; your identity has not been replaced.")
@@ -177,13 +195,9 @@ impl DataDir {
         })
     }
     fn load_modulus(&self) -> Result<Vec<u8>> {
-        if self.modulus().exists() {
-            let meta = fs::metadata(self.modulus())?;
-            ensure!(
-                (1..=4096).contains(&meta.len()),
-                "public modulus size is invalid"
-            );
-            Ok(fs::read(self.modulus())?)
+        if let Some(bytes) = crate::file_io::read_optional_bounded(&self.modulus(), 4096)? {
+            ensure!(!bytes.is_empty(), "public modulus size is invalid");
+            Ok(bytes.to_vec())
         } else {
             Ok(crate::SERVER_MODULUS.to_vec())
         }
@@ -196,7 +210,7 @@ impl DataDir {
     }
     pub fn save_identity(&self, identity: &Identity) -> Result<()> {
         let secret = zeroize::Zeroizing::new(serde_json::to_vec(identity)?);
-        if self.identity().exists() {
+        if self.identity_file_present() {
             atomic_save(&self.identity(), &secret)
         } else {
             self.entry()?.set_secret(&secret).map_err(|_| anyhow!(
@@ -229,14 +243,10 @@ impl DataDir {
     }
     pub fn preferences(&self) -> Result<ServicePreferences> {
         let path = self.path.join("service.json");
-        if !path.exists() {
+        let Some(bytes) = crate::file_io::read_optional_bounded(&path, 64 * 1024)? else {
             return Ok(ServicePreferences::default());
-        }
-        ensure!(
-            fs::metadata(&path)?.len() <= 64 * 1024,
-            "Settings file is too large"
-        );
-        let preferences: ServicePreferences = serde_json::from_slice(&fs::read(path)?)?;
+        };
+        let preferences: ServicePreferences = serde_json::from_slice(&bytes)?;
         preferences.validate()?;
         Ok(preferences)
     }
@@ -322,11 +332,11 @@ pub enum Request {
     },
     Join {
         name: String,
-        password: Option<String>,
+        password: Option<NetworkPassword>,
     },
     Create {
         name: String,
-        password: String,
+        password: NetworkPassword,
     },
     Leave {
         network: String,
@@ -382,14 +392,8 @@ impl Request {
             },
             Command::Leave(network) => Self::Leave { network },
             Command::Network(request) => match request {
-                NetworkRequest::Join { name, password } => Self::Join {
-                    name,
-                    password: password.map(|p| p.as_str().to_owned()),
-                },
-                NetworkRequest::Create { name, password } => Self::Create {
-                    name,
-                    password: password.as_str().to_owned(),
-                },
+                NetworkRequest::Join { name, password } => Self::Join { name, password },
+                NetworkRequest::Create { name, password } => Self::Create { name, password },
                 NetworkRequest::Leave { network } => Self::Leave { network },
                 NetworkRequest::Delete { network } => Self::Delete { network },
                 NetworkRequest::Member {
@@ -433,14 +437,49 @@ impl Reply {
     }
 }
 #[cfg(unix)]
-fn read_bounded(stream: &mut UnixStream, limit: u64) -> Result<Vec<u8>> {
-    let mut data = Vec::new();
-    stream.take(limit + 1).read_to_end(&mut data)?;
-    ensure!(
-        data.len() as u64 <= limit,
-        "local control message too large"
-    );
+fn read_bounded(
+    stream: &mut UnixStream,
+    limit: u64,
+    timeout: Duration,
+) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    let until = Instant::now() + timeout;
+    let mut data = zeroize::Zeroizing::new(Vec::new());
+    let mut buffer = zeroize::Zeroizing::new([0; 8192]);
+    loop {
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "service request timed out");
+        stream.set_read_timeout(Some(remaining))?;
+        let length = match stream.read(buffer.as_mut_slice()) {
+            Ok(length) => length,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if length == 0 {
+            break;
+        }
+        data.extend_from_slice(&buffer[..length]);
+        ensure!(
+            data.len() as u64 <= limit,
+            "local control message too large"
+        );
+    }
     Ok(data)
+}
+#[cfg(unix)]
+fn write_bounded(stream: &mut UnixStream, mut bytes: &[u8], timeout: Duration) -> Result<()> {
+    let until = Instant::now() + timeout;
+    while !bytes.is_empty() {
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "service request timed out");
+        stream.set_write_timeout(Some(remaining))?;
+        match stream.write(bytes) {
+            Ok(0) => bail!("service closed the control connection"),
+            Ok(length) => bytes = &bytes[length..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 #[cfg(unix)]
 pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
@@ -541,8 +580,18 @@ pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration)
     let mut stream =
         connect_control(dir, until).context("Service is stopped. Run `openrad start` first")?;
     stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout.min(Duration::from_secs(5))))?;
-    stream.write_all(&serde_json::to_vec(command)?)?;
+    let payload = zeroize::Zeroizing::new(serde_json::to_vec(command)?);
+    ensure!(
+        payload.len() as u64 <= REQUEST_LIMIT,
+        "local control message too large"
+    );
+    write_bounded(
+        &mut stream,
+        &payload,
+        until
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(5)),
+    )?;
     stream.shutdown(std::net::Shutdown::Write)?;
     let mut bytes = Vec::new();
     let mut buffer = [0; 8192];
@@ -575,7 +624,7 @@ pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration)
     let mut stream =
         windows_pipe::Connection::connect_timeout(&dir.path, timeout.min(Duration::from_secs(5)))
             .context("Service is stopped. Run `openrad start` first")?;
-    let payload = serde_json::to_vec(command)?;
+    let payload = zeroize::Zeroizing::new(serde_json::to_vec(command)?);
     ensure!(
         payload.len() as u64 <= REQUEST_LIMIT,
         "local control message too large"
@@ -599,7 +648,7 @@ struct State {
     phase: &'static str,
     error: Option<String>,
     snapshot: Option<Arc<Snapshot>>,
-    sender: Option<Sender<Command>>,
+    sender: Option<SyncSender<Command>>,
     session_stop: Option<Arc<AtomicBool>>,
     pending: BTreeMap<u64, Sender<Reply>>,
 }
@@ -742,15 +791,15 @@ impl Shared {
             state.pending.insert(id, tx);
             sender
         };
-        if sender
-            .send(Command::Tagged {
-                id,
-                command: Box::new(command),
-            })
-            .is_err()
-        {
+        if let Err(error) = sender.try_send(Command::Tagged {
+            id,
+            command: Box::new(command),
+        }) {
             self.state.lock().unwrap().pending.remove(&id);
-            return Reply::error("Service connection is unavailable");
+            return Reply::error(match error {
+                mpsc::TrySendError::Full(_) => "Service command queue is full; retry shortly",
+                mpsc::TrySendError::Disconnected(_) => "Service connection is unavailable",
+            });
         }
         match rx.recv_timeout(if ping.is_some() {
             runtime::PING_TIMEOUT
@@ -782,9 +831,12 @@ impl Shared {
             }
             state.sender.clone()
         };
-        match sender.and_then(|sender| sender.send(command).ok()) {
-            Some(()) => Reply::ok("Requested", Value::Null),
-            None => Reply::error("Service connection is unavailable"),
+        match sender.map(|sender| sender.try_send(command)) {
+            Some(Ok(())) => Reply::ok("Requested", Value::Null),
+            Some(Err(mpsc::TrySendError::Full(_))) => {
+                Reply::error("Service command queue is full; retry shortly")
+            }
+            _ => Reply::error("Service connection is unavailable"),
         }
     }
     fn resolve_network(&self, name: &str) -> Result<String> {
@@ -869,14 +921,10 @@ impl Shared {
                         ));
                     }
                 }
-                let password = password.map(NetworkPassword::new).transpose()?;
                 self.command(Command::Network(NetworkRequest::Join { name, password }))
             }
             Request::Create { name, password } => {
-                self.command(Command::Network(NetworkRequest::Create {
-                    name,
-                    password: NetworkPassword::new(password)?,
-                }))
+                self.command(Command::Network(NetworkRequest::Create { name, password }))
             }
             Request::Leave { network } => {
                 let network = self.resolve_network(&network)?;
@@ -963,7 +1011,7 @@ fn supervisor(
     early_log::checkpoint(Stage::SessionStarting);
     let mut failures = 0u32;
     while !shared.shutdown.load(Ordering::Relaxed) {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(COMMAND_QUEUE_LIMIT);
         let session_stop = Arc::new(AtomicBool::new(false));
         let (identity, preferences) = {
             let mut state = shared.state.lock().unwrap();
@@ -1041,9 +1089,7 @@ fn supervisor(
 
 #[cfg(unix)]
 fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    let bytes = read_bounded(&mut stream, REQUEST_LIMIT)?;
+    let bytes = read_bounded(&mut stream, REQUEST_LIMIT, Duration::from_secs(5))?;
     ensure!(!bytes.is_empty(), "empty control request");
     let command: Request = serde_json::from_slice(&bytes)?;
     let stopping = matches!(&command, Request::Stop);
@@ -1053,10 +1099,44 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         payload.len() as u64 <= REPLY_LIMIT,
         "control reply too large"
     );
-    stream.write_all(&payload)?;
+    write_bounded(&mut stream, &payload, Duration::from_secs(5))?;
     if stopping {
         shared.stop();
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+type ControlConnection = UnixStream;
+#[cfg(windows)]
+type ControlConnection = windows_pipe::Connection;
+
+fn reap_control_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
+    let mut index = 0;
+    while index < workers.len() {
+        if workers[index].is_finished() {
+            let _ = workers.swap_remove(index).join();
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn dispatch_control_connection(
+    stream: ControlConnection,
+    shared: Arc<Shared>,
+    workers: &mut Vec<thread::JoinHandle<()>>,
+) -> std::io::Result<()> {
+    if workers.len() >= CONTROL_CONNECTION_LIMIT {
+        return Err(std::io::ErrorKind::WouldBlock.into());
+    }
+    workers.push(
+        thread::Builder::new()
+            .name("openrad-control".into())
+            .spawn(move || {
+                let _ = serve_connection(stream, shared);
+            })?,
+    );
     Ok(())
 }
 
@@ -1088,13 +1168,25 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     let worker_shared = shared.clone();
     let worker =
         thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
+    let mut control_workers = Vec::new();
     while !shared.shutdown.load(Ordering::Relaxed) {
+        reap_control_workers(&mut control_workers);
+        // Leave excess clients in the bounded OS backlog. The Windows listener
+        // also needs room for its next instance to keep the pipe name occupied.
+        if control_workers.len() >= CONTROL_CONNECTION_LIMIT {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
         match listener.accept() {
             Ok((stream, _)) => {
-                let shared = shared.clone();
-                thread::spawn(move || {
-                    let _ = serve_connection(stream, shared);
-                });
+                if let Err(error) =
+                    dispatch_control_connection(stream, shared.clone(), &mut control_workers)
+                {
+                    shared.stop();
+                    let _ = worker.join();
+                    let _ = fs::remove_file(&socket);
+                    return Err(error.into());
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(50))
@@ -1117,7 +1209,8 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
 
 #[cfg(windows)]
 fn serve_connection(mut stream: windows_pipe::Connection, shared: Arc<Shared>) -> Result<()> {
-    let bytes = stream.read_message(REQUEST_LIMIT, Duration::from_secs(5))?;
+    let bytes =
+        zeroize::Zeroizing::new(stream.read_message(REQUEST_LIMIT, Duration::from_secs(5))?);
     let command: Request = serde_json::from_slice(&bytes)?;
     let stopping = matches!(&command, Request::Stop);
     let payload = serde_json::to_vec(&shared.handle(command))?;
@@ -1152,13 +1245,16 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     let worker_shared = shared.clone();
     let worker =
         thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
+    let mut control_workers = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.shutdown.load(Ordering::Relaxed) {
+            reap_control_workers(&mut control_workers);
+            if control_workers.len() >= CONTROL_CONNECTION_LIMIT {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
             if let Some(stream) = listener.accept()? {
-                let shared = shared.clone();
-                thread::spawn(move || {
-                    let _ = serve_connection(stream, shared);
-                });
+                dispatch_control_connection(stream, shared.clone(), &mut control_workers)?;
             } else {
                 thread::sleep(Duration::from_millis(50));
             }
@@ -1270,6 +1366,158 @@ mod tests {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
     }
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_identity_link_does_not_switch_to_credential_storage() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-identity-link-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let directory = DataDir::open(Some(path)).unwrap();
+        assert!(!directory.identity_file_present());
+        fs::create_dir(directory.path.join("profile")).unwrap();
+        assert!(directory.identity_file_present());
+        assert!(directory
+            .load_identity()
+            .err()
+            .unwrap()
+            .to_string()
+            .starts_with("No saved identity at "));
+        std::os::unix::fs::symlink(
+            directory.path.join("missing-identity"),
+            directory.identity(),
+        )
+        .unwrap();
+        assert!(directory.identity_file_present());
+        let error = directory.load_identity().err().unwrap();
+        assert!(error.to_string().starts_with("No saved identity at "));
+        assert!(fs::symlink_metadata(directory.identity())
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        fs::remove_dir_all(directory.path).unwrap();
+    }
+    #[test]
+    fn private_control_commands_preserve_the_wire_format_and_validate_passwords() {
+        let request = Request::from_runtime(Command::Network(NetworkRequest::Create {
+            name: "Synthetic LAN".into(),
+            password: NetworkPassword::new("synthetic-password".into()).unwrap(),
+        }))
+        .unwrap();
+        let json = zeroize::Zeroizing::new(serde_json::to_vec(&request).unwrap());
+        let Request::Create { name, password } = serde_json::from_slice::<Request>(&json).unwrap()
+        else {
+            panic!("expected a create command");
+        };
+        assert_eq!(name, "Synthetic LAN");
+        assert_eq!(password.as_str(), "synthetic-password");
+        assert_eq!(format!("{password:?}"), "NetworkPassword([redacted])");
+        assert!(serde_json::from_slice::<Request>(
+            br#"{"command":"create","name":"Synthetic LAN","password":"short"}"#
+        )
+        .is_err());
+    }
+    #[test]
+    fn full_service_command_queue_rejects_work_without_leaking_waiters() {
+        let shared = shared();
+        let (tx, rx) = mpsc::sync_channel(2);
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.phase = "connected";
+            state.sender = Some(tx);
+        }
+        assert!(shared.queue(Command::RetryPeers).ok);
+        assert!(shared.queue(Command::RetryInterface).ok);
+        let rejected = shared.command(Command::Search {
+            query: "synthetic".into(),
+            cursor: 0,
+        });
+        assert!(!rejected.ok);
+        assert!(rejected.message.contains("queue is full"));
+        assert!(shared.state.lock().unwrap().pending.is_empty());
+        assert!(!shared.queue(Command::RetryPeers).ok);
+        assert!(matches!(rx.try_recv().unwrap(), Command::RetryPeers));
+        assert!(shared.queue(Command::RetryPeers).ok);
+        drop(rx);
+        assert!(!shared.queue(Command::RetryPeers).ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn slowly_dripped_control_requests_cannot_extend_the_read_deadline() {
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        client.write_all(b"{").unwrap();
+        let writer = thread::spawn(move || {
+            for _ in 0..50 {
+                thread::sleep(Duration::from_millis(20));
+                if client.write_all(b" ").is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        assert!(read_bounded(&mut server, REQUEST_LIMIT, Duration::from_millis(100)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(server);
+        writer.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_reads_accept_the_limit_and_reject_an_extra_byte() {
+        for length in [32, 33] {
+            let (mut server, mut client) = UnixStream::pair().unwrap();
+            client.write_all(&vec![b' '; length]).unwrap();
+            client.shutdown(std::net::Shutdown::Write).unwrap();
+            let result = read_bounded(&mut server, 32, Duration::from_secs(1));
+            assert_eq!(result.is_ok(), length == 32);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonreading_control_clients_cannot_extend_the_write_deadline() {
+        let (mut server, _client) = UnixStream::pair().unwrap();
+        let payload = vec![0; REPLY_LIMIT as usize];
+        let started = Instant::now();
+        assert!(write_bounded(&mut server, &payload, Duration::from_millis(100)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_control_clients_have_a_fixed_worker_limit() {
+        let shared = Arc::new(shared());
+        let mut workers = Vec::new();
+        let mut clients = Vec::new();
+        for _ in 0..CONTROL_CONNECTION_LIMIT {
+            let (server, client) = UnixStream::pair().unwrap();
+            dispatch_control_connection(server, shared.clone(), &mut workers).unwrap();
+            clients.push(client);
+        }
+        let (server, _client) = UnixStream::pair().unwrap();
+        assert_eq!(
+            dispatch_control_connection(server, shared, &mut workers)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(workers.len(), CONTROL_CONNECTION_LIMIT);
+        drop(clients);
+        for worker in workers.drain(..) {
+            worker.join().unwrap();
+        }
+        workers.push(thread::spawn(|| {}));
+        let until = Instant::now() + Duration::from_secs(2);
+        while !workers[0].is_finished() {
+            assert!(Instant::now() < until, "control worker did not finish");
+            thread::yield_now();
+        }
+        reap_control_workers(&mut workers);
+        assert!(workers.is_empty());
+    }
+
     #[test]
     fn commands_fail_while_reconnecting_without_queuing() {
         let shared = shared();

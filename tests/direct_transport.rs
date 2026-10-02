@@ -22,6 +22,13 @@ fn tcp_candidates_require_correlated_bounded_authenticated_message_shape() {
         ("0.0.0.0", 1),
         ("255.255.255.255", 1),
         ("239.1.1.1", 1),
+        ("127.0.0.1", 1),
+        ("127.23.45.67", 1),
+        ("::1", 1),
+        ("::ffff:127.0.0.1", 1),
+        ("::ffff:0.0.0.0", 1),
+        ("::ffff:239.1.1.1", 1),
+        ("::ffff:255.255.255.255", 1),
         ("192.0.2.1", 0),
         ("192.0.2.1", 65536),
         ("untrusted.example", 1),
@@ -43,6 +50,47 @@ fn tcp_candidates_require_correlated_bounded_authenticated_message_shape() {
     assert!(tcp_candidates(&push(&too_many), 42).is_err());
     let duplicates = candidate("192.0.2.1", 1).repeat(33);
     assert!(tcp_candidates(&push(&duplicates), 42).is_err());
+}
+
+#[test]
+fn mapped_ipv6_candidates_are_validated_and_deduplicated_as_ipv4() {
+    let data = push(
+        &[
+            candidate("::ffff:192.0.2.1", 1234),
+            candidate("192.0.2.1", 1234),
+        ]
+        .concat(),
+    );
+    let parsed = tcp_candidates(&data, 42).unwrap();
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].endpoint.to_string(), "192.0.2.1:1234");
+}
+
+#[test]
+fn remote_display_names_cannot_emit_terminal_commands_or_forge_lines() {
+    fn wire(value: &str) -> Vec<u8> {
+        let mut bytes: Vec<u8> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        bytes.extend([0, 1]);
+        bytes
+    }
+    for value in [
+        "Alice\x1b[2J",
+        "Mallory\rforged",
+        "name\nforged",
+        "name\u{009b}2J",
+        "name\x7f",
+    ] {
+        let display = display_text(&wire(value)).unwrap();
+        assert!(!display.chars().any(char::is_control));
+        assert!(display.contains('\u{fffd}'));
+        assert!(text(&wire(value)).is_err());
+        assert!(textv(0x03000304, value).is_err());
+    }
+    assert_eq!(
+        display_text(&wire("João 🐈 Привет Xin chào")).unwrap(),
+        "João 🐈 Привет Xin chào"
+    );
+    assert_eq!(display_text(&[0xd8, 0x3d, 0, 1]).unwrap(), "\u{fffd}");
 }
 #[test]
 fn outgoing_tcp_request_is_info_not_attachment_heartbeat() {

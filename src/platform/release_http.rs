@@ -11,7 +11,11 @@ const RESPONSE_LIMIT: u64 = 1024 * 1024;
 /// Use the operating system's HTTPS client rather than adding a TLS stack to
 /// the VPN. curl verifies certificates and enforces connection/transfer limits.
 pub(crate) fn fetch_latest() -> Result<Vec<u8>> {
-    let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
+    #[cfg(windows)]
+    let executable = crate::windows_security::system_directory()?.join("curl.exe");
+    #[cfg(not(windows))]
+    let executable = "/usr/bin/curl";
+    let mut command = Command::new(executable);
     command
         .args([
             "--disable",
@@ -56,6 +60,10 @@ pub(crate) fn fetch_latest() -> Result<Vec<u8>> {
     }
     let status = child.wait()?;
     read?;
+    ensure!(
+        bytes.len() as u64 <= RESPONSE_LIMIT,
+        "Release response is too large"
+    );
     ensure!(status.success(), "Release check failed");
     Ok(bytes)
 }

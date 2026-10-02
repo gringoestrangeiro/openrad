@@ -280,6 +280,7 @@ impl PeerChannel {
         report: &mut TransportReport,
     ) -> Result<Self> {
         let until = Instant::now() + duration;
+        let route_ip = coord.stream.socket.local_addr()?.ip();
         let mut discovery_until = until.min(Instant::now() + Duration::from_secs(30));
         let mut pending: Option<(u64, Vec<u8>)> = None;
         let mut server_id = None;
@@ -559,11 +560,12 @@ impl PeerChannel {
                             .as_ref()
                             .ok_or_else(|| anyhow::anyhow!("candidates before NewConnection"))?
                             .0;
-                        match direct_candidates(
+                        match direct_candidates_on_route(
                             &data,
                             cid,
                             operation,
                             if operation == 6 { 0x1236 } else { 0x127c },
+                            route_ip,
                         ) {
                             Ok((candidates, exclusions)) => {
                                 if operation == 6 {
@@ -600,7 +602,7 @@ impl PeerChannel {
                                 anyhow::anyhow!("mapped candidates before NewConnection")
                             })?
                             .0;
-                        match mapped_udp_candidate(&data, cid) {
+                        match mapped_udp_candidate_on_route(&data, cid, route_ip) {
                             Ok((candidate, nonce)) => {
                                 report.mapped_udp_candidates = vec![candidate];
                                 mapped_nonce = Some(nonce);

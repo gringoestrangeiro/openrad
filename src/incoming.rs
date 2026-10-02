@@ -395,15 +395,18 @@ impl Setup {
                 let operation = op(&data)?;
                 match operation {
                     6 => {
-                        if let Ok((c, _)) = direct_candidates(&data, self.cid, 6, 0x1236) {
+                        if let Ok((c, _)) =
+                            direct_candidates_on_route(&data, self.cid, 6, 0x1236, self.route_ip)
+                        {
                             tcp_candidates = c;
                         }
                     }
                     29 | 7 => {
                         let candidates = if operation == 29 {
-                            direct_candidates(&data, self.cid, 29, 0x127c).map(|(c, _)| c)
+                            direct_candidates_on_route(&data, self.cid, 29, 0x127c, self.route_ip)
+                                .map(|(c, _)| c)
                         } else {
-                            incoming_mapping(&data, self.cid).map(|c| vec![c])
+                            incoming_mapping(&data, self.cid, self.route_ip).map(|c| vec![c])
                         };
                         let c = match candidates {
                             Ok(c) if !c.is_empty() => c,
@@ -483,7 +486,7 @@ impl Drop for Cancel {
         self.0.store(true, Ordering::Relaxed);
     }
 }
-fn incoming_mapping(data: &[u8], cid: u64) -> Result<TcpCandidate> {
+fn incoming_mapping(data: &[u8], cid: u64, route_ip: IpAddr) -> Result<TcpCandidate> {
     let f = records(data)?;
     ensure!(
         op(data)? == 7 && int64(field(&f, 0x020001c1)?)? == cid,
@@ -491,6 +494,7 @@ fn incoming_mapping(data: &[u8], cid: u64) -> Result<TcpCandidate> {
     );
     let f = records(field(&f, 0x1237)?)?;
     let ip: Ipv4Addr = text(field(&f, 0x030001c4)?)?.parse()?;
+    candidate_address(ip.into(), route_ip)?;
     let port = int32(field(&f, 0x010001c5)?)?;
     ensure!(
         !ip.is_unspecified()

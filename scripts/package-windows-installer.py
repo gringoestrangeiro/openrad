@@ -117,6 +117,7 @@ def main():
             ('docs/linux.md', 'docs/linux.md'), ('docs/performance.md', 'docs/performance.md'),
             (f'docs/releases/{version}.md', f'docs/releases/{version}.md'),
             (f'docs/releases/{version}-changes.md', f'docs/releases/{version}-changes.md'),
+            ('docs/screenshots/1.1.0-tap-authorization.png', 'docs/screenshots/1.1.0-tap-authorization.png'),
             ('docs/screenshots/1.0.0-networks.png', 'docs/screenshots/1.0.0-networks.png'),
             ('docs/screenshots/1.0.0-discover.png', 'docs/screenshots/1.0.0-discover.png'),
             ('docs/screenshots/1.0.0-auto-join.png', 'docs/screenshots/1.0.0-auto-join.png'),
@@ -205,7 +206,7 @@ def main():
         # Source of our installer is shipped too; it contains no user state.
         source_zip = payload / 'installer-source.zip'
         with zipfile.ZipFile(source_zip, 'w', zipfile.ZIP_DEFLATED) as archive:
-            for path in ['packaging/windows/OpenRad-Setup.nsi', 'packaging/windows/setup-adapter.ps1', 'packaging/windows/Launch-CLI.cmd', 'packaging/windows/Launch-CLI.ps1', 'packaging/windows/Test-Windows.ps1', 'packaging/windows/Test-SetupLogic.ps1', 'packaging/windows/test-fixtures/setup-worker.c', 'scripts/test-windows-installer-flow.py', 'scripts/package-windows-installer.py', 'scripts/pe_resources.py', 'scripts/package-windows.py', 'src/setup.rs', 'src/setup_main.rs', 'src/platform/windows_setup.rs', 'desktop/Cargo.toml', 'desktop/src/main.rs', 'desktop/src/graphics.rs', 'desktop/src/startup_log.rs', 'src/early_log.rs', 'src/platform/windows.rs', 'src/platform/windows_radmin.rs', 'src/platform/windows_radmin.ps1', 'packaging/windows/Test-RadminRecovery.ps1', 'src/platform/windows_security.rs', 'src/platform/windows_crash.rs', 'src/main.rs', 'src/daemon.rs', 'Cargo.toml', 'Cargo.lock', 'packaging/windows/Debug-OpenRad.cmd', 'packaging/windows/Debug-OpenRad.ps1', 'desktop/src/platform/windows_launch.rs', 'LICENSE']:
+            for path in ['packaging/windows/OpenRad-Setup.nsi', 'packaging/windows/setup-adapter.ps1', 'packaging/windows/Launch-CLI.cmd', 'packaging/windows/Launch-CLI.ps1', 'packaging/windows/Test-Windows.ps1', 'packaging/windows/Test-SetupLogic.ps1', 'packaging/windows/test-fixtures/setup-worker.c', 'scripts/test-windows-installer-flow.py', 'scripts/package-windows-installer.py', 'scripts/pe_resources.py', 'scripts/package-windows.py', 'src/file_io.rs', 'src/setup.rs', 'src/setup_main.rs', 'src/platform/windows_setup.rs', 'desktop/Cargo.toml', 'desktop/src/main.rs', 'desktop/src/graphics.rs', 'desktop/src/startup_log.rs', 'src/early_log.rs', 'src/platform/windows.rs', 'src/platform/windows_radmin.rs', 'src/platform/windows_radmin.ps1', 'packaging/windows/Test-RadminRecovery.ps1', 'src/platform/windows_security.rs', 'src/platform/windows_crash.rs', 'src/main.rs', 'src/daemon.rs', 'Cargo.toml', 'Cargo.lock', 'packaging/windows/Debug-OpenRad.cmd', 'packaging/windows/Debug-OpenRad.ps1', 'desktop/src/platform/windows_launch.rs', 'LICENSE']:
                 archive.write(ROOT / path, path)
         # Include installer source in both repeat-run hashes and exact uninstall.
         records.append({'path': source_zip.name, 'sha256': digest(source_zip)})

@@ -21,7 +21,6 @@ The default `system` follows `LC_ALL`, `LC_MESSAGES`, and `LANG`, with GNU `LANG
 
 ```sh
 ./target/release/openrad init --node-name my-device
-sudo -v
 ./target/release/openrad start
 ./target/release/openrad status
 ```
@@ -36,9 +35,18 @@ The shared registration flow retries transient connection and handshake failures
 
 Use `--data-dir PATH` with **every command** for a separate profile. This includes the daemon process started by `start`. Both frontends use this same path. When no CLI profile has been initialized, an existing desktop profile with saved settings is reused to retain its credential-store identity. `init` refuses to overwrite an existing profile or a running session. A failed or interrupted registration can leave an incomplete profile; check whether an identity was issued before deciding to retry with a new profile.
 
+Before registering a device, `init` must confirm that this profile has no saved
+credential-store identity. Unlock/start the credential store if that check fails;
+an unreadable store does not authorize registering another device. An explicit
+`init --identity PATH` import still works without a credential store and does
+not register a device. Password and identity files must be regular files;
+password files are limited to 4 KiB and identity files to 64 KiB.
+An incomplete private `profile/` directory or broken identity link is retained
+for recovery and does not cause the desktop to register another identity.
+
 `start` returns when the local service is ready to accept commands. Authentication can still be in progress; `status` shows `connecting`, `connected`, or `reconnecting` and the last connection error. The service continues reconnecting without a terminal, using the profile’s saved retry settings. Starting twice is safe, including while the desktop is open. Opening the desktop after `start` attaches to this same session; starting the CLI after the desktop connects reuses its session. Closing the desktop window leaves the service running. **Disconnect** in the desktop or `stop` affects both frontends. A service whose retry budget is exhausted can be restarted with `start`. `stop` closes the session and removes the nonpersistent TAP interface. `start --no-tap` keeps only the service and peer connections, useful when interface setup is unavailable.
 
-The service runs as your user. Only its short-lived TAP helper invokes `sudo -n`. Run `sudo -v` before `start`; if interface setup fails, refresh sudo authorization and run `openrad retry-interface`. A sudo configuration tied to one terminal may require an administrator-managed helper authorization for detached use. Do not run the whole service as root.
+The service runs as your user. Its short-lived TAP helper first tries `sudo -n`, then requests authorization through the desktop session's Polkit agent. Allow the system permission dialog. If interface setup fails or authorization is cancelled, run `openrad retry-interface`. A terminal-bound `sudo -v` timestamp does not reliably authorize the detached service. Headless systems without an authentication agent need administrator-managed helper authorization; see [Linux setup](linux.md#tap-permissions). Do not run the whole service as root.
 
 ## Networks and peers
 

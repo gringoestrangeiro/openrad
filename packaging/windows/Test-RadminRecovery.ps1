@@ -19,6 +19,7 @@ function New-Adapter([uint32]$Index, [string]$Description = 'Famatech Radmin VPN
     return [PSCustomObject]@{ InterfaceIndex = $Index; InterfaceGuid = ([Guid]::NewGuid().ToString('B')); InterfaceDescription = $Description }
 }
 function Reset-Case {
+    $env:PSModulePath = 'synthetic-untrusted-modules'
     $script:adapters = @((New-Adapter 19), (New-Adapter 20 'TAP-Windows Adapter V9'))
     $script:services = @(
         [PSCustomObject]@{ Name = 'RadminVpnService'; PathName = '"C:\Program Files\Radmin VPN\RvControlSvc.exe" /service'; Status = 'Running' },
@@ -38,6 +39,7 @@ function Reset-Case {
 }
 function Get-NetAdapter {
     param([switch]$IncludeHidden)
+    Assert-Equal $env:PSModulePath ([IO.Path]::Combine([Environment]::SystemDirectory, 'WindowsPowerShell\v1.0\Modules')) 'Recovery resolved cmdlets through an untrusted module path'
     return $script:adapters
 }
 function Get-CimInstance {

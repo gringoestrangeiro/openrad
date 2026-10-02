@@ -15,6 +15,24 @@ impl fmt::Debug for NetworkPassword {
         f.write_str("NetworkPassword([redacted])")
     }
 }
+// Serialization is only for the bounded local control protocol. Persistent
+// preferences deliberately have no password field.
+impl serde::Serialize for NetworkPassword {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> serde::Deserialize<'de> for NetworkPassword {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
 impl NetworkPassword {
     pub(crate) fn as_str(&self) -> &str {
         &self.0

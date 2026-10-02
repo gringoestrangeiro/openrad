@@ -194,11 +194,6 @@
     "IPv4 · отдельный транспорт для каждого узла",
     "IPv4 · phương thức truyền riêng cho từng thiết bị"
   ],
-  "Linux: authorize the setup helper with sudo -v in the launching terminal, then retry. The desktop stays unprivileged.": [
-    "Linux: autorize o auxiliar de configuração com sudo -v no terminal que iniciou o app e tente novamente. O app continua sem privilégios elevados.",
-    "Linux: разрешите работу помощника настройки командой sudo -v в терминале запуска и повторите попытку. Приложение работает без повышенных прав.",
-    "Linux: cấp quyền cho trình hỗ trợ cấu hình bằng sudo -v trong terminal khởi chạy, rồi thử lại. Ứng dụng vẫn chạy với quyền người dùng thông thường."
-  ],
   "Retry interface setup": [
     "Tentar configurar a interface novamente",
     "Повторить настройку интерфейса",
@@ -643,11 +638,6 @@
     "Um auxiliar temporário configura a interface e as rotas dos membros. O OpenRad roda como seu usuário normal. Fechar o app remove a interface e as rotas.",
     "Временный помощник настраивает интерфейс и маршруты участников. OpenRad работает от обычного пользователя. При закрытии интерфейс и маршруты удаляются.",
     "Trình hỗ trợ tạm thời cấu hình giao diện mạng và tuyến đến thành viên. OpenRad chạy với quyền người dùng thông thường. Đóng ứng dụng sẽ xóa giao diện mạng và các tuyến."
-  ],
-  "If setup needs permission, run sudo -v in the terminal that launches OpenRad, then retry interface setup.": [
-    "Se a configuração precisar de permissão, execute sudo -v no terminal que inicia o OpenRad e tente configurar a interface novamente.",
-    "Если для настройки нужны права, выполните sudo -v в терминале запуска OpenRad и повторите настройку интерфейса.",
-    "Nếu cấu hình cần quyền, chạy sudo -v trong terminal khởi chạy OpenRad, rồi thử cấu hình lại giao diện mạng."
   ],
   "Windows and macOS data planes are not implemented or tested. Each connected peer shows its authenticated transport. Direct candidates come from the server; relay remains available when direct connection fails.": [
     "Os planos de dados do Windows e macOS não foram implementados nem testados. Cada dispositivo conectado mostra seu transporte autenticado. Os candidatos diretos vêm do servidor; o relay continua disponível se a conexão direta falhar.",
@@ -2694,6 +2684,31 @@
     "Подключение к службе недоступно",
     "Kết nối dịch vụ không khả dụng"
   ],
+  "Service command queue is full; retry shortly": [
+    "A fila de comandos do serviço está cheia; tente novamente em instantes",
+    "Очередь команд службы заполнена; повторите чуть позже",
+    "Hàng đợi lệnh dịch vụ đã đầy; hãy thử lại sau"
+  ],
+  "Cannot open local data file": [
+    "Não foi possível abrir o arquivo de dados local",
+    "Не удалось открыть локальный файл данных",
+    "Không thể mở tệp dữ liệu cục bộ"
+  ],
+  "Local data must be a regular file": [
+    "Os dados locais devem estar em um arquivo comum",
+    "Локальные данные должны находиться в обычном файле",
+    "Dữ liệu cục bộ phải nằm trong một tệp thông thường"
+  ],
+  "Local data file is too large": [
+    "O arquivo de dados local é grande demais",
+    "Локальный файл данных слишком большой",
+    "Tệp dữ liệu cục bộ quá lớn"
+  ],
+  "Invalid local data limit": [
+    "Limite de dados locais inválido",
+    "Недопустимый лимит локальных данных",
+    "Giới hạn dữ liệu cục bộ không hợp lệ"
+  ],
   "Network command timed out; check `openrad status` before retrying": [
     "O tempo do comando de rede esgotou; verifique `openrad status` antes de tentar novamente",
     "Время команды сети истекло; перед повтором проверьте `openrad status`",
@@ -3818,5 +3833,50 @@
     "recusando remover arquivo que não é socket em {0}",
     "отказ удаления файла, который не является сокетом: {0}",
     "từ chối xóa tệp không phải socket tại {0}"
+  ],
+  "Linux: allow the system permission dialog for TAP setup, then retry if needed. A running Polkit authentication agent is required. The desktop stays unprivileged.": [
+    "Linux: autorize a configuração TAP na janela de permissão do sistema e tente novamente se necessário. É preciso ter um agente de autenticação Polkit em execução. O app continua sem privilégios elevados.",
+    "Linux: разрешите настройку TAP в системном диалоге и при необходимости повторите попытку. Нужен работающий агент аутентификации Polkit. Приложение работает без повышенных прав.",
+    "Linux: cho phép thiết lập TAP trong hộp thoại cấp quyền của hệ thống, rồi thử lại nếu cần. Cần có trình xác thực Polkit đang chạy. Ứng dụng vẫn chạy với quyền người dùng thông thường."
+  ],
+  "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup.": [
+    "A configuração TAP solicita permissão pela janela do sistema. Se ela não aparecer, confira se o Polkit e seu agente de autenticação estão em execução e tente configurar a interface novamente.",
+    "Настройка TAP запрашивает права через системный диалог. Если он не появляется, проверьте работу Polkit и его агента аутентификации, затем повторите настройку интерфейса.",
+    "Thiết lập TAP yêu cầu cấp quyền qua hộp thoại hệ thống. Nếu hộp thoại không xuất hiện, kiểm tra Polkit và trình xác thực đang chạy, rồi thử thiết lập giao diện mạng lại."
+  ],
+  "TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.": [
+    "A autorização TAP falhou; autorize na janela de permissão do sistema e tente novamente. É preciso ter um agente de autenticação Polkit em execução.",
+    "Не удалось получить права для TAP; разрешите действие в системном диалоге и повторите попытку. Нужен работающий агент аутентификации Polkit.",
+    "Cấp quyền TAP thất bại; cho phép trong hộp thoại hệ thống và thử lại. Cần có trình xác thực Polkit đang chạy."
+  ],
+  "invalid TAP helper startup response": [
+    "Resposta inicial inválida do auxiliar TAP",
+    "Неверный начальный ответ помощника TAP",
+    "Phản hồi khởi động trình hỗ trợ TAP không hợp lệ"
+  ],
+  "TAP helper failed after authorization": [
+    "O auxiliar TAP falhou após a autorização",
+    "Сбой помощника TAP после получения прав",
+    "Trình hỗ trợ TAP thất bại sau khi được cấp quyền"
+  ],
+  "TAP setup cancelled": [
+    "Configuração TAP cancelada",
+    "Настройка TAP отменена",
+    "Thiết lập TAP đã bị hủy"
+  ],
+  "TAP authorization or setup timed out; retry interface setup": [
+    "A autorização ou configuração TAP excedeu o tempo limite; tente configurar a interface novamente",
+    "Истекло время получения прав или настройки TAP; повторите настройку интерфейса",
+    "Cấp quyền hoặc thiết lập TAP đã hết thời gian; thử thiết lập giao diện mạng lại"
+  ],
+  "TAP helper descriptor socket is unavailable": [
+    "O socket de descritor do auxiliar TAP está indisponível",
+    "Сокет дескриптора помощника TAP недоступен",
+    "Socket mô tả của trình hỗ trợ TAP không khả dụng"
+  ],
+  "TAP setup worker failed": [
+    "O processo de configuração TAP falhou",
+    "Сбой рабочего потока настройки TAP",
+    "Luồng thiết lập TAP thất bại"
   ]
 }

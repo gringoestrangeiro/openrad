@@ -7,6 +7,31 @@ use std::{collections::BTreeSet, fs::File, io::Read, path::Path};
 pub const ADAPTER_NAME: &str = "OpenRad";
 pub const MIN_DRIVER_VERSION: [u16; 4] = [9, 27, 0, 0];
 
+/// Only validated OS identifiers are interpolated into the embedded script.
+#[cfg(any(windows, test))]
+pub(crate) fn adapter_setup_script(guid: &str, driver_key: &str) -> Result<String> {
+    let value = guid
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(guid);
+    ensure!(
+        value.len() == 36
+            && value.bytes().enumerate().all(|(index, byte)| {
+                if [8, 13, 18, 23].contains(&index) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            }),
+        "Invalid TAP adapter GUID"
+    );
+    validate_driver_key(driver_key)?;
+    Ok(format!(
+        "& {{\n{}\n}} -AdapterGuid '{guid}' -DriverKey '{driver_key}'",
+        include_str!("../packaging/windows/setup-adapter.ps1")
+    ))
+}
+
 /// Accept only a network device's exact software-key identifier from SetupAPI.
 pub fn validate_driver_key(key: &str) -> Result<()> {
     let (class, instance) = key.split_once('\\').context("Invalid TAP driver key")?;
@@ -32,11 +57,8 @@ pub struct Manifest {
 }
 impl Manifest {
     pub fn read(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path).context("Cannot read the installation manifest")?;
-        ensure!(
-            data.len() <= 1024 * 1024,
-            "Installation manifest is too large"
-        );
+        let data = crate::file_io::read_bounded(path, 1024 * 1024)
+            .context("Cannot read the installation manifest")?;
         let manifest: Self = serde_json::from_slice(&data)?;
         ensure!(
             manifest.format == "openrad-install-v1",
@@ -167,6 +189,23 @@ pub fn ready(files_match: bool, adapters: &[Adapter], selection: &Selection) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn embedded_adapter_script_rejects_identifiers_that_could_inject_source() {
+        let guid = "{01234567-89ab-cdef-0123-456789abcdef}";
+        let driver = "{4d36e972-e325-11ce-bfc1-08002be10318}\\0001";
+        let script = adapter_setup_script(guid, driver).unwrap();
+        assert!(script.contains("function Test-AdapterGuid"));
+        assert!(script.ends_with(&format!("-AdapterGuid '{guid}' -DriverKey '{driver}'")));
+        for invalid in [
+            "",
+            "' ; exit 0; #",
+            "{01234567-89ab-cdef-0123-456789abcdeg}",
+            "01234567_89ab-cdef-0123-456789abcdef",
+        ] {
+            assert!(adapter_setup_script(invalid, driver).is_err());
+        }
+        assert!(adapter_setup_script(guid, "' ; exit 0; #").is_err());
+    }
     #[test]
     fn driver_key_rejects_other_classes_and_registry_traversal() {
         assert!(validate_driver_key("{4D36E972-E325-11CE-BFC1-08002BE10318}\\0001").is_ok());

@@ -73,6 +73,13 @@ without surrounding quotes, for example:
 .\OpenRad-Setup.exe --no-launch /D=D:\Apps\OpenRad
 ```
 
+Keep custom installation folders protected from modification by other users.
+OpenRad runs with elevation on Windows, so its executables and DLLs must be
+trusted when launched. Setup and recovery resolve PowerShell through Windows'
+system-directory API, load only system modules, and run embedded scripts.
+Release checks similarly resolve the system `curl.exe`; a `curl.exe` in the
+working directory or PATH is not used.
+
 The setup EXE is self-contained and can be carried to another PC. TAP is a
 Windows kernel driver, so each PC needs its own setup/UAC approval. Copying just
 the installed application folder to a new PC does not install that PC's driver.

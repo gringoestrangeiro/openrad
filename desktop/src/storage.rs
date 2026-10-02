@@ -176,14 +176,10 @@ impl Paths {
     }
     pub fn settings(&self) -> Result<Settings> {
         let path = self.directory.join("settings.json");
-        if !path.exists() {
+        let Some(bytes) = openrad::file_io::read_optional_bounded(&path, 64 * 1024 - 1)? else {
             return Ok(Settings::default());
-        }
-        ensure!(
-            fs::metadata(&path)?.len() < 64 * 1024,
-            "Settings file is too large"
-        );
-        let settings: Settings = serde_json::from_slice(&fs::read(path)?)?;
+        };
+        let settings: Settings = serde_json::from_slice(&bytes)?;
         Ok(settings.normalized())
     }
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
@@ -204,14 +200,10 @@ impl Paths {
     }
     pub fn network_preferences(&self) -> Result<NetworkPreferences> {
         let path = self.directory.join("network-preferences.json");
-        if !path.exists() {
+        let Some(bytes) = openrad::file_io::read_optional_bounded(&path, 1024 * 1024)? else {
             return Ok(NetworkPreferences::default());
-        }
-        ensure!(
-            fs::metadata(&path)?.len() <= 1024 * 1024,
-            "Network preferences file is too large"
-        );
-        let preferences: NetworkPreferences = serde_json::from_slice(&fs::read(path)?)?;
+        };
+        let preferences: NetworkPreferences = serde_json::from_slice(&bytes)?;
         preferences.validate()?;
         Ok(preferences)
     }

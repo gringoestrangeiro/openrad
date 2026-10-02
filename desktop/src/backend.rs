@@ -274,7 +274,7 @@ fn manager(
     let loaded = (|| -> Result<()> {
         crate::startup_log::checkpoint(crate::startup_log::Stage::BackendVault);
         crate::startup_log::checkpoint(crate::startup_log::Stage::BackendIdentity);
-        if dir.identity().exists() {
+        if dir.identity_file_present() {
             identity = Some(dir.load_identity()?);
         } else if !service_running {
             identity = storage::load(&paths.entry()?)?;
@@ -284,7 +284,7 @@ fn manager(
             ensure!(!service_running, "Disconnect before importing an identity");
             ensure!(identity.as_ref().is_none_or(|id| id.rid == imported.rid),
                 "This profile already has an identity; use another data directory to import a different one");
-            if dir.identity().exists() {
+            if dir.identity_file_present() {
                 dir.save_identity(&imported)?;
             } else {
                 storage::save(&paths.entry()?, &imported)?;
@@ -357,7 +357,7 @@ fn manager(
                     return Ok(());
                 }
                 let profile_lock = dir.try_profile_lock()?;
-                if dir.identity().exists() {
+                if dir.identity_file_present() {
                     identity = Some(dir.load_identity()?);
                 } else if identity.is_none() {
                     identity = storage::load(&paths.entry()?)?;
@@ -384,7 +384,7 @@ fn manager(
                     persisted = false;
                 }
                 if !persisted {
-                    if dir.identity().exists() {
+                    if dir.identity_file_present() {
                         persisted = true;
                     } else {
                         storage::save(&paths.entry()?, identity.as_ref().unwrap())?;
@@ -495,7 +495,7 @@ fn manager(
                 // Closing a frontend leaves the shared service available to CLI
                 // clients. Disconnect/Stop are explicit, shared session actions.
                 if replacement.is_pending() {
-                    let result = if dir.identity().exists() {
+                    let result = if dir.identity_file_present() {
                         replacement.commit(&ProfileVault(dir.clone()), &mut identity)
                     } else {
                         paths
@@ -567,7 +567,7 @@ fn manager(
                         "Identity reset saving replacement; elapsed_ms={}",
                         started.elapsed().as_millis()
                     ));
-                    if dir.identity().exists() {
+                    if dir.identity_file_present() {
                         commit_replacement(
                             &mut replacement,
                             &ProfileVault(dir.clone()),
@@ -676,7 +676,7 @@ fn manager(
                         identity.as_ref().is_none_or(|id| id.rid == imported.rid),
                         "An identity is already saved in this profile"
                     );
-                    if dir.identity().exists() {
+                    if dir.identity_file_present() {
                         dir.save_identity(&imported)?;
                     } else {
                         storage::save(&paths.entry()?, &imported)?;

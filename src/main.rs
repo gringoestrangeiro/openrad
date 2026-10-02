@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
-    fs::{self, OpenOptions},
-    io::{Read, Write},
+    fs::OpenOptions,
+    io::Write,
     net::Ipv4Addr,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -173,20 +173,30 @@ impl Command {
     }
 }
 
-fn password_file(path: &Path) -> Result<Zeroizing<String>> {
-    let mut contents = Zeroizing::new(String::new());
-    fs::File::open(path)?
-        .take(4097)
-        .read_to_string(&mut contents)?;
-    ensure!(contents.len() <= 4096, "network password file too large");
+fn password_file(path: &Path) -> Result<openrad::network::NetworkPassword> {
+    let bytes = openrad::file_io::read_bounded(path, 4096)?;
+    let mut contents = Zeroizing::new(std::str::from_utf8(&bytes)?.to_owned());
     if contents.ends_with('\n') {
         contents.pop();
         if contents.ends_with('\r') {
             contents.pop();
         }
     }
-    openrad::network::NetworkPassword::new(contents.to_string())?;
-    Ok(contents)
+    openrad::network::NetworkPassword::new(contents.to_string())
+}
+
+/// A locked/unavailable store is not evidence that the profile has no device.
+/// Explicit imports remain possible without a store and never register a device.
+fn saved_identity_present(stored: Result<Vec<u8>>, importing: bool) -> Result<bool> {
+    match stored {
+        Ok(bytes) => {
+            let _secret = Zeroizing::new(bytes);
+            Ok(true)
+        }
+        Err(error) if matches!(error.downcast_ref::<keyring::Error>(), Some(keyring::Error::NoEntry)) => Ok(false),
+        Err(_) if importing => Ok(false),
+        Err(_) => anyhow::bail!("Could not read the saved identity. Unlock your credential store; your identity has not been replaced."),
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -199,22 +209,20 @@ fn initialize(
 ) -> Result<daemon::Reply> {
     let _profile_lock = dir.profile_lock()?;
     ensure!(
-        !dir.path.join("profile").exists()
+        !dir.identity_file_present()
             && daemon::request(dir, &daemon::Request::Status).is_err()
-            && !dir
-                .entry()
-                .and_then(|entry| entry.get_secret().map_err(anyhow::Error::from))
-                .is_ok(),
+            && !saved_identity_present(
+                dir.entry()
+                    .and_then(|entry| entry.get_secret().map_err(anyhow::Error::from)),
+                source.is_some()
+            )?,
         "Profile already exists at {}. Use `openrad start` or choose another --data-dir",
         dir.path.display()
     );
     let modulus = if let Some(path) = modulus_path {
-        let metadata = fs::metadata(&path)?;
-        ensure!(
-            (1..=4096).contains(&metadata.len()),
-            "public modulus size is invalid"
-        );
-        Some(fs::read(path)?)
+        let bytes = openrad::file_io::read_bounded(&path, 4096)?;
+        ensure!(!bytes.is_empty(), "public modulus size is invalid");
+        Some(bytes.to_vec())
     } else {
         None
     };
@@ -319,7 +327,7 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 &dir,
                 &Request::Join {
                     name: network,
-                    password: password.as_ref().map(|p| p.to_string()),
+                    password,
                 },
             )?
         }
@@ -332,7 +340,7 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 &dir,
                 &Request::Create {
                     name: network,
-                    password: password.to_string(),
+                    password,
                 },
             )?
         }
@@ -628,6 +636,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unreadable_credential_storage_cannot_authorize_another_registration() {
+        assert!(!saved_identity_present(Err(keyring::Error::NoEntry.into()), false).unwrap());
+        assert!(saved_identity_present(Err(keyring::Error::NoDefaultStore.into()), false).is_err());
+        assert!(
+            saved_identity_present(Err(anyhow::anyhow!("synthetic locked store")), false).is_err()
+        );
+        assert!(saved_identity_present(Ok(b"synthetic-existing-identity".to_vec()), true).unwrap());
+        assert!(!saved_identity_present(Err(keyring::Error::NoDefaultStore.into()), true).unwrap());
+    }
     #[test]
     fn deletion_requires_explicit_confirmation() {
         assert!(Cli::try_parse_from(["openrad", "delete", "Example"]).is_err());

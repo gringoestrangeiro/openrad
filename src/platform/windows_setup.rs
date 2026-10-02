@@ -9,8 +9,7 @@ use anyhow::{ensure, Context, Result};
 use std::{
     ffi::c_void,
     os::windows::{ffi::OsStrExt, process::CommandExt},
-    path::{Path, PathBuf},
-    process::Command,
+    path::Path,
     time::{Duration, Instant},
 };
 use windows_sys::{
@@ -221,14 +220,9 @@ pub fn runtime_adapter_guid(name: &str) -> Result<String> {
 }
 
 fn state(directory: &Path) -> Result<Option<AdapterState>> {
-    match std::fs::read(directory.join(STATE)) {
-        Ok(data) => {
-            ensure!(data.len() <= 4096, "Invalid adapter ownership record");
-            Ok(Some(serde_json::from_slice(&data)?))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
+    crate::file_io::read_optional_bounded(&directory.join(STATE), 4096)?
+        .map(|data| serde_json::from_slice(&data).map_err(Into::into))
+        .transpose()
 }
 fn find_device(guid: &str) -> Result<Option<(DeviceSet, SP_DEVINFO_DATA)>> {
     let set = DeviceSet::present()?;
@@ -429,28 +423,12 @@ fn driver_key(guid: &str) -> Result<String> {
     setup::validate_driver_key(&key)?;
     Ok(key)
 }
-fn name_and_enable(directory: &Path, guid: &str) -> Result<()> {
-    // GUID and exact SetupAPI driver key are separate process arguments, never
-    // interpolated into source. Only the verified TAP adapter is configured.
+fn name_and_enable(guid: &str) -> Result<()> {
+    // Execute the build's immutable script rather than a file that could be
+    // replaced after manifest verification in a writable custom installation.
     let driver_key = driver_key(guid)?;
-    let script = directory.join("setup-adapter.ps1");
-    let system =
-        std::env::var_os("SystemRoot").context("Windows system directory is unavailable")?;
-    let powershell = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let output = Command::new(powershell)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(&script)
-        .arg("-AdapterGuid")
-        .arg(guid)
-        .arg("-DriverKey")
-        .arg(driver_key)
+    let script = setup::adapter_setup_script(guid, &driver_key)?;
+    let output = crate::windows_security::powershell_command(&script)?
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .context("Cannot run the Windows adapter setup command")?;
@@ -535,7 +513,7 @@ pub fn configure(directory: &Path) -> Result<i32> {
             (guid, true)
         }
     };
-    name_and_enable(directory, &guid)?;
+    name_and_enable(&guid)?;
     let state = AdapterState {
         guid,
         created_by_setup,

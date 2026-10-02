@@ -62,25 +62,13 @@ pub(crate) fn prepare_addresses(
 #[cfg(windows)]
 pub(crate) fn recover(indices: &[u32]) -> Result<()> {
     use anyhow::Context;
-    use base64::Engine;
-    use std::{os::windows::process::CommandExt, path::PathBuf, process::Command};
-    use windows_sys::Win32::System::{
-        SystemInformation::GetSystemDirectoryW, Threading::CREATE_NO_WINDOW,
-    };
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     ensure!(
         crate::windows_security::token_is_elevated()?,
         "Run OpenRad as administrator to disable the conflicting official Radmin VPN adapter"
     );
-    let mut directory = [0u16; 32768];
-    // Use the OS directory, never a PATH lookup or caller-controlled SystemRoot.
-    let length = unsafe { GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32) };
-    ensure!(
-        length > 0 && (length as usize) < directory.len(),
-        "Windows system directory is unavailable"
-    );
-    let powershell = PathBuf::from(String::from_utf16(&directory[..length as usize])?)
-        .join("WindowsPowerShell/v1.0/powershell.exe");
     let indices = indices
         .iter()
         .map(u32::to_string)
@@ -93,25 +81,10 @@ pub(crate) fn recover(indices: &[u32]) -> Result<()> {
         "{}\nInvoke-OpenRadRadminRecovery -InterfaceIndex @({indices})",
         include_str!("windows_radmin.ps1")
     );
-    // PowerShell expects UTF-16LE here. Encoding also preserves its embedded
-    // quotes across Windows' native command-line parsing.
-    let script = base64::engine::general_purpose::STANDARD.encode(
-        script
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>(),
-    );
     crate::early_log::event(format_args!(
         "Official Radmin VPN conflict; starting temporary SYSTEM recovery"
     ));
-    let output = Command::new(powershell)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            &script,
-        ])
+    let output = crate::windows_security::powershell_command(&script)?
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .context("Cannot start SYSTEM recovery for the official Radmin VPN adapter")?;

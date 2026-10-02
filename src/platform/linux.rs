@@ -14,7 +14,8 @@ use std::{
         unix::{fs::OpenOptionsExt, net::UnixStream},
     },
     process::{Command, Stdio},
-    time::Duration,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 pub const NAME: &str = "radminvpn0";
 const TUNSETIFF: libc::c_ulong = 0x400454ca;
@@ -33,18 +34,26 @@ impl Tap {
         peers: &[Ipv4Addr],
         helper: &std::path::Path,
     ) -> Result<Self> {
-        Self::create_configured(vip, peers, helper, false)
+        Self::create_configured(vip, peers, helper, false, &AtomicBool::new(false))
     }
     /// Persistent desktop and CLI LAN: a connected /8 and IPv4 group routes.
     /// The bounded diagnostic client retains controlled-peer /32 route mode.
     pub fn create_lan_with_helper(vip: Ipv4Addr, helper: &std::path::Path) -> Result<Self> {
-        Self::create_configured(vip, &[], helper, true)
+        Self::create_lan_with_helper_cancellable(vip, helper, &AtomicBool::new(false))
+    }
+    pub(crate) fn create_lan_with_helper_cancellable(
+        vip: Ipv4Addr,
+        helper: &std::path::Path,
+        cancelled: &AtomicBool,
+    ) -> Result<Self> {
+        Self::create_configured(vip, &[], helper, true, cancelled)
     }
     fn create_configured(
         vip: Ipv4Addr,
         peers: &[Ipv4Addr],
         helper: &std::path::Path,
         lan: bool,
+        cancelled: &AtomicBool,
     ) -> Result<Self> {
         ensure!(
             helper.is_file(),
@@ -55,40 +64,24 @@ impl Tap {
             "radminvpn0 already exists; refusing to touch it"
         );
 
-        let (parent, child) = UnixStream::pair()?;
-        parent.set_read_timeout(Some(Duration::from_secs(15)))?;
-        let fd: OwnedFd = child.into();
-        let mut command = Command::new("/usr/bin/sudo");
-        command
-            .arg("-n")
-            .arg(helper)
-            .arg("tap-helper")
-            .arg("--vip")
-            .arg(vip.to_string())
-            .arg("--owner")
-            .arg(unsafe { libc::getuid() }.to_string());
+        let helper = helper.canonicalize()?;
+        let mut arguments = vec![
+            helper.into_os_string(),
+            "tap-helper".into(),
+            "--vip".into(),
+            vip.to_string().into(),
+            "--owner".into(),
+            unsafe { libc::getuid() }.to_string().into(),
+        ];
         for peer in peers {
-            command.arg("--peer").arg(peer.to_string());
+            arguments.extend(["--peer".into(), peer.to_string().into()]);
         }
         if lan {
-            command.arg("--lan");
+            arguments.push("--lan".into());
         }
-        let mut child = command
-            .stdin(Stdio::from(fd))
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()?;
-        // The Command still owns our copy of the helper's socket end. Release it so
-        // a helper that exits without sending (e.g. sudo -n needs a password)
-        // yields EOF at once instead of the full read timeout.
-        drop(command);
-        let received = receive_fd(parent.as_raw_fd());
-        let status = child.wait()?;
-        ensure!(
-            status.success(),
-            "TAP helper failed; sudo is required only for interface setup"
-        );
-        let file = received.context("TAP helper did not return an interface descriptor")?;
+        let mut sudo = Command::new("/usr/bin/sudo");
+        sudo.arg("-n").args(&arguments);
+        let file = authorize_helper(sudo, &arguments, cancelled)?;
         Ok(Self {
             file,
             read_buffer: Vec::new(),
@@ -116,6 +109,102 @@ impl Tap {
         Ok(())
     }
 }
+// A detached service has no launching terminal's sudo timestamp. Keep the
+// noninteractive sudo path for administrator-managed authorization, then ask the
+// session's Polkit agent. stdin remains the descriptor socket, never a password.
+fn authorize_helper(
+    sudo: Command,
+    arguments: &[std::ffi::OsString],
+    cancelled: &AtomicBool,
+) -> Result<File> {
+    let mut polkit = Command::new("/usr/bin/pkexec");
+    polkit.arg("--disable-internal-agent").args(arguments);
+    authorize_with_commands(sudo, polkit, cancelled)
+}
+fn authorize_with_commands(sudo: Command, polkit: Command, cancelled: &AtomicBool) -> Result<File> {
+    if let Some(file) = run_helper(sudo, Duration::from_secs(15), cancelled)? {
+        return Ok(file);
+    }
+    run_helper(polkit, Duration::from_secs(120), cancelled)?
+        .context("TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.")
+}
+
+fn run_helper(
+    mut command: Command,
+    authorization_timeout: Duration,
+    cancelled: &AtomicBool,
+) -> Result<Option<File>> {
+    let (mut parent, child) = UnixStream::pair()?;
+    let fd: OwnedFd = child.into();
+    let mut child = match command
+        .stdin(Stdio::from(fd))
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    drop(command); // EOF must be observable when elevation is refused.
+    let result = (|| {
+        let deadline = Instant::now() + authorization_timeout;
+        wait_helper_socket(&parent, deadline, cancelled)?;
+        let mut started = [0];
+        if parent.read(&mut started)? == 0 {
+            return Ok(None); // The helper never ran: authorization refused.
+        }
+        ensure!(started == *b"R", "invalid TAP helper startup response");
+        // Once elevated, setup has its own short deadline. A setup failure must
+        // not trigger another authorization prompt or another setup attempt.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        wait_helper_socket(&parent, deadline, cancelled)?;
+        let file = receive_fd(parent.as_raw_fd())
+            .context("TAP helper did not return an interface descriptor")?;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                ensure!(status.success(), "TAP helper failed after authorization");
+                return Ok(Some(file));
+            }
+            check_helper_deadline(deadline, cancelled)?;
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    })();
+    // A timeout, cancellation, or malformed response must reap the process and
+    // close our socket/received descriptor. Never wait indefinitely on a dialog.
+    if child.try_wait()?.is_none() && child.kill().is_err() {
+        // After elevation the kernel may deny signalling a root-owned helper.
+        // Close the socket now and reap asynchronously; keep cancellation bounded.
+        drop(parent);
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    } else {
+        let _ = child.wait();
+    }
+    result
+}
+fn check_helper_deadline(deadline: Instant, cancelled: &AtomicBool) -> Result<()> {
+    ensure!(!cancelled.load(Ordering::Relaxed), "TAP setup cancelled");
+    ensure!(
+        Instant::now() < deadline,
+        "TAP authorization or setup timed out; retry interface setup"
+    );
+    Ok(())
+}
+fn wait_helper_socket(
+    socket: &UnixStream,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    loop {
+        check_helper_deadline(deadline, cancelled)?;
+        if readable(socket.as_raw_fd(), 50)? {
+            return Ok(());
+        }
+    }
+}
+
 fn ip(args: &[&str]) -> Result<()> {
     let status = Command::new("/usr/bin/ip").args(args).status()?;
     ensure!(status.success(), "TAP interface configuration failed");
@@ -129,6 +218,14 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
         unsafe { libc::geteuid() } == 0,
         "interface helper requires CAP_NET_ADMIN via sudo"
     );
+    // Distinguish an elevation refusal from a failure inside the real helper.
+    let socket_fd = unsafe { libc::dup(0) };
+    ensure!(
+        socket_fd >= 0,
+        "TAP helper descriptor socket is unavailable"
+    );
+    let mut socket = unsafe { UnixStream::from_raw_fd(socket_fd) };
+    socket.write_all(b"R")?;
     ensure!(
         vip.octets()[0] == 26 && peers.len() <= 1024,
         "invalid VPN interface parameters"
@@ -276,5 +373,122 @@ fn receive_fd(socket: RawFd) -> Result<File> {
         Ok(File::from_raw_fd(std::ptr::read_unaligned(
             libc::CMSG_DATA(c).cast::<RawFd>(),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn synthetic(mode: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "tap::implementation::tests::synthetic_elevated_helper",
+                "--nocapture",
+            ])
+            .env("OPENRAD_SYNTHETIC_TAP", mode);
+        command
+    }
+
+    #[test]
+    fn synthetic_elevated_helper() {
+        let Ok(mode) = std::env::var("OPENRAD_SYNTHETIC_TAP") else {
+            return;
+        };
+        if mode == "refused" {
+            std::process::exit(1);
+        }
+        let mut socket = unsafe { UnixStream::from_raw_fd(libc::dup(0)) };
+        socket.write_all(b"R").unwrap();
+        if mode == "setup-failed" {
+            std::process::exit(1);
+        }
+        let file = File::open("/dev/null").unwrap();
+        send_fd(0, file.as_raw_fd()).unwrap();
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn refused_sudo_falls_back_and_preserves_the_descriptor_socket() {
+        let file = authorize_with_commands(
+            synthetic("refused"),
+            synthetic("success"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let mut data = [0];
+        assert_eq!((&file).read(&mut data).unwrap(), 0);
+        assert_ne!(
+            unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+    }
+
+    #[test]
+    fn authorized_sudo_does_not_request_polkit() {
+        authorize_with_commands(
+            synthetic("success"),
+            Command::new("/nonexistent-polkit"),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn setup_failure_does_not_start_another_authorization() {
+        let error = authorize_with_commands(
+            synthetic("setup-failed"),
+            synthetic("success"),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("descriptor"));
+    }
+
+    #[test]
+    fn rejected_authorization_is_reported_without_waiting_for_the_timeout() {
+        let started = Instant::now();
+        let error = authorize_with_commands(
+            synthetic("refused"),
+            synthetic("refused"),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Polkit"));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn stalled_authorization_is_bounded_and_reaped() {
+        let mut command = Command::new("/bin/sleep");
+        command.arg("10");
+        let started = Instant::now();
+        let error =
+            run_helper(command, Duration::from_millis(100), &AtomicBool::new(false)).unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn stopping_the_session_cancels_pending_authorization() {
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancelled.clone();
+        let worker = std::thread::spawn(move || {
+            let mut command = Command::new("/bin/sleep");
+            command.arg("10");
+            run_helper(command, Duration::from_secs(120), &stop)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(worker
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

@@ -255,6 +255,9 @@ impl Operation {
 impl Drop for Operation {
     fn drop(&mut self) {
         self.cancel();
+        // Local control I/O can contain private network passwords. Wipe only
+        // after cancellation/completion has ended the kernel's buffer borrow.
+        zeroize::Zeroize::zeroize(self.buffer.as_mut());
     }
 }
 

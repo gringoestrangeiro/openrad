@@ -7,6 +7,8 @@ pub mod daemon;
 pub mod diagnostics;
 #[doc(hidden)]
 pub mod early_log;
+#[doc(hidden)]
+pub mod file_io;
 pub mod i18n;
 pub mod incoming;
 pub mod network;
