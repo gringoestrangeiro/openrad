@@ -425,7 +425,77 @@ fn connect_socket(
     Ok(stream)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+fn connect_socket(
+    address: &std::net::SocketAddr,
+    timeout: Duration,
+    stop: &Option<Arc<AtomicBool>>,
+) -> Result<TcpStream> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        WSAGetLastError, WSAPoll, POLLWRNORM, SOCKET_ERROR, WSAEALREADY, WSAEINPROGRESS,
+        WSAEWOULDBLOCK, WSAPOLLFD,
+    };
+    ensure!(!timeout.is_zero(), "TCP connect timeout");
+    ensure!(!is_cancelled(stop), "cancelled");
+    let socket = Socket::new(
+        Domain::for_address(*address),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    socket.set_nonblocking(true)?;
+    match socket.connect(&(*address).into()) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(WSAEWOULDBLOCK | WSAEINPROGRESS | WSAEALREADY)
+            ) =>
+        {
+            let until = Instant::now() + timeout;
+            loop {
+                ensure!(!is_cancelled(stop), "cancelled");
+                let remaining = until.saturating_duration_since(Instant::now());
+                ensure!(!remaining.is_zero(), "TCP connect timeout");
+                let mut descriptor = WSAPOLLFD {
+                    fd: socket.as_raw_socket() as _,
+                    events: POLLWRNORM,
+                    revents: 0,
+                };
+                // SAFETY: one live Winsock descriptor, with cancellation checked
+                // between waits. Do not restart the TCP handshake when polling.
+                let result = unsafe {
+                    WSAPoll(
+                        &mut descriptor,
+                        1,
+                        remaining.as_millis().clamp(1, 50) as i32,
+                    )
+                };
+                if result == SOCKET_ERROR {
+                    // SAFETY: retrieves this thread's last Winsock error.
+                    let error = io::Error::from_raw_os_error(unsafe { WSAGetLastError() });
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+                if result > 0 {
+                    if let Some(error) = socket.take_error()? {
+                        return Err(error.into());
+                    }
+                    break;
+                }
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    ensure!(!is_cancelled(stop), "cancelled");
+    socket.set_nonblocking(false)?;
+    Ok(socket.into())
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
 fn connect_socket(
     address: &std::net::SocketAddr,
     timeout: Duration,

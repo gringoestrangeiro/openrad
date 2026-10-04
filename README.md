@@ -43,13 +43,15 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **1.2.0** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **1.3.0** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, build metadata, dependency notices, and checksums.
-The refreshed Windows 1.2.0 installer closes official Radmin VPN before creating
-or repairing TAP; see the [Windows refresh notes](docs/releases/1.2.0-windows-refresh.md).
-Read the [1.2.0 release notes](docs/releases/1.2.0.md) for upgrade behavior,
+Initial peer setup now uses more parallel direct attempts and prepares relay
+pairing during the existing direct preference window, retaining direct deadlines.
+The Windows installer includes the Radmin preparation and recovery fixes from
+the [1.2.0 refresh](docs/releases/1.2.0-windows-refresh.md).
+Read the [1.3.0 release notes](docs/releases/1.3.0.md) for upgrade behavior,
 validation, and platform limitations, and the
-[complete change inventory](docs/releases/1.2.0-changes.md) for every changed file.
+[complete change inventory](docs/releases/1.3.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).

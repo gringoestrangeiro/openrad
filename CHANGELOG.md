@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 — 2026-10-04
+
+Fresh Linux and Windows builds include every change since the refreshed 1.2.0
+source. See the [release notes](docs/releases/1.3.0.md) and
+[file-by-file inventory](docs/releases/1.3.0-changes.md). Windows remains experimental.
+
+- Increase initial peer setup capacity from 64 outgoing / 80 total handshakes to 96 / 128, preserving reserved incoming capacity and existing retry pacing. Run four outgoing TCP candidate lanes and diversify their first wave across address families and public/LAN paths without reducing candidate deadlines.
+- Prepare relay TCP connections and ticket pairing alongside direct attempts on both roles. Keep relay peer authentication behind the existing four-second direct preference and eight-second maximum extension; preparation alone cannot win or forward traffic. Own, cancel and join unused preparation workers, and record preparation timing separately.
+- Validate up to four incoming TCP rendezvous preambles concurrently within the existing eight-socket admission bound, preserving serialized TCP service authentication and full RID/CID validation.
+- Make Windows TCP connection attempts nonblocking and cancellable; queue shared peer-start thread-allocation failures for recovery instead of panicking. Add synthetic regressions for stalled candidates, incoming preambles, direct preference over a prepared relay, overlapped pairing and cancellation. Native Windows TAP/UAC/interoperability validation remains outstanding.
+- Validate with 300 default Linux workspace tests, formatting and Clippy for Linux/Windows, Windows test compilation and 43 selected Windows Rust tests in an isolated Wine prefix. Native platform networking and public-network connection-time measurements remain outstanding.
+
 ## 1.2.0 — 2026-10-04
 
 Fresh Linux and Windows builds include every change since v1.1.0. See the

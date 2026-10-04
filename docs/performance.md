@@ -1,8 +1,8 @@
 # Performance improvements
 
-OpenRad now allows up to **64 outgoing peer handshakes at once**, compared with
-24 in the initial 0.3.0 build. A total limit of **80 handshakes** leaves capacity for incoming
-offers when outgoing attempts are stalled. Established channels do not consume
+OpenRad now allows up to **96 outgoing peer handshakes at once**, compared with
+64 previously and 24 in the initial 0.3.0 build. A total limit of **128 handshakes**
+leaves 32 slots for incoming offers when outgoing attempts are stalled. Established channels do not consume
 handshake slots, and cancelled workers retain their slots until they exit.
 
 Both the desktop application and CLI use these limits. Incoming offers have
@@ -11,22 +11,36 @@ retries, and new peers. Within each group, peers selected for application
 traffic and then peers with fewer failures go first. Retry concurrency stays
 below the outgoing limit so new peers retain setup capacity. Incoming offers
 have a bounded 256-entry mailbox, and
-the advertisement queue accommodates a burst from all 80 setup workers.
+the advertisement queue accommodates a burst from all 128 setup workers.
 
 ## Initial peer connection
 
 - TCP candidates start as soon as they arrive from the authenticated coordinator.
-  Two bounded TCP workers try alternating candidates, allowing a reachable
-  address to bypass an unresponsive first address.
+  Four bounded TCP workers try alternating candidates, allowing a reachable
+  address to bypass three unresponsive first addresses. The first wave mixes
+  public/LAN candidates and IPv4/IPv6 instead of queuing every LAN address behind
+  public addresses. Existing two-second TCP-connect, three-second candidate and
+  eight-second lane budgets remain unchanged.
+- Incoming TCP rendezvous validation uses up to four workers, with the existing
+  eight-socket admission budget. An incomplete preamble cannot block the listener
+  from validating another candidate. The TCP peer/service handshake stays
+  serialized; queued validated sockets receive their own existing ten-second
+  authentication budget when selected.
 - Local UDP advertisement and the relay request no longer wait for mapped UDP
   discovery. Mapping runs in its own cancellable worker on both connection roles.
 - Both authenticated UDP discovery servers are queried concurrently on the same
   socket with a shared two-second deadline. Both replies must still match their
   transactions and agree on the external address. Only unanswered queries retry.
-- Direct paths get a four-second head start before relay setup, on both incoming
-  and outgoing connections. A later UDP/TCP attempt extends this window, up to
-  eight seconds after the relay ticket arrives. Outgoing relay setup can start
-  sooner if all direct candidate responses have arrived, mapping has completed,
+- Relay TCP connection and ticket pairing start as soon as an authenticated relay
+  offer arrives, independently of direct workers. A prepared socket is not a peer
+  channel and cannot forward traffic. Its authentication starts only when the
+  existing fallback policy admits relay, so pairing latency overlaps direct setup.
+  Preparation failures leave direct attempts running. Preparation is cancelled
+  and joined when unused, and diagnostics record its elapsed time separately.
+- Direct paths get a four-second head start before relay authentication, on both
+  incoming and outgoing connections. A later UDP/TCP attempt extends this window,
+  up to eight seconds after the relay ticket arrives. Outgoing relay authentication
+  can start sooner if all direct candidate responses have arrived, mapping has completed,
   and every direct attempt has failed. Explicit relay-only CLI diagnostics skip
   the wait. Late direct candidates continue to be accepted during relay setup.
   Once relay starts, the first fully authenticated Ethernet service wins;
@@ -41,26 +55,42 @@ the advertisement queue accommodates a burst from all 80 setup workers.
   outgoing retries in progress as recovery demand grows, with 200, 100, or
   50 milliseconds between starts. If at least three quarters of eight or more
   attempts in the last 30 seconds fail, it limits retries to at most 32 and
-  spaces starts by at least 150 milliseconds. The overall 64 outgoing / 80
+  spaces starts by at least 150 milliseconds. The overall 96 outgoing / 128
   total handshake limits still apply. Due retries reserve outgoing slots, while
   other slots remain available for new peers and incoming offers. The Retry
   button uses this same queue without resetting failure
   history or established connections. Incoming offers bypass the retry timer
   and pacing because their authenticated rendezvous windows expire.
 
-For 100 outgoing peers, the capacity check now needs two batches (`64 + 36`)
+For 100 outgoing peers, the capacity check now needs two batches (`96 + 4`)
 instead of five (`24 + 24 + 24 + 24 + 4`). This is a scheduling comparison, not
 a measurement of live VPN connection time. Each outgoing handshake can run up
-to five transport workers (two TCP, local UDP, mapped UDP, relay) and one mapping
-worker, all bounded by the peer setup limits. Every losing worker is cancelled
+to seven transport workers (four TCP, local UDP, mapped UDP, and either relay
+preparation or relay authentication) and one mapping worker, all bounded by the
+peer setup limits. Every losing worker is cancelled
 and joined before its setup slot is released.
+OS thread-allocation failures during peer startup enter the existing bounded
+retry queue instead of panicking and terminating established shared channels.
+Windows TCP connects now use a single nonblocking attempt with cancellation
+checks at most 50 ms apart, matching Linux; native Windows runtime validation is
+still required.
 
 Headless regression tests use local sockets and synthetic credentials to verify
-concurrent discovery, transaction checks, direct TCP progress despite a stalled
-candidate, a slower direct handshake winning over a ready relay, bounded relay
+concurrent discovery, transaction checks, direct TCP progress despite three stalled
+candidates, incoming progress despite an incomplete rendezvous, a slower direct
+handshake winning over a prepared relay, pairing overlapped with the unchanged
+direct head start, bounded relay
 fallback, paced recovery of 100 overdue retries, and prompt cancellation. They
 also exercise the full peer/service authentication and encrypted traffic on the
 winning path. They do not measure NAT traversal or public relay performance.
+
+The 1.3.0 connection changes passed 300 default Linux workspace tests
+(eight privileged, rendering or benchmark tests remain ignored), formatting and
+Clippy for Linux and Windows, and Windows test compilation. Forty-three selected
+Windows Rust tests also passed in an isolated Wine prefix: peer connection races,
+handshake scheduling, transport I/O, candidate validation and incoming service
+authentication. These checks do not establish native Windows TAP/UAC behavior or
+real Radmin interoperability.
 
 ## Local measurements
 

@@ -13,8 +13,9 @@ use std::{
 // Most setup time is spent waiting for network I/O. Keep enough attempts in
 // flight for large networks, with room for incoming offers even when outgoing
 // attempts are stalled. Established channels do not consume setup slots.
-pub(crate) const MAX_HANDSHAKES: usize = 80;
-const MAX_OUTGOING_HANDSHAKES: usize = 64;
+pub(crate) const MAX_HANDSHAKES: usize = 128;
+const MAX_OUTGOING_HANDSHAKES: usize = 96;
+pub(crate) const DIRECT_TCP_LANES: usize = 4;
 pub(crate) const MAX_PENDING_OFFERS: usize = 256;
 // Every incoming setup can advertise TCP, local UDP and mapped UDP at once.
 pub(crate) const ADVERTISEMENT_QUEUE: usize = MAX_HANDSHAKES * 4;
@@ -331,14 +332,14 @@ mod tests {
             }
             batches.push(started);
         }
-        assert_eq!(batches, [64, 36]);
+        assert_eq!(batches, [96, 4]);
     }
 
     #[test]
     fn stalled_outgoing_peers_leave_room_for_incoming_offers() {
-        let mut budget = HandshakeBudget::new(std::iter::repeat_n(false, 64));
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(false, MAX_OUTGOING_HANDSHAKES));
         assert!(!budget.try_start(false));
-        for _ in 0..16 {
+        for _ in 0..MAX_HANDSHAKES - MAX_OUTGOING_HANDSHAKES {
             assert!(budget.try_start(true));
         }
         assert!(!budget.try_start(true));
@@ -347,10 +348,10 @@ mod tests {
 
     #[test]
     fn all_slots_can_accept_incoming_peers_and_exits_free_capacity() {
-        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, 80));
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, MAX_HANDSHAKES));
         assert!(!budget.try_start(true));
         assert!(!budget.try_start(false));
-        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, 79));
+        let mut budget = HandshakeBudget::new(std::iter::repeat_n(true, MAX_HANDSHAKES - 1));
         assert!(budget.try_start(false));
         assert!(!budget.try_start(true));
     }
@@ -358,7 +359,10 @@ mod tests {
     #[test]
     fn outgoing_exit_frees_one_slot_without_resetting_the_batch() {
         let mut budget = HandshakeBudget::new(
-            std::iter::repeat_n(false, 63).chain(std::iter::repeat_n(true, 16)),
+            std::iter::repeat_n(false, MAX_OUTGOING_HANDSHAKES - 1).chain(std::iter::repeat_n(
+                true,
+                MAX_HANDSHAKES - MAX_OUTGOING_HANDSHAKES,
+            )),
         );
         assert!(budget.try_start(false));
         assert!(!budget.try_start(false));
@@ -368,7 +372,7 @@ mod tests {
     #[test]
     fn due_retries_keep_outgoing_slots_while_initial_work_continues() {
         let mut budget = HandshakeBudget::new(std::iter::empty());
-        for _ in 0..16 {
+        for _ in 0..MAX_OUTGOING_HANDSHAKES - 48 {
             assert!(budget.try_start_with_reserve(false, 48));
         }
         assert!(!budget.try_start_with_reserve(false, 48));
@@ -376,7 +380,7 @@ mod tests {
             assert!(budget.try_start(false));
         }
         assert!(!budget.try_start(false));
-        for _ in 0..16 {
+        for _ in 0..MAX_HANDSHAKES - MAX_OUTGOING_HANDSHAKES {
             assert!(budget.try_start(true));
         }
         assert!(!budget.try_start(true));

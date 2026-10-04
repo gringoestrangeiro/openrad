@@ -34,13 +34,13 @@ def digest(path):
 
 def root_release_document(text, version):
     """Keep links usable when release notes are also copied to the ZIP root."""
+    text = re.sub(r'\]\((\d+\.\d+\.\d+(?:-[a-z0-9-]+)?\.md)(?=[#)])', r'](docs/releases/\1', text)
     return (text.replace('](../../CHANGELOG.md', '](CHANGELOG.md')
-            .replace(f']({version}-changes.md)', f'](docs/releases/{version}-changes.md)')
-            .replace(f']({version}-windows-refresh.md)', f'](docs/releases/{version}-windows-refresh.md)')
             .replace('](../screenshots/', '](docs/screenshots/')
             .replace('](../linux.md', '](docs/linux.md')
             .replace('](../windows.md', '](docs/windows.md')
             .replace('](../desktop.md', '](docs/desktop.md')
+            .replace('](../architecture.md', '](docs/architecture.md')
             .replace('](../cli.md', '](docs/cli.md')
             .replace('](../cli-pt-BR.md', '](docs/cli-pt-BR.md')
             .replace('](../performance.md', '](docs/performance.md'))
@@ -48,7 +48,7 @@ def root_release_document(text, version):
 
 def copy_release_history(destination):
     """Include the historical guides linked by the changelog and platform guides."""
-    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0-windows-refresh.md']:
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md']:
         target = destination / 'docs/releases' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')

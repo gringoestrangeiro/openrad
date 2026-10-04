@@ -1309,6 +1309,11 @@
     "Слишком много команд сети в очереди. Повторите попытку чуть позже.",
     "Quá nhiều lệnh mạng đang chờ. Hãy thử lại sau một lát."
   ],
+  "Could not start peer worker: {error}": [
+    "Não foi possível iniciar a tarefa de conexão com o peer: {error}",
+    "Не удалось запустить поток подключения к участнику: {error}",
+    "Không thể khởi động luồng kết nối với thành viên: {error}"
+  ],
   "Control worker unavailable": [
     "Processo de controle indisponível",
     "Рабочий поток управления недоступен",

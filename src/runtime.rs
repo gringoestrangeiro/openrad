@@ -1788,21 +1788,50 @@ pub fn run(
                     };
                     let notify = peer_wake.clone();
                     let force_relay = options.force_relay;
-                    let join = thread::spawn(move || {
-                        peer_loop(
-                            id,
-                            key,
-                            vip,
-                            peer,
-                            cancel,
-                            events,
-                            frames,
-                            probes,
-                            setup,
-                            force_relay,
-                            notify,
-                        )
-                    });
+                    let join =
+                        thread::Builder::new()
+                            .name("peer-channel".into())
+                            .spawn(move || {
+                                peer_loop(
+                                    id,
+                                    key,
+                                    vip,
+                                    peer,
+                                    cancel,
+                                    events,
+                                    frames,
+                                    probes,
+                                    setup,
+                                    force_relay,
+                                    notify,
+                                )
+                            });
+                    let join = match join {
+                        Ok(join) => join,
+                        Err(error) => {
+                            // More initial parallelism must not turn a temporary
+                            // OS thread limit into a panic that kills healthy peers.
+                            incoming.finish(rid);
+                            let detail = format!("Could not start peer worker: {error}");
+                            if is_retry {
+                                retry_pacer.record_outcome(Instant::now(), false);
+                            }
+                            let delay = schedule_peer_retry(
+                                &mut retries,
+                                rid,
+                                Some(&detail),
+                                false,
+                                false,
+                                Instant::now(),
+                            )
+                            .unwrap();
+                            diagnostics.event("peer_start_failed", json!({"rid":rid,"attempt":attempt,"error":detail,"retry_ms":delay.as_millis()}));
+                            let state = snapshot.peers.get_mut(&rid).unwrap();
+                            state.status = PeerState::Failed;
+                            state.detail = retry_detail(&detail, delay);
+                            continue;
+                        }
+                    };
                     workers.insert(
                         rid,
                         Worker {

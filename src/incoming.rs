@@ -2,16 +2,16 @@
 //! Membership is checked by the scheduler before an offer can open a listener.
 use crate::{
     output::ReportDirectory,
-    peer::{PeerChannel, PeerStream, TransportPath},
+    peer::{PeerChannel, PeerStream, RelayPreparation, TransportPath},
     protocol::*,
-    scheduling::MAX_PENDING_OFFERS,
+    scheduling::{DIRECT_TCP_LANES, MAX_PENDING_OFFERS},
     session::Framed,
     udp,
 };
 use anyhow::{bail, ensure, Result};
 use serde_json::json;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -293,57 +293,22 @@ impl Setup {
         let result = thread::scope(|scope| -> Result<PeerChannel> {
             let _cancel_guard = Cancel(cancel.clone());
             let (tx, rx) = mpsc::channel::<(&'static str, Result<PeerChannel>)>();
-            if matches!(self.policy, Policy::All | Policy::Tcp) {
+            let listener = if matches!(self.policy, Policy::All | Policy::Tcp) {
                 let listener = udp::listen_dual_stack()?;
                 listener.set_nonblocking(true)?;
                 let addresses =
                     udp::local_candidates(self.route_ip, listener.local_addr()?.port())?;
                 self.wire.try_send(advertise_tcp(self.cid, &addresses)?)?;
-                let tx = tx.clone();
-                let cancel = cancel.clone();
-                let start = &start;
-                scope.spawn(move || {
-                    let r = (|| -> Result<PeerChannel> {
-                        let mut accepted = 0;
-                        loop {
-                            ensure!(
-                                !cancel.load(Ordering::Relaxed) && Instant::now() < until,
-                                "incoming TCP cancelled/timeout"
-                            );
-                            match listener.accept() {
-                                Ok((socket, _)) => {
-                                    accepted += 1;
-                                    ensure!(accepted <= 8, "incoming TCP accept budget");
-                                    let mut stream = Framed::from_socket(
-                                        socket,
-                                        Duration::from_secs(3),
-                                        Some(cancel.clone()),
-                                    )?;
-                                    if stream.accept_rendezvous(peer_rid, cid).is_err() {
-                                        continue;
-                                    }
-                                    // Full SH/service gets a separate bounded deadline.
-                                    let stream = Framed::from_socket(
-                                        stream.socket,
-                                        Duration::from_secs(10),
-                                        Some(cancel.clone()),
-                                    )?;
-                                    return start(
-                                        "tcp",
-                                        PeerStream::Tcp(stream),
-                                        TransportPath::DirectTcp,
-                                    );
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                    thread::sleep(Duration::from_millis(5))
-                                }
-                                Err(e) => return Err(e.into()),
-                            }
-                        }
-                    })();
-                    let _ = tx.send(("tcp", r));
-                });
-            }
+                Some(listener)
+            } else {
+                None
+            };
+            let (rendezvous_tx, rendezvous_rx) = mpsc::sync_channel::<Result<Framed>>(8);
+            let mut rendezvous_active = 0;
+            let mut accepted = 0;
+            let mut validated_tcp = VecDeque::new();
+            let mut tcp_auth_active = false;
+            let mut listener = listener;
             let mut direct_socket = None;
             let mut mapped_socket = None;
             if matches!(self.policy, Policy::All | Policy::Udp) {
@@ -366,20 +331,24 @@ impl Setup {
                 let tx = tx.clone();
                 let cancel = cancel.clone();
                 let start = &start;
-                scope.spawn(move || {
-                    let r = udp::Enet::accept(
-                        socket,
-                        &endpoints,
-                        nonce,
-                        Duration::from_secs(12),
-                        Some(cancel),
-                    )
-                    .and_then(|s| start(name, PeerStream::Udp(s), TransportPath::DirectUdp));
-                    let _ = tx.send((name, r));
-                });
+                thread::Builder::new()
+                    .name(name.into())
+                    .spawn_scoped(scope, move || {
+                        let r = udp::Enet::accept(
+                            socket,
+                            &endpoints,
+                            nonce,
+                            Duration::from_secs(12),
+                            Some(cancel),
+                        )
+                        .and_then(|s| start(name, PeerStream::Udp(s), TransportPath::DirectUdp));
+                        let _ = tx.send((name, r));
+                    })
             };
             let mut relay_started = false;
             let mut relay: Option<crate::peer::RelayOffer> = None;
+            let mut relay_preparation = None;
+            let mut relay_stream = None;
             let mut last_direct_start = None;
             loop {
                 ensure!(!stop.load(Ordering::Relaxed), "cancelled");
@@ -396,7 +365,77 @@ impl Setup {
                                 .push(json!({"winner":name,"connection_id":self.cid}));
                             return Ok(p);
                         }
-                        Err(e) => attempts.push(json!({"path":name,"error":format!("{e:#}")})),
+                        Err(e) => {
+                            if name == "tcp" {
+                                tcp_auth_active = false;
+                            }
+                            attempts.push(json!({"path":name,"error":format!("{e:#}")}));
+                        }
+                    }
+                }
+                for result in rendezvous_rx.try_iter() {
+                    rendezvous_active -= 1;
+                    match result {
+                        Ok(stream) => validated_tcp.push_back(stream),
+                        Err(error) => attempts
+                            .push(json!({"phase":"tcp_rendezvous","error":format!("{error:#}")})),
+                    }
+                }
+                // A partial or unrelated rendezvous must not hold the listener
+                // while a usable candidate waits in its backlog. Admission is
+                // still bounded to eight sockets and four validation workers.
+                while rendezvous_active < DIRECT_TCP_LANES && accepted < 8 {
+                    let Some(tcp_listener) = &listener else { break };
+                    match tcp_listener.accept() {
+                        Ok((socket, _)) => {
+                            let sender = rendezvous_tx.clone();
+                            let cancel = cancel.clone();
+                            thread::Builder::new()
+                                .name("tcp-rendezvous".into())
+                                .spawn_scoped(scope, move || {
+                                    let result = (|| {
+                                        let mut stream = Framed::from_socket(
+                                            socket,
+                                            Duration::from_secs(3),
+                                            Some(cancel),
+                                        )?;
+                                        stream.accept_rendezvous(peer_rid, cid)?;
+                                        Ok(stream)
+                                    })();
+                                    let _ = sender.try_send(result);
+                                })?;
+                            rendezvous_active += 1;
+                            accepted += 1;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) => {
+                            attempts.push(json!({"phase":"tcp_accept","error":error.to_string()}));
+                            listener = None;
+                            break;
+                        }
+                    }
+                }
+                if !tcp_auth_active {
+                    if let Some(stream) = validated_tcp.pop_front() {
+                        // Serialize the TCP service handshake so competing
+                        // addresses cannot install two different TCP winners.
+                        // Its old ten-second budget starts after queueing.
+                        let stream = Framed::from_socket(
+                            stream.socket,
+                            Duration::from_secs(10),
+                            Some(cancel.clone()),
+                        )?;
+                        let tx = tx.clone();
+                        let start = &start;
+                        thread::Builder::new()
+                            .name("incoming-tcp".into())
+                            .spawn_scoped(scope, move || {
+                                let _ = tx.send((
+                                    "tcp",
+                                    start("tcp", PeerStream::Tcp(stream), TransportPath::DirectTcp),
+                                ));
+                            })?;
+                        tcp_auth_active = true;
                     }
                 }
                 if let Some(result) = mapping.as_ref().and_then(udp::MappingDiscovery::poll) {
@@ -417,55 +456,45 @@ impl Setup {
                 if !mapped_candidates.is_empty() {
                     if let Some(socket) = mapped_socket.take() {
                         last_direct_start = Some(Instant::now());
-                        spawn_udp(socket, mapped_candidates.clone(), "mapped-udp");
+                        spawn_udp(socket, mapped_candidates.clone(), "mapped-udp")?;
                     }
                 }
-                if relay.as_ref().is_some_and(|offer| {
-                    offer.ready(
-                        Instant::now(),
-                        last_direct_start,
-                        self.policy == Policy::Relay,
-                    )
-                }) {
-                    let offer = relay.take().unwrap();
+                if let Some(prepared) = relay_preparation.as_ref().and_then(RelayPreparation::poll)
+                {
+                    relay_preparation = None;
+                    match prepared.result {
+                        Ok(stream) => {
+                            attempts.push(json!({"phase":prepared.name,"result":"paired","setup_ms":prepared.elapsed.as_millis()}));
+                            relay_stream = Some(stream);
+                        }
+                        Err(error) => {
+                            relay_started = true;
+                            attempts.push(json!({"phase":prepared.name,"error":format!("{error:#}"),"setup_ms":prepared.elapsed.as_millis()}));
+                        }
+                    }
+                }
+                if !relay_started
+                    && relay_stream.is_some()
+                    && relay.as_ref().is_some_and(|offer| {
+                        offer.ready(
+                            Instant::now(),
+                            last_direct_start,
+                            self.policy == Policy::Relay,
+                        )
+                    })
+                {
+                    let mut stream = relay_stream.take().unwrap();
                     relay_started = true;
                     let tx = tx.clone();
                     let cancel = cancel.clone();
                     let start = &start;
-                    scope.spawn(move || {
-                        let r = (|| -> Result<PeerChannel> {
-                            let mut s = Framed::connect_with_stop(
-                                &offer.host,
-                                offer.port,
-                                Duration::from_secs(30),
-                                Some(cancel),
-                            )?;
-                            s.send(
-                                &[
-                                    u32v(0x010001df, 1),
-                                    u32v(0x0100032b, 2),
-                                    tlv(0x090001ca, &offer.ticket),
-                                ]
-                                .concat(),
-                            )?;
-                            // TRS acknowledges the ticket only once both
-                            // sides have arrived. The initiator may still
-                            // be waiting for late direct candidates.
-                            let ack_until = Instant::now() + Duration::from_secs(25);
-                            while !s.ready(100)? {
-                                ensure!(
-                                    Instant::now() < ack_until,
-                                    "incoming relay pairing timeout"
-                                );
-                            }
-                            ensure!(
-                                int32(field(&records(&s.receive(65536)?)?, 0x010001df)?)? == 2,
-                                "incoming relay ticket rejected"
-                            );
-                            start("relay", PeerStream::Tcp(s), TransportPath::Relay)
-                        })();
-                        let _ = tx.send(("relay", r));
-                    });
+                    thread::Builder::new()
+                        .name("incoming-relay".into())
+                        .spawn_scoped(scope, move || {
+                            stream.set_stop(Some(cancel));
+                            let r = start("relay", PeerStream::Tcp(stream), TransportPath::Relay);
+                            let _ = tx.send(("relay", r));
+                        })?;
                 }
                 let data = match self.records.recv_timeout(Duration::from_millis(10)) {
                     Ok(d) => d,
@@ -506,7 +535,7 @@ impl Setup {
                                 socket,
                                 c,
                                 if operation == 29 { "udp" } else { "mapped-udp" },
-                            );
+                            )?;
                         }
                     }
                     23 if !relay_started && relay.is_none() => {
@@ -526,12 +555,22 @@ impl Setup {
                         if !matches!(self.policy, Policy::All | Policy::Relay) {
                             continue;
                         }
-                        relay = Some(crate::peer::RelayOffer {
+                        let offer = crate::peer::RelayOffer {
                             host,
                             port: port as u16,
                             ticket,
                             received_at: Instant::now(),
-                        });
+                        };
+                        match RelayPreparation::start(&offer, until) {
+                            Ok(preparation) => relay_preparation = Some(preparation),
+                            Err(error) => {
+                                relay_started = true;
+                                attempts.push(
+                                    json!({"phase":"relay_preparation","error":error.to_string()}),
+                                );
+                            }
+                        }
+                        relay = Some(offer);
                     }
                     _ => {}
                 }

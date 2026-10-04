@@ -313,9 +313,9 @@ pub fn run(
                 let cancel = peer_stop.clone();
                 let rid = peer.rid;
                 let binding = peer.clone();
-                let join = thread::spawn(move || {
-                    worker(context, peer, pc, data, tx, receiver, setup, cancel)
-                });
+                let join = thread::Builder::new()
+                    .name("peer-channel".into())
+                    .spawn(move || worker(context, peer, pc, data, tx, receiver, setup, cancel))?;
                 workers.insert(
                     rid,
                     Worker {
