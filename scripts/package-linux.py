@@ -53,10 +53,11 @@ def main():
                              'maximum_required_glibc': glibc[-1] if glibc else None,
                              'host_shared_libraries': libraries}
         for source in ['README.md', 'CHANGELOG.md', 'LICENSE', 'CREDITS.md',
-                       'docs/linux.md', 'docs/windows.md', 'docs/desktop.md', 'docs/cli.md',
+                       'docs/linux.md', 'docs/windows.md', 'docs/desktop.md', 'docs/cli.md', 'docs/cli-pt-BR.md',
                        'docs/architecture.md', 'docs/performance.md', f'docs/releases/{version}.md',
                        f'docs/releases/{version}-changes.md',
                        'docs/screenshots/1.1.0-tap-authorization.png',
+                       'docs/screenshots/1.2.0-broadcast-settings-pt.png',
                        'docs/screenshots/1.0.0-networks.png',
                        'docs/screenshots/1.0.0-discover.png',
                        'docs/screenshots/1.0.0-auto-join.png',
@@ -67,6 +68,7 @@ def main():
             target = output / source
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / source, target)
+        _support.copy_release_history(output)
         license_notices(metadata, output, platform='Linux')
         rust_notice = args.rust_notice
         if not rust_notice.is_file():

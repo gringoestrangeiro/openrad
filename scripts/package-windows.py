@@ -37,10 +37,24 @@ def root_release_document(text, version):
     return (text.replace('](../../CHANGELOG.md', '](CHANGELOG.md')
             .replace(f']({version}-changes.md)', f'](docs/releases/{version}-changes.md)')
             .replace('](../screenshots/', '](docs/screenshots/')
-            .replace('](../linux.md)', '](docs/linux.md)')
-            .replace('](../windows.md)', '](docs/windows.md)')
-            .replace('](../desktop.md)', '](docs/desktop.md)')
-            .replace('](../cli.md)', '](docs/cli.md)'))
+            .replace('](../linux.md', '](docs/linux.md')
+            .replace('](../windows.md', '](docs/windows.md')
+            .replace('](../desktop.md', '](docs/desktop.md')
+            .replace('](../cli.md', '](docs/cli.md')
+            .replace('](../cli-pt-BR.md', '](docs/cli-pt-BR.md')
+            .replace('](../performance.md', '](docs/performance.md'))
+
+
+def copy_release_history(destination):
+    """Include the historical guides linked by the changelog and platform guides."""
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md']:
+        target = destination / 'docs/releases' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')
+        if name == '1.0.0-changes.md':
+            # Its source-file inventory refers to the old tag, not the installed payload.
+            text = text.replace('](../../', '](https://github.com/gringoestrangeiro/openrad/blob/v1.0.0/')
+        target.write_text(text, encoding='utf-8')
 
 
 def imports(path, objdump, formats=("pei-x86-64",)):
@@ -139,6 +153,7 @@ def main():
             ("docs/windows.md", "README-WINDOWS.md"),
             ("docs/windows.md", "docs/windows.md"),
             ("docs/cli.md", "docs/cli.md"),
+            ("docs/cli-pt-BR.md", "docs/cli-pt-BR.md"),
             ("docs/desktop.md", "docs/desktop.md"),
             ("docs/architecture.md", "docs/architecture.md"),
             ("README.md", "README.md"), ("CHANGELOG.md", "CHANGELOG.md"),
@@ -146,6 +161,7 @@ def main():
             (f"docs/releases/{version}.md", f"docs/releases/{version}.md"),
             (f"docs/releases/{version}-changes.md", f"docs/releases/{version}-changes.md"),
             ('docs/screenshots/1.1.0-tap-authorization.png', 'docs/screenshots/1.1.0-tap-authorization.png'),
+            ('docs/screenshots/1.2.0-broadcast-settings-pt.png', 'docs/screenshots/1.2.0-broadcast-settings-pt.png'),
             ("docs/screenshots/1.0.0-networks.png", "docs/screenshots/1.0.0-networks.png"),
             ("docs/screenshots/1.0.0-discover.png", "docs/screenshots/1.0.0-discover.png"),
             ("docs/screenshots/1.0.0-auto-join.png", "docs/screenshots/1.0.0-auto-join.png"),
@@ -161,6 +177,7 @@ def main():
             destination = output / target
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / source, destination)
+        copy_release_history(output)
         root_guide = output / "README-WINDOWS.md"
         root_guide.write_text(
             root_guide.read_text(encoding="utf-8")

@@ -1294,6 +1294,11 @@
     "Вы вступили в сеть {0}",
     "Đã tham gia mạng {0}"
   ],
+  "forwarding worker closed": [
+    "o processo de encaminhamento foi encerrado",
+    "поток пересылки завершён",
+    "luồng chuyển tiếp đã đóng"
+  ],
   "engine event receiver closed": [
     "O receptor de eventos do mecanismo foi fechado",
     "Получатель событий движка закрыт",
@@ -3873,6 +3878,71 @@
     "O socket de descritor do auxiliar TAP está indisponível",
     "Сокет дескриптора помощника TAP недоступен",
     "Socket mô tả của trình hỗ trợ TAP không khả dụng"
+  ],
+  "Select one outgoing broadcast peer by RID, IP or name; 0.0.0.0 restores all peers": [
+    "Selecionar um destino de broadcast por RID, IP ou nome; 0.0.0.0 restaura todos os pares",
+    "Выбрать получателя исходящих широковещательных пакетов по RID, IP или имени; 0.0.0.0 восстанавливает отправку всем узлам",
+    "Chọn một máy nhận quảng bá gửi đi theo RID, IP hoặc tên; 0.0.0.0 khôi phục gửi đến mọi máy"
+  ],
+  "Restore outgoing broadcasts to all eligible peers": [
+    "Restaurar o envio de broadcasts para todos os pares autorizados",
+    "Восстановить отправку широковещательных пакетов всем разрешённым узлам",
+    "Khôi phục gửi quảng bá đến mọi máy ngang hàng đủ điều kiện"
+  ],
+  "Broadcast peer RID must be nonzero and belong to another device": [
+    "O RID do destino de broadcast deve ser diferente de zero e pertencer a outro dispositivo",
+    "RID получателя широковещательных пакетов должен быть ненулевым и принадлежать другому устройству",
+    "RID của máy nhận quảng bá phải khác không và thuộc về thiết bị khác"
+  ],
+  "Connect before selecting a broadcast peer by name or IP; a RID can be saved while disconnected": [
+    "Conecte antes de selecionar o destino de broadcast por nome ou IP; um RID pode ser salvo enquanto estiver desconectado",
+    "Подключитесь перед выбором получателя широковещательных пакетов по имени или IP; RID можно сохранить без подключения",
+    "Kết nối trước khi chọn máy nhận quảng bá theo tên hoặc IP; có thể lưu RID khi chưa kết nối"
+  ],
+  "Broadcast peer not found or ambiguous; use its RID from `openrad peers`": [
+    "Destino de broadcast não encontrado ou ambíguo; use o RID mostrado em `openrad peers`",
+    "Получатель широковещательных пакетов не найден или указан неоднозначно; используйте его RID из `openrad peers`",
+    "Không tìm thấy máy nhận quảng bá hoặc kết quả không rõ ràng; dùng RID từ `openrad peers`"
+  ],
+  "Outgoing broadcasts: all peers": [
+    "Broadcasts de saída: todos os pares",
+    "Исходящие широковещательные пакеты: все узлы",
+    "Quảng bá gửi đi: mọi máy ngang hàng"
+  ],
+  "Outgoing broadcasts: RID {peer}": [
+    "Broadcasts de saída: RID {peer}",
+    "Исходящие широковещательные пакеты: RID {peer}",
+    "Quảng bá gửi đi: RID {peer}"
+  ],
+  "Outgoing broadcasts": [
+    "Broadcasts de saída",
+    "Исходящие широковещательные пакеты",
+    "Quảng bá gửi đi"
+  ],
+  "Choose a peer by RID, exact name or VPN IP. Use 0.0.0.0 to send to all peers.": [
+    "Escolha um par por RID, nome exato ou IP da VPN. Use 0.0.0.0 para enviar a todos os pares.",
+    "Выберите узел по RID, точному имени или IP в VPN. Используйте 0.0.0.0 для отправки всем узлам.",
+    "Chọn máy ngang hàng theo RID, tên chính xác hoặc IP VPN. Dùng 0.0.0.0 để gửi đến mọi máy."
+  ],
+  "Peer RID, name or VPN IP": [
+    "RID, nome ou IP da VPN do par",
+    "RID, имя или IP узла в VPN",
+    "RID, tên hoặc IP VPN của máy ngang hàng"
+  ],
+  "Apply broadcast target": [
+    "Aplicar destino de broadcast",
+    "Применить получателя",
+    "Áp dụng máy nhận quảng bá"
+  ],
+  "Send to all peers": [
+    "Enviar a todos os pares",
+    "Отправлять всем узлам",
+    "Gửi đến mọi máy ngang hàng"
+  ],
+  "Saved immediately. Incoming broadcasts still arrive from every authorized peer. If the selected peer is unavailable, outgoing broadcasts are dropped.": [
+    "Salvo imediatamente. Você continua recebendo broadcasts de todos os pares autorizados. Se o par escolhido estiver indisponível, os broadcasts de saída serão descartados.",
+    "Сохраняется сразу. Входящие широковещательные пакеты по-прежнему принимаются от всех разрешённых узлов. Если выбранный узел недоступен, исходящие широковещательные пакеты отбрасываются.",
+    "Được lưu ngay. Vẫn nhận quảng bá từ mọi máy ngang hàng được phép. Nếu máy đã chọn không khả dụng, quảng bá gửi đi sẽ bị loại bỏ."
   ],
   "TAP setup worker failed": [
     "O processo de configuração TAP falhou",

@@ -15,7 +15,7 @@ use openrad::{
     runtime::{self, Command, PeerState, PeerView, Snapshot, Update},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fs::File,
     path::PathBuf,
     sync::Arc,
@@ -372,6 +372,7 @@ impl PeerRowCache {
 struct NetworkListCache {
     initialized: bool,
     networks: Vec<Network>,
+    joined_names: HashSet<String>,
     memberships: Vec<(u64, BTreeSet<String>)>,
     role_sizes: Vec<(String, usize)>,
     favorites: BTreeSet<String>,
@@ -402,6 +403,9 @@ impl NetworkListCache {
         }
         if !same_networks {
             self.networks.clone_from(&snapshot.networks);
+            self.joined_names.clear();
+            self.joined_names
+                .extend(snapshot.networks.iter().map(|n| n.name.clone()));
         }
         if !same_memberships {
             self.memberships = snapshot
@@ -597,6 +601,8 @@ pub struct App {
     identity: Option<(u64, String)>,
     settings: Settings,
     saved_settings: Settings,
+    broadcast_peer: Option<u64>,
+    broadcast_input: String,
     system_language: Language,
     snapshot: Snapshot,
     peer_list: PeerListCache,
@@ -691,6 +697,8 @@ impl App {
             message: "Opening your credential store…".into(),
             identity: None,
             saved_settings: settings.clone(),
+            broadcast_peer: None,
+            broadcast_input: "0.0.0.0".into(),
             settings,
             system_language: Language::system(),
             snapshot: Snapshot::default(),
@@ -811,6 +819,16 @@ impl App {
                     }
                     self.saved_settings.force_relay = enabled;
                 }
+                Notice::BroadcastPreference(peer) => {
+                    let previous = self
+                        .broadcast_peer
+                        .map_or_else(|| "0.0.0.0".to_owned(), |rid| rid.to_string());
+                    if self.broadcast_input == previous {
+                        self.broadcast_input =
+                            peer.map_or_else(|| "0.0.0.0".to_owned(), |rid| rid.to_string());
+                    }
+                    self.broadcast_peer = peer;
+                }
                 Notice::Release(release) => {
                     if !self.dismissed_releases.contains(&release.version) {
                         self.release = Some(release);
@@ -921,11 +939,7 @@ impl App {
                         continue;
                     }
                     if append {
-                        for n in networks {
-                            if !self.catalog.iter().any(|old| old.name == n.name) {
-                                self.catalog.push(n);
-                            }
-                        }
+                        append_catalog(&mut self.catalog, networks);
                     } else {
                         self.catalog = networks;
                     }
@@ -1178,15 +1192,12 @@ impl App {
             !self.join_draft.is_empty() && self.join_draft.len() <= MAX_JOIN_NETWORKS,
             "Select between 1 and 128 networks"
         );
+        self.network_list
+            .refresh(&self.snapshot, &self.network_preferences.favorites);
         let mut run = JoinRun::default();
         for network in &self.join_draft {
             openrad::network::validate_name(&network.name)?;
-            if self
-                .snapshot
-                .networks
-                .iter()
-                .any(|joined| joined.name == network.name)
-            {
+            if self.network_list.joined_names.contains(&network.name) {
                 let message = if self.membership_pending(&network.name) {
                     "Membership is pending administrator approval"
                 } else {
@@ -2412,17 +2423,15 @@ impl App {
             });
             ui.add_space(12.);
             let filter = self.query.trim().to_lowercase();
+            self.network_list
+                .refresh(&self.snapshot, &self.network_preferences.favorites);
             for display in self
                 .public_networks()
                 .iter()
                 .filter(|display| display.normalized_name.contains(&filter))
             {
                 let network = &display.network;
-                let joined = self
-                    .snapshot
-                    .networks
-                    .iter()
-                    .any(|n| n.name == network.name);
+                let joined = self.network_list.joined_names.contains(&network.name);
                 ui.push_id(&network.name, |ui| {
                     card().inner_margin(18).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -2737,6 +2746,34 @@ impl App {
             ui.add_space(8.);
         }
     }
+    fn broadcast_settings(&mut self, ui: &mut egui::Ui) {
+        let language = self.language();
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new(language.text("Outgoing broadcasts")).size(18.).strong());
+            ui.add_space(12.);
+            ui.label(match self.broadcast_peer {
+                Some(peer) => language.format("Outgoing broadcasts: RID {peer}", &[("peer", &peer.to_string())]),
+                None => language.text("Outgoing broadcasts: all peers").to_owned(),
+            });
+            ui.label(RichText::new(language.text("Choose a peer by RID, exact name or VPN IP. Use 0.0.0.0 to send to all peers.")).size(11.).color(MUTED));
+            ui.add_space(8.);
+            ui.add(egui::TextEdit::singleline(&mut self.broadcast_input)
+                .hint_text(language.text("Peer RID, name or VPN IP"))
+                .char_limit(256)
+                .desired_width(ui.available_width().min(360.)));
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(!self.broadcast_input.trim().is_empty(), primary(language.text("Apply broadcast target"))).clicked() {
+                    self.backend.send(Action::BroadcastPeer(self.broadcast_input.trim().to_owned()));
+                }
+                if ui.button(language.text("Send to all peers")).clicked() {
+                    self.broadcast_input = "0.0.0.0".into();
+                    self.backend.send(Action::BroadcastPeer(self.broadcast_input.clone()));
+                }
+            });
+            ui.label(RichText::new(language.text("Saved immediately. Incoming broadcasts still arrive from every authorized peer. If the selected peer is unavailable, outgoing broadcasts are dropped.")).size(11.).color(MUTED));
+        });
+    }
     fn settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
         ui.label(
@@ -2811,6 +2848,8 @@ impl App {
             ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).desired_width(300.));
             ui.label(RichText::new(language.text("Save preferences to change the name peers see. Your identity and memberships are preserved.")).size(11.).color(MUTED));
         });
+        ui.add_space(16.);
+        self.broadcast_settings(ui);
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -3475,6 +3514,24 @@ fn visible_peers<'a>(
         .map(|index| &snapshot.peers[&cache.peers[*index].key])
         .collect()
 }
+/// Preserve the first result and server order in linear expected time. Borrow
+/// names while choosing entries so deduplication never clones their strings.
+fn append_catalog(catalog: &mut Vec<PublicNetwork>, networks: Vec<PublicNetwork>) {
+    let append: Vec<bool> = {
+        let mut names: HashSet<&str> = catalog.iter().map(|n| n.name.as_str()).collect();
+        networks
+            .iter()
+            .map(|n| names.insert(n.name.as_str()))
+            .collect()
+    };
+    catalog.extend(
+        networks
+            .into_iter()
+            .zip(append)
+            .filter_map(|(network, append)| append.then_some(network)),
+    );
+}
+
 fn ordered_public_networks(
     networks: &[PublicNetwork],
     favorites: &BTreeSet<String>,
@@ -4779,6 +4836,62 @@ mod tests {
         cache.refresh(&snapshot, &preferences.favorites);
         assert_eq!(cache.counts["Zeta"], 0);
     }
+
+    #[test]
+    fn joined_name_index_tracks_renames_removals_and_duplicate_names() {
+        let mut snapshot = Snapshot {
+            networks: vec![
+                Network {
+                    name: "α network".into(),
+                    network_id: "a".into(),
+                },
+                Network {
+                    name: "α network".into(),
+                    network_id: "b".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut cache = NetworkListCache::default();
+        let favorites = BTreeSet::new();
+        cache.refresh(&snapshot, &favorites);
+        assert_eq!(cache.joined_names.len(), 1);
+        snapshot.networks[0].name = "renamed".into();
+        cache.refresh(&snapshot, &favorites);
+        assert!(cache.joined_names.contains("α network"));
+        assert!(cache.joined_names.contains("renamed"));
+        snapshot.networks.remove(1);
+        cache.refresh(&snapshot, &favorites);
+        assert!(!cache.joined_names.contains("α network"));
+        snapshot.networks.clear();
+        cache.refresh(&snapshot, &favorites);
+        assert!(cache.joined_names.is_empty());
+    }
+
+    #[test]
+    fn catalog_append_keeps_first_results_and_server_order_with_repeated_names() {
+        let public = |name: &str, reported_count| PublicNetwork {
+            name: name.into(),
+            reported_count,
+        };
+        let mut catalog = vec![public("α", 1), public("alpha", 2)];
+        append_catalog(
+            &mut catalog,
+            vec![
+                public("α", 99),
+                public("Beta", 3),
+                public("Beta", 99),
+                public("beta", 4),
+            ],
+        );
+        assert_eq!(
+            catalog
+                .iter()
+                .map(|n| (n.name.as_str(), n.reported_count))
+                .collect::<Vec<_>>(),
+            [("α", 1), ("alpha", 2), ("Beta", 3), ("beta", 4)]
+        );
+    }
     #[test]
     fn peer_rows_keep_exact_scroll_extent_and_remeasure_layout_changes() {
         let mut fixture = Fixture::new();
@@ -5472,6 +5585,94 @@ mod tests {
             std::fs::write(directory.join(format!("{filename}.ppm")), ppm).unwrap();
         }
     }
+    #[test]
+    fn broadcast_target_controls_apply_and_restore_without_changing_incoming_policy() {
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            let (backend, actions) = Backend::recording_fixture();
+            app.backend = backend;
+            app.page = Page::Settings;
+            app.settings.language = preference;
+            app.broadcast_input = "26.0.0.2".into();
+            let language = app.language();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            click_button(&ctx, app, language.text("Apply broadcast target"));
+            assert!(
+                matches!(actions.try_recv().unwrap(), Action::BroadcastPeer(target) if target == "26.0.0.2")
+            );
+            app.backend
+                .notices
+                .send(Notice::BroadcastPreference(Some(2)));
+            app.consume(&ctx);
+            tall_frame(&ctx, app, vec![]);
+            assert_eq!(app.broadcast_peer, Some(2));
+            click_button(&ctx, app, language.text("Send to all peers"));
+            assert!(
+                matches!(actions.try_recv().unwrap(), Action::BroadcastPeer(target) if target == "0.0.0.0")
+            );
+            assert_eq!(app.broadcast_input, "0.0.0.0");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "renders synthetic broadcast settings with a Vulkan CPU driver"]
+    fn capture_broadcast_settings_without_profiles_credentials_or_a_display() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        app.broadcast_peer = Some(2);
+        app.broadcast_input = "26.0.0.2".into();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reports/broadcast-settings");
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, preference) in [
+            ("en", LanguagePreference::English),
+            ("pt", LanguagePreference::Portuguese),
+            ("ru", LanguagePreference::Russian),
+            ("vi", LanguagePreference::Vietnamese),
+        ] {
+            app.settings.language = preference;
+            for width in [448, 832] {
+                let height = 512;
+                let ctx = egui::Context::default();
+                configure(&ctx);
+                let mut textures = egui::TexturesDelta::default();
+                let mut final_output = None;
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width as f32, height as f32),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.broadcast_settings(ui),
+                    );
+                    textures.append(std::mem::take(&mut output.textures_delta));
+                    final_output = Some(output);
+                }
+                let mut output = final_output.unwrap();
+                output.textures_delta = textures;
+                let pixels =
+                    crate::graphics::software_test::render_offscreen(&ctx, output, width, height);
+                let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
+                for pixel in pixels.as_chunks::<4>().0 {
+                    ppm.extend(&pixel[..3]);
+                }
+                std::fs::write(directory.join(format!("{name}-{width}.ppm")), ppm).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn registered_device_name_remains_editable_and_relay_toggle_is_saved_in_every_language() {
         for preference in [

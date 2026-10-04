@@ -345,8 +345,10 @@ fn gratuitous_arp_replies_and_requests_fan_out_without_rewriting() {
             }
         }
     }
+    let mut request = reply;
+    request[21] = 1;
     for offset in [6, 22, 28, 38] {
-        let mut spoofed = reply.clone();
+        let mut spoofed = request.clone();
         spoofed[offset] ^= 0x40;
         assert!(!valid_inbound(
             &spoofed,
@@ -355,4 +357,46 @@ fn gratuitous_arp_replies_and_requests_fan_out_without_rewriting() {
             tunnel::mac(source)
         ));
     }
+}
+
+#[test]
+fn gratuitous_arp_replies_allow_unrelated_ip_and_mac_addresses() {
+    let source = Ipv4Addr::new(26, 1, 2, 3);
+    let peers = [Ipv4Addr::new(26, 4, 5, 6), Ipv4Addr::new(26, 7, 8, 9)];
+    let mut frame = tunnel::gratuitous_arp(Ipv4Addr::new(192, 168, 1, 42));
+    frame[..6].copy_from_slice(&[2, 1, 2, 3, 4, 5]);
+    frame[6..12].copy_from_slice(&[2, 6, 7, 8, 9, 10]);
+    frame[22..28].copy_from_slice(&[2, 11, 12, 13, 14, 15]);
+    frame[32..38].copy_from_slice(&[2, 16, 17, 18, 19, 20]);
+    let before = frame.clone();
+    assert!(tunnel::forwarding(&frame, source, tunnel::mac(source))
+        .unwrap()
+        .target()
+        .is_none());
+    for peer in peers {
+        assert!(tunnel::deliver_to(
+            &frame,
+            source,
+            tunnel::mac(source),
+            peer,
+            tunnel::mac(peer)
+        ));
+        assert!(valid_inbound(&frame, peer, source, tunnel::mac(source)));
+    }
+    assert_eq!(frame, before);
+    for len in 0..42 {
+        assert!(!valid_inbound(
+            &frame[..len],
+            peers[0],
+            source,
+            tunnel::mac(source)
+        ));
+    }
+    frame.resize(tunnel::MAX_FRAME + 1, 0);
+    assert!(!valid_inbound(
+        &frame,
+        peers[0],
+        source,
+        tunnel::mac(source)
+    ));
 }

@@ -8,7 +8,7 @@ use crate::{
     windows_io::{self, Operation},
 };
 use anyhow::{bail, ensure, Context, Result};
-use std::{net::Ipv4Addr, path::Path, sync::Arc};
+use std::{net::Ipv4Addr, os::windows::io::OwnedHandle, path::Path, sync::Arc};
 use windows_sys::Win32::{
     Foundation::{ERROR_FILE_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE},
     NetworkManagement::{
@@ -98,6 +98,7 @@ fn interface_addresses() -> Result<Vec<crate::windows_radmin::Address>> {
 
 pub struct Tap {
     read: Operation,
+    read_started: bool,
     write: Operation,
     control: Operation,
     adapter_mac: [u8; 6],
@@ -108,6 +109,20 @@ pub struct Tap {
     original_interface: Option<MIB_IPINTERFACE_ROW>,
 }
 impl Tap {
+    fn from_handle(handle: Arc<OwnedHandle>, vip: Ipv4Addr) -> Result<Self> {
+        Ok(Self {
+            read: Operation::new(handle.clone(), 65536)?,
+            read_started: false,
+            write: Operation::new(handle.clone(), tunnel::MAX_FRAME)?,
+            control: Operation::new(handle, 16)?,
+            adapter_mac: [0; 6],
+            wire_mac: tunnel::mac(vip),
+            address: None,
+            routes: Vec::new(),
+            restored_routes: Vec::new(),
+            original_interface: None,
+        })
+    }
     pub fn create(vip: Ipv4Addr, peers: &[Ipv4Addr]) -> Result<Self> {
         Self::create_configured(vip, peers, false)
     }
@@ -151,17 +166,7 @@ impl Tap {
         // SAFETY: exclusive, non-inheritable overlapped handle, owned immediately.
         let handle = Arc::new(unsafe { windows_io::owned(CreateFileW(path.as_ptr(), GENERIC_READ | GENERIC_WRITE, 0, std::ptr::null(), OPEN_EXISTING, FILE_ATTRIBUTE_SYSTEM | FILE_FLAG_OVERLAPPED, std::ptr::null_mut())) }
             .context("Cannot open the OpenRad TAP-Windows6 adapter; close other users of this adapter and run OpenRad as administrator")?);
-        let mut tap = Self {
-            read: Operation::new(handle.clone(), 65536)?,
-            write: Operation::new(handle.clone(), tunnel::MAX_FRAME)?,
-            control: Operation::new(handle, 16)?,
-            adapter_mac: [0; 6],
-            wire_mac: tunnel::mac(vip),
-            address: None,
-            routes: Vec::new(),
-            restored_routes: Vec::new(),
-            original_interface: None,
-        };
+        let mut tap = Self::from_handle(handle, vip)?;
         early_log::tap_step(TapStage::GetVersion);
         tap.control.ioctl(contract::GET_VERSION, &[])?;
         ensure!(
@@ -254,9 +259,9 @@ impl Tap {
             tap.routes.push(route);
         }
         // Leave TAP mode enabled: never call CONFIG_TUN or DHCP masquerading.
-        // A pending read also captures ARP/DAD traffic emitted during setup.
-        early_log::tap_step(TapStage::StartRead);
-        tap.read.read()?;
+        // The setup thread hands this device to the engine and exits. Windows
+        // cancels pending I/O issued by an exiting thread, so the engine must
+        // start the first read itself rather than inherit a cancelled request.
         early_log::tap_step(TapStage::Ready);
         Ok(tap)
     }
@@ -268,7 +273,12 @@ impl Tap {
         self.control.finish(1000)?;
         Ok(())
     }
-    pub fn ready(&self, timeout: i32) -> Result<bool> {
+    pub fn ready(&mut self, timeout: i32) -> Result<bool> {
+        if !self.read_started {
+            early_log::tap_step(TapStage::StartRead);
+            self.read.read()?;
+            self.read_started = true;
+        }
         Ok(self.read.ready(if timeout < 0 {
             u32::MAX
         } else {
@@ -343,4 +353,70 @@ pub fn helper(_: Ipv4Addr, _: u32, _: &[Ipv4Addr]) -> Result<()> {
 }
 pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], _: bool) -> Result<()> {
     helper(vip, owner, peers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+    use windows_sys::Win32::{
+        Storage::FileSystem::PIPE_ACCESS_OUTBOUND,
+        System::Pipes::{CreateNamedPipeW, PIPE_TYPE_BYTE, PIPE_WAIT},
+    };
+
+    #[test]
+    fn tap_read_survives_setup_thread_exit_and_rearms_on_the_engine_thread() {
+        let name = format!(
+            r"\\.\pipe\openrad-tap-handoff-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        );
+        // A local pipe exercises the same overlapped read without a TAP driver,
+        // elevation, a VPN profile, or any changes to network interfaces.
+        let handle = Arc::new(
+            unsafe {
+                windows_io::owned(CreateNamedPipeW(
+                    windows_io::wide(&name).as_ptr(),
+                    PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
+                    PIPE_TYPE_BYTE | PIPE_WAIT,
+                    1,
+                    4096,
+                    4096,
+                    0,
+                    std::ptr::null(),
+                ))
+            }
+            .unwrap(),
+        );
+        let mut connection = Operation::new(handle.clone(), 0).unwrap();
+        connection.connect_pipe().unwrap();
+        let vip = Ipv4Addr::new(26, 1, 2, 3);
+        let mut tap = std::thread::spawn(move || {
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_OVERLAPPED)
+                .open(name)
+                .unwrap();
+            let owned: OwnedHandle = file.into();
+            Tap::from_handle(Arc::new(owned), vip).unwrap()
+        })
+        .join()
+        .unwrap();
+        connection.finish(1000).unwrap();
+        assert!(!tap.read_started);
+        assert!(!tap.ready(0).unwrap());
+        assert!(tap.read_started);
+        // Repeated polls must retain the same pending read.
+        assert!(!tap.ready(0).unwrap());
+        let mut writer = Operation::new(handle, tunnel::MAX_FRAME).unwrap();
+        for frame in [tunnel::gratuitous_arp(vip), tunnel::gratuitous_arp(vip)] {
+            writer.write(&frame).unwrap();
+            writer.finish(1000).unwrap();
+            assert!(tap.ready(1000).unwrap());
+            assert_eq!(tap.receive().unwrap(), frame);
+            assert!(!tap.ready(0).unwrap());
+        }
+        // Drop cancels and drains the rearmed request before releasing storage.
+        drop(tap);
+    }
 }

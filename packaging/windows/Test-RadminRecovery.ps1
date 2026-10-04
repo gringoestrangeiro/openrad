@@ -6,6 +6,8 @@ $errors = $null
 [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors) | Out-Null
 if ($errors.Count -ne 0) { throw ('Invalid recovery script: ' + ($errors -join '; ')) }
 . $source
+$originalResultReader = ${function:Read-OpenRadRadminResult}
+if (-not [IO.File]::ReadAllText($source).Contains('$security.SetAccessRuleProtection($true, $false)')) { throw 'Diagnostic pipe does not protect its ACL.' }
 
 function Assert-Equal($Actual, $Expected, [string]$Reason) {
     if (($Actual -join '|') -ne ($Expected -join '|')) { throw ($Reason + ': ' + ($Actual -join '|')) }
@@ -15,8 +17,15 @@ function Assert-Rejected([scriptblock]$Action, [string]$Reason) {
     try { & $Action } catch { $rejected = $true }
     if (-not $rejected) { throw $Reason }
 }
+function Assert-ErrorContains([scriptblock]$Action, [string]$Expected) {
+    try { & $Action } catch {
+        if (-not $_.Exception.Message.Contains($Expected)) { throw ('Missing error detail: ' + $_.Exception.Message) }
+        return
+    }
+    throw ('Expected failure: ' + $Expected)
+}
 function New-Adapter([uint32]$Index, [string]$Description = 'Famatech Radmin VPN Ethernet Adapter') {
-    return [PSCustomObject]@{ InterfaceIndex = $Index; InterfaceGuid = ([Guid]::NewGuid().ToString('B')); InterfaceDescription = $Description }
+    return [PSCustomObject]@{ InterfaceIndex = $Index; InterfaceGuid = ([Guid]::NewGuid().ToString('B')); InterfaceDescription = $Description; InterfaceAdminStatus = 1 }
 }
 function Reset-Case {
     $env:PSModulePath = 'synthetic-untrusted-modules'
@@ -36,10 +45,20 @@ function Reset-Case {
     $script:startDenied = $false
     $script:registrationDenied = $false
     $script:startRace = $false
+    $script:stopThrows = $false
+    $script:disableDenied = $false
+    $script:reenable = $false
+    $script:verificationReads = 0
+    $script:pipeDisposed = $false
+    $script:taskError = 'synthetic worker failure: adapter access denied'
 }
 function Get-NetAdapter {
     param([switch]$IncludeHidden)
     Assert-Equal $env:PSModulePath ([IO.Path]::Combine([Environment]::SystemDirectory, 'WindowsPowerShell\v1.0\Modules')) 'Recovery resolved cmdlets through an untrusted module path'
+    if ($script:actions -match '^disable:') {
+        $script:verificationReads++
+        if ($script:reenable -and $script:verificationReads -ge 5) { $script:adapters[0].InterfaceAdminStatus = 1 }
+    }
     return $script:adapters
 }
 function Get-CimInstance {
@@ -51,6 +70,7 @@ function Invoke-CimMethod {
     param($InputObject, [string]$MethodName)
     Assert-Equal $MethodName 'StopService' 'Changed service configuration'
     $script:actions += ('stop:' + $InputObject.Name)
+    if ($script:stopThrows) { throw 'CIM service access denied' }
     if ($script:stopResult -eq 0) { $InputObject.Status = 'Stopped' }
     if ($script:changedAdapter) { $script:adapters = @((New-Adapter 19 'Ethernet')) }
     return [PSCustomObject]@{ ReturnValue = $script:stopResult }
@@ -75,7 +95,11 @@ function Stop-Process {
 }
 function Disable-NetAdapter {
     param([Parameter(ValueFromPipeline = $true)]$InputObject, [switch]$Confirm)
-    process { $script:actions += ('disable:' + $InputObject.InterfaceIndex) }
+    process {
+        $script:actions += ('disable:' + $InputObject.InterfaceIndex)
+        if ($script:disableDenied) { throw 'synthetic adapter access denied' }
+        $InputObject.InterfaceAdminStatus = 2
+    }
 }
 function Start-Sleep {
     param([int]$Milliseconds)
@@ -123,13 +147,41 @@ Assert-Equal $script:actions @() 'Ambiguous adapter caused mutations'
 
 Reset-Case
 $script:stopResult = 2
-Assert-Rejected { Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19) } 'Denied service stop was ignored'
-Assert-Equal $script:actions @('stop:RadminVpnService') 'Killed a service after its stop request was denied'
+Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19)
+Assert-Equal $script:actions @('stop:RadminVpnService', 'disable:19') 'Killed a service after its stop request was denied or skipped adapter recovery'
+Assert-Equal $script:verificationReads 10 'Did not observe a disabled adapter for two seconds'
+
+Reset-Case
+$script:stopResult = 5
+Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19)
+Assert-Equal $script:actions @('stop:RadminVpnService', 'disable:19') 'Unsupported service stop prevented adapter recovery'
+
+Reset-Case
+$script:stopThrows = $true
+Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19)
+Assert-Equal $script:actions @('stop:RadminVpnService', 'disable:19') 'CIM stop failure prevented adapter recovery'
+
+Reset-Case
+$script:stopResult = 2
+$script:disableDenied = $true
+Assert-ErrorContains { Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19) } 'Disable-NetAdapter: synthetic adapter access denied; StopService RadminVpnService returned 2'
+Assert-Equal $script:actions @('stop:RadminVpnService', 'disable:19') 'Killed a protected service on failed recovery'
+
+Reset-Case
+$script:stopResult = 2
+$script:reenable = $true
+Assert-ErrorContains { Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19) } 'did not remain administratively disabled; StopService RadminVpnService returned 2'
+Assert-Equal $script:verificationReads 50 'Adapter-state verification did not have a bounded retry'
 
 Reset-Case
 $script:killDenied = $true
-Assert-Rejected { Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19) } 'Denied process termination was ignored'
-Assert-Equal $script:actions @('stop:RadminVpnService', 'kill:123') 'Disabled the adapter while its process was still running'
+Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19)
+Assert-Equal $script:actions @('stop:RadminVpnService', 'kill:123', 'disable:19') 'Denied process termination prevented adapter recovery'
+
+Reset-Case
+$script:killDenied = $true
+$script:disableDenied = $true
+Assert-ErrorContains { Invoke-OpenRadRadminRecoveryWorker -InterfaceIndex @(19) } 'Stop-Process RvControlSvc.exe: Access denied.'
 
 Reset-Case
 $script:disappearAtKill = $true
@@ -153,6 +205,18 @@ Assert-Equal $script:actions @('kill:123', 'disable:19') 'Stopped an unquoted se
 
 # Scheduler mocks: exercise registration, a Ready state before first execution,
 # queued/running states, the real exit result, and finally cleanup on failures.
+function New-OpenRadRadminResultPipe {
+    param([string]$Name)
+    if ($Name -notmatch '^OpenRad-RadminRecovery-[a-f0-9]{32}$') { throw 'Diagnostic pipe name is not unique.' }
+    $pipe = [PSCustomObject]@{}
+    $pipe | Add-Member ScriptMethod BeginWaitForConnection { param($Callback, $State); return [PSCustomObject]@{ IsCompleted = $true } }
+    $pipe | Add-Member ScriptMethod Dispose { $script:pipeDisposed = $true }
+    return $pipe
+}
+function Read-OpenRadRadminResult {
+    param($Pipe, $Connection)
+    return $script:taskError
+}
 function Join-Path {
     param([string]$Path, [string]$ChildPath)
     Assert-Equal $ChildPath 'WindowsPowerShell\v1.0\powershell.exe' 'Task uses an unexpected executable'
@@ -163,7 +227,10 @@ function New-ScheduledTaskAction {
     Assert-Equal $Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' 'Task does a PATH lookup'
     $encoded = ($Argument -split ' -EncodedCommand ')[1]
     $command = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($encoded))
+    $script:workerCommand = $command
     if (-not $command.Contains('Stop-Process') -or -not $command.Contains('-InterfaceIndex @(19)')) { throw 'Encoded task does not contain the fixed worker/targets.' }
+    if (-not $command.Contains('[IO.Pipes.NamedPipeClientStream]::new') -or -not $command.Contains('$message = $_.Exception.Message')) { throw 'Worker discards its failure details.' }
+    if ($command.Contains('WriteAllText') -or $Argument.Length -gt 30000) { throw 'Worker writes a diagnostic file as SYSTEM or exceeds command length limits.' }
     $tokens = $null; $errors = $null
     [Management.Automation.Language.Parser]::ParseInput($command, [ref]$tokens, [ref]$errors) | Out-Null
     if ($errors.Count -ne 0) { throw 'Encoded worker has syntax errors.' }
@@ -215,6 +282,7 @@ Reset-Case
 Invoke-OpenRadRadminRecovery -InterfaceIndex @(19)
 Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') 'Successful task was not cleaned up'
 Assert-Equal $script:polls 4 'Task success was accepted before its worker finished'
+Assert-Equal $script:pipeDisposed $true 'Successful recovery leaked its diagnostic pipe'
 
 Reset-Case
 $script:startRace = $true
@@ -224,8 +292,9 @@ Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') '
 
 Reset-Case
 $script:taskResult = 1
-Assert-Rejected { Invoke-OpenRadRadminRecovery -InterfaceIndex @(19) } 'Worker failure was ignored'
+Assert-ErrorContains { Invoke-OpenRadRadminRecovery -InterfaceIndex @(19) } $script:taskError
 Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') 'Failed task was not cleaned up'
+Assert-Equal $script:pipeDisposed $true 'Failed recovery leaked its diagnostic pipe'
 
 Reset-Case
 $script:startDenied = $true
@@ -236,5 +305,44 @@ Reset-Case
 $script:registrationDenied = $true
 Assert-Rejected { Invoke-OpenRadRadminRecovery -InterfaceIndex @(19) } 'Registration failure was ignored'
 Assert-Equal $script:actions @() 'Cleaned up a task that was not registered'
+Assert-Equal $script:pipeDisposed $true 'Registration failure leaked its diagnostic pipe'
 
-Write-Host 'PASS: 19 synthetic Radmin worker/scheduler cases and embedded/encoded script syntax. No Windows services, processes, adapters, or scheduled tasks were changed.'
+# Execute the actual encoded catch/IPC code in disposable PowerShell children.
+# Linux uses byte mode for these local test pipes; production uses Windows
+# message mode and an explicit current-user/SYSTEM ACL.
+foreach ($message in @('synthetic adapter failure: ошибка, não, lỗi', ('x' * 1100))) {
+    $name = [regex]::Match($script:workerCommand, 'OpenRad-RadminRecovery-[a-f0-9]{32}').Value
+    $pipe = [IO.Pipes.NamedPipeServerStream]::new($name, [IO.Pipes.PipeDirection]::In, 1, [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous)
+    $child = [Diagnostics.Process]::new()
+    try {
+        $connection = $pipe.BeginWaitForConnection($null, $null)
+        Assert-Equal (& $originalResultReader -Pipe $pipe -Connection $connection) '' 'Unconnected diagnostic pipe did not return immediately'
+        $worker = ${function:Invoke-OpenRadRadminRecoveryWorker}.ToString()
+        $command = $script:workerCommand.Replace($worker, ('param([uint32[]]$InterfaceIndex); throw ''' + $message + ''''))
+        $child.StartInfo.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $child.StartInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $child.StartInfo.UseShellExecute = $false
+        $child.StartInfo.RedirectStandardError = $true
+        $child.Start() | Out-Null
+        if (-not $child.WaitForExit(5000)) { $child.Kill(); throw 'Diagnostic worker did not exit within five seconds.' }
+        Assert-Equal $child.ExitCode 1 'Encoded worker did not report failure'
+        $expected = $message.Substring(0, [Math]::Min(1000, $message.Length))
+        Assert-Equal (& $originalResultReader -Pipe $pipe -Connection $connection) $expected 'Actual worker error was lost, truncated incorrectly, or decoded incorrectly'
+        Assert-Equal $child.StandardError.ReadToEnd() '' 'Encoded worker leaked CLIXML instead of reporting through IPC'
+    } finally { $pipe.Dispose(); $child.Dispose() }
+}
+
+$child = [Diagnostics.Process]::new()
+try {
+    $command = [IO.File]::ReadAllText($source) + "`nthrow 'synthetic top-level recovery failure'"
+    $child.StartInfo.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $child.StartInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $child.StartInfo.UseShellExecute = $false
+    $child.StartInfo.RedirectStandardError = $true
+    $child.Start() | Out-Null
+    if (-not $child.WaitForExit(5000)) { $child.Kill(); throw 'Top-level error test did not exit within five seconds.' }
+    Assert-Equal $child.ExitCode 1 'Top-level failure did not set the process exit status'
+    Assert-Equal $child.StandardError.ReadToEnd().Trim() 'synthetic top-level recovery failure' 'Top-level errors still contain PowerShell CLIXML'
+} finally { $child.Dispose() }
+
+Write-Host 'PASS: 27 synthetic Radmin cases, including two real encoded-worker/pipe error round trips, plain top-level errors, bounded adapter verification, pipe cleanup and script syntax. No Windows services, processes, adapters, or scheduled tasks were changed.'

@@ -293,6 +293,7 @@ pub struct ServicePreferences {
     pub reconnect_attempts: u32,
     pub reconnect_base_delay_seconds: u64,
     pub traffic_peers: Option<std::collections::BTreeSet<u64>>,
+    pub broadcast_peer: Option<u64>,
 }
 impl Default for ServicePreferences {
     fn default() -> Self {
@@ -302,13 +303,15 @@ impl Default for ServicePreferences {
             reconnect_attempts: 3,
             reconnect_base_delay_seconds: 2,
             traffic_peers: None,
+            broadcast_peer: None,
         }
     }
 }
 impl ServicePreferences {
     fn validate(&self) -> Result<()> {
         ensure!(
-            (1..=10).contains(&self.reconnect_attempts)
+            self.broadcast_peer != Some(0)
+                && (1..=10).contains(&self.reconnect_attempts)
                 && (1..=30).contains(&self.reconnect_base_delay_seconds)
                 && self
                     .traffic_peers
@@ -356,6 +359,9 @@ pub enum Request {
     },
     Rename {
         node_name: String,
+    },
+    BroadcastPeer {
+        target: Option<String>,
     },
     Configure {
         preferences: ServicePreferences,
@@ -436,6 +442,61 @@ impl Reply {
         }
     }
 }
+
+fn resolve_broadcast_peer(
+    target: &str,
+    own_rid: u64,
+    snapshot: Option<&Snapshot>,
+) -> Result<Option<u64>> {
+    if target == "0.0.0.0" {
+        return Ok(None);
+    }
+    if let Ok(peer) = target.parse::<u64>() {
+        ensure!(
+            peer != 0 && peer != own_rid,
+            "Broadcast peer RID must be nonzero and belong to another device"
+        );
+        return Ok(Some(peer));
+    }
+    let snapshot = snapshot.context("Connect before selecting a broadcast peer by name or IP; a RID can be saved while disconnected")?;
+    let ip = target.parse::<std::net::Ipv4Addr>().ok();
+    let mut matches = snapshot.peers.values().filter(|view| {
+        view.peer.rid != own_rid
+            && ip.map_or_else(|| view.peer.name == target, |ip| view.peer.vip == ip)
+    });
+    let peer = matches.next().map(|view| view.peer.rid);
+    ensure!(
+        peer.is_some() && matches.next().is_none(),
+        "Broadcast peer not found or ambiguous; use its RID from `openrad peers`"
+    );
+    Ok(peer)
+}
+
+fn broadcast_peer_reply(peer: Option<u64>) -> Reply {
+    Reply::ok(
+        peer.map_or_else(
+            || "Outgoing broadcasts: all peers".to_owned(),
+            |peer| format!("Outgoing broadcasts: RID {peer}"),
+        ),
+        json!({"broadcast_peer": peer}),
+    )
+}
+
+/// Query or save the shared policy without starting or reconnecting the VPN.
+pub fn broadcast_peer(dir: &DataDir, target: Option<String>) -> Result<Reply> {
+    if dir.endpoint_exists() {
+        return request(dir, &Request::BroadcastPeer { target });
+    }
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let mut preferences = dir.preferences()?;
+    if let Some(target) = target {
+        preferences.broadcast_peer = resolve_broadcast_peer(&target, 0, None)?;
+        dir.save_preferences(&preferences)?;
+    }
+    Ok(broadcast_peer_reply(preferences.broadcast_peer))
+}
+
 #[cfg(unix)]
 fn read_bounded(
     stream: &mut UnixStream,
@@ -644,6 +705,7 @@ pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration)
 struct State {
     identity: Option<Identity>,
     preferences: ServicePreferences,
+    broadcast_policy: runtime::BroadcastPolicy,
     restart: bool,
     phase: &'static str,
     error: Option<String>,
@@ -666,6 +728,7 @@ impl Shared {
             state: Mutex::new(State {
                 identity: Some(id.clone()),
                 preferences: ServicePreferences::default(),
+                broadcast_policy: runtime::BroadcastPolicy::default(),
                 restart: false,
                 phase: "connecting",
                 error: None,
@@ -950,6 +1013,22 @@ impl Shared {
             Request::RetryPeers => self.queue(Command::RetryPeers),
             Request::RetryInterface => self.queue(Command::RetryInterface),
             Request::Ping { peer } => self.command(Command::Ping { peer }),
+            Request::BroadcastPeer { target } => {
+                let mut state = self.state.lock().unwrap();
+                if let Some(target) = target {
+                    let peer =
+                        resolve_broadcast_peer(&target, self.rid, state.snapshot.as_deref())?;
+                    let mut preferences = state.preferences.clone();
+                    preferences.broadcast_peer = peer;
+                    self.directory
+                        .as_ref()
+                        .context("Profile is unavailable")?
+                        .save_preferences(&preferences)?;
+                    state.preferences = preferences;
+                    state.broadcast_policy.set_peer(peer);
+                }
+                broadcast_peer_reply(state.preferences.broadcast_peer)
+            }
             Request::Rename { node_name } => {
                 crate::protocol::validate_node_name(&node_name)?;
                 let mut state = self.state.lock().unwrap();
@@ -970,8 +1049,12 @@ impl Shared {
                 )
             }
             Request::Configure { preferences } => {
-                preferences.validate()?;
                 let mut state = self.state.lock().unwrap();
+                // Broadcast selection has its own command; stale frontend
+                // settings must not overwrite a concurrent selection.
+                let mut preferences = preferences;
+                preferences.broadcast_peer = state.preferences.broadcast_peer;
+                preferences.validate()?;
                 self.directory
                     .as_ref()
                     .context("Profile is unavailable")?
@@ -1020,6 +1103,9 @@ fn supervisor(
             state.session_stop = Some(session_stop.clone());
             state.restart = false;
             state.snapshot = None;
+            state
+                .broadcast_policy
+                .set_peer(state.preferences.broadcast_peer);
             (
                 state.identity.clone().unwrap_or_else(|| identity.clone()),
                 state.preferences.clone(),
@@ -1032,6 +1118,7 @@ fn supervisor(
             diagnostics: diagnostics.clone(),
             force_relay: preferences.force_relay,
             traffic_peers: preferences.traffic_peers.clone(),
+            broadcast_policy: shared.state.lock().unwrap().broadcast_policy.clone(),
         };
         let started = Instant::now();
         let outcome = runtime::run(
@@ -1365,6 +1452,106 @@ mod tests {
     fn shared() -> Shared {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
+    }
+    #[test]
+    fn broadcast_targets_resolve_by_rid_name_or_ip_and_reject_ambiguous_matches() {
+        let mut snapshot = Snapshot::default();
+        for rid in [2, 3] {
+            snapshot.peers.insert(
+                rid,
+                runtime::PeerView {
+                    peer: crate::protocol::Peer {
+                        rid,
+                        name: format!("peer-{rid}"),
+                        vip: std::net::Ipv4Addr::new(26, 0, 0, rid as u8),
+                        server: None,
+                        state: 0,
+                        network_ids: Default::default(),
+                    },
+                    status: runtime::PeerState::Offline,
+                    detail: String::new(),
+                    transport: None,
+                },
+            );
+        }
+        for target in ["2", "peer-2", "26.0.0.2"] {
+            assert_eq!(
+                resolve_broadcast_peer(target, 123, Some(&snapshot)).unwrap(),
+                Some(2)
+            );
+        }
+        assert_eq!(resolve_broadcast_peer("0.0.0.0", 123, None).unwrap(), None);
+        assert_eq!(resolve_broadcast_peer("2", 123, None).unwrap(), Some(2));
+        for target in ["0", "123", "missing", "26.0.0.99"] {
+            assert!(resolve_broadcast_peer(target, 123, Some(&snapshot)).is_err());
+        }
+        assert!(resolve_broadcast_peer("peer-2", 123, None).is_err());
+        snapshot.peers.get_mut(&3).unwrap().peer.name = "peer-2".into();
+        snapshot.peers.get_mut(&3).unwrap().peer.vip = "26.0.0.2".parse().unwrap();
+        assert!(resolve_broadcast_peer("peer-2", 123, Some(&snapshot)).is_err());
+        assert!(resolve_broadcast_peer("26.0.0.2", 123, Some(&snapshot)).is_err());
+        assert_eq!(
+            resolve_broadcast_peer("2", 123, Some(&snapshot)).unwrap(),
+            Some(2)
+        );
+    }
+    #[test]
+    fn broadcast_policy_is_saved_applied_live_and_preserved_by_other_frontend_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-broadcast-policy-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let directory = DataDir::open(Some(path)).unwrap();
+        let mut shared = shared();
+        shared.directory = Some(directory.clone());
+        assert!(
+            shared
+                .handle(Request::BroadcastPeer {
+                    target: Some("2".into())
+                })
+                .ok
+        );
+        assert_eq!(directory.preferences().unwrap().broadcast_peer, Some(2));
+        {
+            let state = shared.state.lock().unwrap();
+            assert_eq!(state.broadcast_policy.peer(), Some(2));
+            assert!(!state.restart);
+        }
+        assert!(
+            shared
+                .handle(Request::Configure {
+                    preferences: ServicePreferences::default()
+                })
+                .ok
+        );
+        assert_eq!(directory.preferences().unwrap().broadcast_peer, Some(2));
+        assert_eq!(
+            shared.handle(Request::BroadcastPeer { target: None }).data["broadcast_peer"],
+            2
+        );
+        assert!(
+            !shared
+                .handle(Request::BroadcastPeer {
+                    target: Some("0".into())
+                })
+                .ok
+        );
+        assert_eq!(directory.preferences().unwrap().broadcast_peer, Some(2));
+        assert!(
+            shared
+                .handle(Request::BroadcastPeer {
+                    target: Some("0.0.0.0".into())
+                })
+                .ok
+        );
+        assert_eq!(directory.preferences().unwrap().broadcast_peer, None);
+        assert_eq!(shared.state.lock().unwrap().broadcast_policy.peer(), None);
+        let mut legacy: ServicePreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.broadcast_peer, None);
+        legacy.broadcast_peer = Some(0);
+        assert!(legacy.validate().is_err());
+        fs::remove_dir_all(directory.path).unwrap();
     }
     #[cfg(unix)]
     #[test]

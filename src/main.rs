@@ -122,6 +122,13 @@ enum Command {
     Ping { peer: u64 },
     /// Change the node name without replacing the identity.
     Rename { node_name: String },
+    /// Select one outgoing broadcast peer by RID, IP or name; 0.0.0.0 restores all peers.
+    BroadcastPeer {
+        target: Option<String>,
+        /// Restore outgoing broadcasts to all eligible peers.
+        #[arg(long, conflicts_with = "target")]
+        all: bool,
+    },
     /// Use relays only, without direct UDP or TCP attempts.
     ForceRelay {
         #[arg(action = clap::ArgAction::Set)]
@@ -166,6 +173,7 @@ impl Command {
             Self::RetryInterface => "retry_interface",
             Self::Ping { .. } => "ping",
             Self::Rename { .. } => "rename",
+            Self::BroadcastPeer { .. } => "broadcast_peer",
             Self::ForceRelay { .. } => "force_relay",
             Self::__Daemon { .. } => "daemon",
             Self::TapHelper { .. } => "tap_helper",
@@ -376,6 +384,9 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         Command::RetryPeers => daemon::request(&dir, &Request::RetryPeers)?,
         Command::RetryInterface => daemon::request(&dir, &Request::RetryInterface)?,
         Command::Ping { peer } => daemon::request(&dir, &Request::Ping { peer })?,
+        Command::BroadcastPeer { target, all } => {
+            daemon::broadcast_peer(&dir, if all { Some("0.0.0.0".into()) } else { target })?
+        }
         Command::Rename { node_name } => {
             openrad::protocol::validate_node_name(&node_name)?;
             if dir.endpoint_exists() {

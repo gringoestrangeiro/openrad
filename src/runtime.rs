@@ -2,7 +2,7 @@
 //! control I/O, peer handshakes and Ethernet forwarding never run on the UI thread.
 use crate::{
     diagnostics::Diagnostics,
-    incoming::{Hub, Policy, Setup},
+    incoming::{Hub, IncomingRecord, Policy, Setup},
     network::{NetworkOperation, NetworkRequest},
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     net::Ipv4Addr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -131,11 +131,25 @@ pub enum Update {
         catalog: Option<(Vec<PublicNetwork>, u64)>,
     },
 }
+/// Shared outgoing-only policy, sampled once for each frame or announcement.
+#[derive(Clone, Default)]
+pub struct BroadcastPolicy(Arc<AtomicU64>);
+impl BroadcastPolicy {
+    pub fn peer(&self) -> Option<u64> {
+        let peer = self.0.load(Ordering::Relaxed);
+        (peer != 0).then_some(peer)
+    }
+    pub(crate) fn set_peer(&self, peer: Option<u64>) {
+        self.0.store(peer.unwrap_or(0), Ordering::Relaxed);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Options {
     /// None permits normal application traffic to all authenticated members.
     /// Some is useful for controlled interoperability testing only.
     pub traffic_peers: Option<BTreeSet<u64>>,
+    pub broadcast_policy: BroadcastPolicy,
     /// Setup-only executable. Desktop passes the sibling CLI, never the GUI.
     pub helper: Option<std::path::PathBuf>,
     /// Permit a headless control-only session when interface setup is unavailable.
@@ -154,7 +168,7 @@ enum Message {
     Update(Update),
     ControlFailed(String),
     Connected(u64, [u8; 6], TransportPath, bool),
-    PeerRecord(Vec<u8>),
+    PeerRecord(IncomingRecord),
     Closed(u64, Option<String>),
     Pong(u64, u64, f64),
 }
@@ -517,7 +531,22 @@ fn control_loop(
                     }));
                     bail!("server disconnected the session");
                 }
-                11 | 6 | 7 | 23 | 29 => outbox.push(Message::PeerRecord(data.clone())),
+                11 | 6 | 7 | 23 | 29 => {
+                    let bytes = data.len();
+                    match IncomingRecord::parse(data) {
+                        Ok(Some(record)) => outbox.push(Message::PeerRecord(record)),
+                        Ok(None) => {}
+                        Err(e) => {
+                            diagnostics.event("incoming_record_rejected", json!({"operation": operation, "record_bytes": bytes, "error": format!("{e:#}")}));
+                            outbox.push(Message::Update(Update::Operation {
+                                message: format!("Incoming request rejected: {e}"),
+                                error: true,
+                            }));
+                        }
+                    }
+                    // Peer setup packets cannot acknowledge network mutations.
+                    continue;
+                }
                 _ => {}
             }
             let auth_target = if operation == 40 {
@@ -638,13 +667,6 @@ struct Worker {
     wake: Arc<Wake>,
 }
 impl Worker {
-    fn queue(&self, frame: Arc<Vec<u8>>) -> bool {
-        if self.sender.try_send(frame).is_err() {
-            return false;
-        }
-        self.wake.notify();
-        true
-    }
     fn cancel(&self) -> bool {
         let changed = !self.stop.swap(true, Ordering::Relaxed);
         self.wake.notify();
@@ -652,26 +674,80 @@ impl Worker {
     }
 }
 
+/// Immutable queue endpoints: packet routing needs no engine-state lock or
+/// per-target worker lookup. Old tables share cancellation flags with workers.
+struct ForwardTarget {
+    rid: u64,
+    vip: Ipv4Addr,
+    mac: [u8; 6],
+    sender: SyncSender<Arc<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
+    wake: Arc<Wake>,
+    attempt: u64,
+}
+impl ForwardTarget {
+    fn queue(&self, frame: &Arc<Vec<u8>>) -> Option<bool> {
+        if self.stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        let queued = self.sender.try_send(Arc::clone(frame)).is_ok();
+        if queued {
+            self.wake.notify();
+        }
+        Some(queued)
+    }
+}
+
 #[derive(Default)]
 struct ForwardingTable {
-    all: Vec<(u64, Ipv4Addr)>,
-    by_ip: BTreeMap<Ipv4Addr, Vec<(u64, Ipv4Addr)>>,
+    peers: Vec<ForwardTarget>,
+    all: Vec<usize>,
+    by_ip: HashMap<Ipv4Addr, Vec<usize>>,
+    by_rid: HashMap<u64, usize>,
 }
 impl ForwardingTable {
-    fn rebuild(&mut self, membership: &Membership, eligible: &BTreeSet<u64>) {
-        self.all.clear();
-        self.by_ip.clear();
-        for (&rid, peer) in &membership.peers {
-            if eligible.contains(&rid) {
-                let binding = (rid, peer.vip);
-                self.all.push(binding);
-                self.by_ip.entry(peer.vip).or_default().push(binding);
+    fn new(
+        membership: &Membership,
+        eligible: &BTreeSet<u64>,
+        workers: &BTreeMap<u64, Worker>,
+        options: &Options,
+    ) -> Self {
+        let mut table = Self::default();
+        for (&rid, worker) in workers {
+            if !eligible.contains(&rid) || !options.allows(rid) {
+                continue;
             }
+            let (Some(mac), Some(peer)) = (worker.mac, membership.peers.get(&rid)) else {
+                continue;
+            };
+            let index = table.peers.len();
+            table.all.push(index);
+            table.by_ip.entry(peer.vip).or_default().push(index);
+            table.by_rid.insert(rid, index);
+            table.peers.push(ForwardTarget {
+                rid,
+                vip: peer.vip,
+                mac,
+                sender: worker.sender.clone(),
+                stop: worker.stop.clone(),
+                wake: worker.wake.clone(),
+                attempt: worker.attempt,
+            });
         }
+        table
     }
-    fn targets(&self, route: &tunnel::Forwarding) -> &[(u64, Ipv4Addr)] {
+    fn targets(&self, route: &tunnel::Forwarding) -> &[usize] {
         route.target().map_or(&self.all, |ip| {
             self.by_ip.get(&ip).map_or(&[], Vec::as_slice)
+        })
+    }
+    fn peer(&self, rid: u64) -> &[usize] {
+        self.by_rid.get(&rid).map_or(&[], std::slice::from_ref)
+    }
+    fn accepts_packet(&self, rid: u64, attempt: u64) -> bool {
+        self.by_rid.get(&rid).is_some_and(|&index| {
+            let peer = &self.peers[index];
+            peer.attempt == attempt && !peer.stop.load(Ordering::Relaxed)
         })
     }
 }
@@ -679,66 +755,153 @@ impl ForwardingTable {
 fn forward_frame(
     frame: Vec<u8>,
     vip: Ipv4Addr,
-    workers: &BTreeMap<u64, Worker>,
     table: &ForwardingTable,
-    options: &Options,
+    broadcast_peer: Option<u64>,
 ) -> u64 {
     let Some(route) = tunnel::forwarding(&frame, vip, tunnel::mac(vip)) else {
         return 1;
     };
+    let broadcast_peer = broadcast_peer.filter(|_| route.is_broadcast());
+    let targets = broadcast_peer.map_or_else(|| table.targets(&route), |rid| table.peer(rid));
+    if targets.is_empty() {
+        return 1;
+    }
     let frame = Arc::new(frame);
     let mut forwarded = false;
     let mut dropped = 0;
-    for &(rid, peer_ip) in table.targets(&route) {
-        if !options.allows(rid) {
-            continue;
-        }
-        let Some(worker) = workers
-            .get(&rid)
-            .filter(|w| !w.stop.load(Ordering::Relaxed))
-        else {
-            continue;
-        };
-        let Some(mac) = worker.mac else {
-            continue;
-        };
-        if route.deliver_to(peer_ip, mac) {
-            if worker.queue(Arc::clone(&frame)) {
-                forwarded = true;
-            } else {
-                dropped += 1;
+    for &index in targets {
+        let peer = &table.peers[index];
+        if broadcast_peer.is_some() || route.deliver_to(peer.vip, peer.mac) {
+            match peer.queue(&frame) {
+                Some(true) => forwarded = true,
+                Some(false) => dropped += 1,
+                None => {}
             }
         }
     }
     dropped + u64::from(!forwarded)
 }
+
+const FORWARD_QUEUE: usize = 64;
+enum ForwardWork {
+    Frame {
+        frame: Vec<u8>,
+        table: Arc<ForwardingTable>,
+        broadcast_peer: Option<u64>,
+    },
+    Announce {
+        table: Arc<ForwardingTable>,
+        peers: Option<BTreeSet<u64>>,
+        broadcast_peer: Option<u64>,
+    },
+}
+
+/// A single FIFO dispatcher preserves TAP/announcement order across peers;
+/// their existing workers encode and encrypt concurrently with this worker.
+struct Forwarder {
+    sender: Option<SyncSender<ForwardWork>>,
+    join: Option<JoinHandle<()>>,
+}
+impl Forwarder {
+    fn spawn(
+        vip: Ipv4Addr,
+        traffic: Arc<TrafficCounters>,
+        diagnostics: Diagnostics,
+    ) -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(FORWARD_QUEUE);
+        let join = thread::Builder::new()
+            .name("openrad-forward".into())
+            .spawn(move || {
+                while let Ok(work) = receiver.recv() {
+                    let dropped = match work {
+                        ForwardWork::Frame {
+                            frame,
+                            table,
+                            broadcast_peer,
+                        } => forward_frame(frame, vip, &table, broadcast_peer),
+                        ForwardWork::Announce {
+                            table,
+                            peers,
+                            broadcast_peer,
+                        } => announce_address(
+                            vip,
+                            &table,
+                            peers.as_ref(),
+                            broadcast_peer,
+                            &diagnostics,
+                        ),
+                    };
+                    if dropped != 0 {
+                        traffic.dropped.fetch_add(dropped, Ordering::Relaxed);
+                    }
+                }
+            })?;
+        Ok(Self {
+            sender: Some(sender),
+            join: Some(join),
+        })
+    }
+    /// Return rejected-frame accounting; a full mailbox cannot block TAP I/O.
+    fn dispatch(&self, work: ForwardWork) -> Result<u64> {
+        match self.sender.as_ref().unwrap().try_send(work) {
+            Ok(()) => Ok(0),
+            Err(mpsc::TrySendError::Full(work)) => Ok(match work {
+                ForwardWork::Frame { .. } => 1,
+                ForwardWork::Announce {
+                    table,
+                    peers,
+                    broadcast_peer,
+                } => table
+                    .peers
+                    .iter()
+                    .filter(|peer| {
+                        peers.as_ref().is_none_or(|peers| peers.contains(&peer.rid))
+                            && broadcast_peer.is_none_or(|rid| rid == peer.rid)
+                            && !peer.stop.load(Ordering::Relaxed)
+                    })
+                    .count() as u64,
+            }),
+            Err(mpsc::TrySendError::Disconnected(_)) => bail!("forwarding worker closed"),
+        }
+    }
+}
+impl Drop for Forwarder {
+    fn drop(&mut self) {
+        // No network I/O or blocking publication in the worker: close the bounded
+        // mailbox before joining, including on early engine errors.
+        self.sender.take();
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
 struct PeerRetry {
     failures: u32,
     at: Instant,
     previously_connected: bool,
 }
 
-fn announce_address<'a>(
+fn announce_address(
     vip: Ipv4Addr,
-    workers: impl Iterator<Item = (&'a u64, &'a Worker)>,
-    eligible: &BTreeSet<u64>,
-    options: &Options,
+    table: &ForwardingTable,
+    peers: Option<&BTreeSet<u64>>,
+    broadcast_peer: Option<u64>,
+    diagnostics: &Diagnostics,
 ) -> u64 {
     let frame = Arc::new(tunnel::gratuitous_arp(vip));
     let mut dropped = 0;
-    for (&rid, worker) in workers {
-        if worker.mac.is_some()
-            && !worker.stop.load(Ordering::Relaxed)
-            && eligible.contains(&rid)
-            && options.allows(rid)
+    for peer in &table.peers {
+        if peers.is_some_and(|peers| !peers.contains(&peer.rid))
+            || broadcast_peer.is_some_and(|target| target != peer.rid)
         {
-            let queued = worker.queue(Arc::clone(&frame));
+            continue;
+        }
+        if let Some(queued) = peer.queue(&frame) {
             dropped += u64::from(!queued);
-            options.diagnostics.event(
+            diagnostics.event(
                 "peer_address_announcement",
-                json!({
-                    "rid": rid, "attempt": worker.attempt, "queued": queued,
-                }),
+                json!({"rid": peer.rid, "attempt": peer.attempt, "queued": queued}),
             );
         }
     }
@@ -814,7 +977,8 @@ fn request_peer_retries(
 
 struct PeerEvents {
     lifecycle: SyncSender<Message>,
-    packets: SyncSender<(u64, tunnel::OwnedFrame)>,
+    packets: SyncSender<(u64, u64, tunnel::OwnedFrame)>,
+    vip: Ipv4Addr,
     traffic: Arc<TrafficCounters>,
     diagnostics: Diagnostics,
     attempt: u64,
@@ -822,7 +986,7 @@ struct PeerEvents {
 }
 impl PeerEvents {
     fn packet(&self, rid: u64, frame: tunnel::OwnedFrame) {
-        if self.packets.try_send((rid, frame)).is_err() {
+        if self.packets.try_send((rid, self.attempt, frame)).is_err() {
             self.traffic.dropped.fetch_add(1, Ordering::Relaxed);
             self.traffic
                 .receive_queue_dropped
@@ -1061,7 +1225,11 @@ fn forward_peer(
             }
             tunnel::OwnedPacket::Frames(frames) => {
                 for frame in frames {
-                    events.packet(rid, frame);
+                    if valid_inbound(&frame, events.vip, channel.peer.vip, channel.mac) {
+                        events.packet(rid, frame);
+                    } else {
+                        events.traffic.dropped.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
             _ => {}
@@ -1207,8 +1375,9 @@ pub fn run(
     };
     let (tx, rx) = mpsc::sync_channel(512);
     let wake = Arc::new(Wake::new()?);
-    let (packet_tx, packets) = mpsc::sync_channel::<(u64, tunnel::OwnedFrame)>(512);
+    let (packet_tx, packets) = mpsc::sync_channel::<(u64, u64, tunnel::OwnedFrame)>(512);
     let traffic = Arc::new(TrafficCounters::default());
+    let forwarder = Forwarder::spawn(vip, traffic.clone(), diagnostics.clone())?;
     let (control_tx, control_rx) = mpsc::sync_channel(8);
     let (wire_tx, wire_rx) = mpsc::sync_channel(ADVERTISEMENT_QUEUE);
     let mut incoming = Hub::new(
@@ -1246,7 +1415,7 @@ pub fn run(
     let mut next_report = Instant::now();
     let mut membership_changed = true;
     let mut eligible = BTreeSet::new();
-    let mut forwarding_table = ForwardingTable::default();
+    let mut forwarding_table = Arc::new(ForwardingTable::default());
     let mut retries: BTreeMap<u64, PeerRetry> = BTreeMap::new();
     let mut retry_pacer = RetryPacer::new(Instant::now());
     let mut attempt = 0u64;
@@ -1266,6 +1435,13 @@ pub fn run(
             wake.clear();
             if stop.load(Ordering::Relaxed) {
                 break;
+            }
+            if forwarder
+                .join
+                .as_ref()
+                .is_some_and(|worker| worker.is_finished())
+            {
+                bail!("forwarding worker closed");
             }
             max_loop_gap_ms = max_loop_gap_ms.max(previous_loop.elapsed().as_millis());
             previous_loop = Instant::now();
@@ -1350,6 +1526,7 @@ pub fn run(
                 report(update);
             }
             let mut new_channels = BTreeSet::new();
+            let mut forwarding_changed = false;
             for message in rx.try_iter().take(512) {
                 schedule_dirty = true;
                 match message {
@@ -1372,9 +1549,10 @@ pub fn run(
                     }
                     Message::Update(u) => report(u),
                     Message::ControlFailed(e) => bail!(e),
-                    Message::PeerRecord(data) => {
-                        if let Err(e) = incoming.ingest(&data) {
-                            diagnostics.event("incoming_record_rejected", json!({"operation": op(&data).ok(), "record_bytes": data.len(), "error": format!("{e:#}")}));
+                    Message::PeerRecord(record) => {
+                        let (operation, bytes) = (record.operation(), record.len());
+                        if let Err(e) = incoming.ingest_record(record) {
+                            diagnostics.event("incoming_record_rejected", json!({"operation": operation, "record_bytes": bytes, "error": format!("{e:#}")}));
                             report(Update::Operation {
                                 message: format!("Incoming request rejected: {e}"),
                                 error: true,
@@ -1382,6 +1560,7 @@ pub fn run(
                         }
                     }
                     Message::Connected(rid, mac, path, is_incoming) => {
+                        forwarding_changed = true;
                         if workers
                             .get(&rid)
                             .is_none_or(|w| w.stop.load(Ordering::Relaxed))
@@ -1409,6 +1588,7 @@ pub fn run(
                         new_channels.insert(rid);
                     }
                     Message::Closed(rid, error) => {
+                        forwarding_changed = true;
                         incoming.finish(rid);
                         let worker = workers.remove(&rid);
                         let cancelled = worker
@@ -1466,7 +1646,7 @@ pub fn run(
                     &diagnostics,
                 )?;
                 retries.retain(|rid, _| eligible.contains(rid));
-                forwarding_table.rebuild(&membership, &eligible);
+                forwarding_changed = true;
                 diagnostics.event("membership_updated", json!({
                     "peers": snapshot.peers.len(), "eligible": eligible.len(), "networks": snapshot.networks.len(),
                     "online_without_server": snapshot.peers.values().filter(|p| p.status == PeerState::Unavailable).count(),
@@ -1474,16 +1654,19 @@ pub fn run(
                 }));
                 membership_changed = false;
             }
-            for (rid, frame) in packets.try_iter().take(512) {
-                let valid = options.allows(rid)
-                    && eligible.contains(&rid)
-                    && membership.peers.get(&rid).is_some_and(|p| {
-                        workers
-                            .get(&rid)
-                            .filter(|w| !w.stop.load(Ordering::Relaxed))
-                            .and_then(|w| w.mac)
-                            .is_some_and(|mac| valid_inbound(&frame, vip, p.vip, mac))
-                    });
+            if forwarding_changed {
+                forwarding_table = Arc::new(ForwardingTable::new(
+                    &membership,
+                    &eligible,
+                    &workers,
+                    &options,
+                ));
+            }
+            for (rid, attempt, frame) in packets.try_iter().take(512) {
+                // Bytes were validated by their channel owner. Recheck the live
+                // generation/allowlist before I/O: queued frames from a retired
+                // channel must never acquire a replacement channel's authority.
+                let valid = forwarding_table.accepts_packet(rid, attempt);
                 if let Some(tap) = tap.as_mut().filter(|_| valid) {
                     match tap.send(&frame) {
                         Ok(()) => {
@@ -1597,6 +1780,7 @@ pub fn run(
                     let events = PeerEvents {
                         lifecycle: tx.clone(),
                         packets: packet_tx.clone(),
+                        vip,
                         traffic: traffic.clone(),
                         diagnostics: diagnostics.clone(),
                         attempt,
@@ -1675,8 +1859,11 @@ pub fn run(
                         tap = Some(t);
                         snapshot.interface_ready = true;
                         diagnostics.event("interface_ready", json!({}));
-                        snapshot.traffic.dropped +=
-                            announce_address(vip, workers.iter(), &eligible, &options);
+                        snapshot.traffic.dropped += forwarder.dispatch(ForwardWork::Announce {
+                            table: Arc::clone(&forwarding_table),
+                            peers: None,
+                            broadcast_peer: options.broadcast_policy.peer(),
+                        })?;
                         new_channels.clear();
                     }
                     Err(e) => {
@@ -1691,12 +1878,11 @@ pub fn run(
             }
             if let Some(t) = tap.as_mut() {
                 if !new_channels.is_empty() {
-                    snapshot.traffic.dropped += announce_address(
-                        vip,
-                        workers.iter().filter(|(rid, _)| new_channels.contains(rid)),
-                        &eligible,
-                        &options,
-                    );
+                    snapshot.traffic.dropped += forwarder.dispatch(ForwardWork::Announce {
+                        table: Arc::clone(&forwarding_table),
+                        peers: Some(new_channels),
+                        broadcast_peer: options.broadcast_policy.peer(),
+                    })?;
                 }
                 let forwarding = (|| -> Result<()> {
                     for _ in 0..64 {
@@ -1718,8 +1904,11 @@ pub fn run(
                             }
                             Err(error) => return Err(error),
                         };
-                        snapshot.traffic.dropped +=
-                            forward_frame(frame, vip, &workers, &forwarding_table, &options);
+                        snapshot.traffic.dropped += forwarder.dispatch(ForwardWork::Frame {
+                            frame,
+                            table: Arc::clone(&forwarding_table),
+                            broadcast_peer: options.broadcast_policy.peer(),
+                        })?;
                     }
                     Ok(())
                 })();
@@ -1799,6 +1988,7 @@ pub fn run(
     for worker in workers.values() {
         worker.cancel();
     }
+    drop(forwarder);
     drop(rx); // Unblock producers before joining, including full event queues.
     drop(control_tx);
     let _ = control.join();
@@ -2428,6 +2618,7 @@ mod control_tests {
         let events = PeerEvents {
             lifecycle,
             packets,
+            vip: Ipv4Addr::new(26, 0, 0, 1),
             traffic: Arc::default(),
             diagnostics: Diagnostics::default(),
             attempt: 1,
@@ -2557,6 +2748,218 @@ mod membership_tests {
     }
 
     #[test]
+    fn forwarding_worker_preserves_frame_and_announcement_fifo_and_drains_on_shutdown() {
+        let vip = Ipv4Addr::new(26, 0, 0, 1);
+        let members = membership();
+        let options = Options::default();
+        let (sender, received) = mpsc::sync_channel(64);
+        let mut peer = worker();
+        peer.sender = sender;
+        let workers = BTreeMap::from([(2, peer)]);
+        let table = Arc::new(ForwardingTable::new(
+            &members,
+            &BTreeSet::from([2]),
+            &workers,
+            &options,
+        ));
+        let traffic = Arc::new(TrafficCounters::default());
+        let forwarder = Forwarder::spawn(vip, traffic.clone(), Diagnostics::default()).unwrap();
+        let mut expected = Vec::new();
+        for batch in 0..2 {
+            assert_eq!(
+                forwarder
+                    .dispatch(ForwardWork::Announce {
+                        table: table.clone(),
+                        peers: None,
+                        broadcast_peer: None,
+                    })
+                    .unwrap(),
+                0
+            );
+            expected.push(tunnel::gratuitous_arp(vip));
+            for value in batch * 16..(batch + 1) * 16 {
+                let mut frame = tunnel::gratuitous_arp(vip);
+                frame.push(value);
+                expected.push(frame.clone());
+                assert_eq!(
+                    forwarder
+                        .dispatch(ForwardWork::Frame {
+                            frame,
+                            table: table.clone(),
+                            broadcast_peer: None,
+                        })
+                        .unwrap(),
+                    0
+                );
+            }
+        }
+        drop(forwarder);
+        assert_eq!(traffic.dropped.load(Ordering::Relaxed), 0);
+        let actual: Vec<_> = received.try_iter().collect();
+        assert_eq!(actual.len(), expected.len());
+        for (frame, expected) in actual.iter().zip(expected) {
+            assert_eq!(frame.as_ref(), &expected);
+        }
+        workers.into_values().next().unwrap().join.join().unwrap();
+    }
+
+    #[test]
+    fn saturated_forwarding_dispatch_never_blocks_and_closed_dispatch_fails() {
+        // Hold the consumer idle to deterministically fill the real dispatcher.
+        let (sender, receiver) = mpsc::sync_channel(FORWARD_QUEUE);
+        let forwarder = Forwarder {
+            sender: Some(sender),
+            join: None,
+        };
+        let work = || ForwardWork::Frame {
+            frame: vec![0; 14],
+            table: Arc::default(),
+            broadcast_peer: None,
+        };
+        for _ in 0..FORWARD_QUEUE {
+            assert_eq!(forwarder.dispatch(work()).unwrap(), 0);
+        }
+        assert_eq!(forwarder.dispatch(work()).unwrap(), 1);
+        drop(receiver);
+        assert!(forwarder.dispatch(work()).is_err());
+    }
+
+    #[test]
+    fn retired_tables_and_inbound_generations_cannot_authorize_replacement_channels() {
+        let vip = Ipv4Addr::new(26, 0, 0, 1);
+        let members = membership();
+        let options = Options::default();
+        let eligible = BTreeSet::from([2]);
+        let (sender, old_frames) = mpsc::sync_channel(2);
+        let mut peer = worker();
+        peer.sender = sender;
+        let mut workers = BTreeMap::from([(2, peer)]);
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        assert!(table.accepts_packet(2, 1));
+        workers[&2].cancel();
+        assert!(!table.accepts_packet(2, 1));
+        let (sender, new_frames) = mpsc::sync_channel(2);
+        let mut replacement = worker();
+        replacement.sender = sender;
+        replacement.attempt = 2;
+        workers.insert(2, replacement).unwrap().join.join().unwrap();
+        assert!(!table.accepts_packet(2, 1));
+        assert_eq!(
+            forward_frame(tunnel::gratuitous_arp(vip), vip, &table, None),
+            1
+        );
+        assert!(old_frames.try_recv().is_err());
+        assert!(new_frames.try_recv().is_err());
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        assert!(!table.accepts_packet(2, 1));
+        assert!(table.accepts_packet(2, 2));
+        assert_eq!(
+            forward_frame(tunnel::gratuitous_arp(vip), vip, &table, None),
+            0
+        );
+        assert_eq!(
+            new_frames.try_recv().unwrap().as_ref(),
+            &tunnel::gratuitous_arp(vip)
+        );
+        workers.into_values().next().unwrap().join.join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "local forwarding microbenchmark; synthetic frames, no TAP or network"]
+    fn benchmark_cached_forwarding_endpoints() {
+        use std::hint::black_box;
+        let vip = Ipv4Addr::new(26, 0, 0, 1);
+        let mut members = membership();
+        let mut workers = BTreeMap::new();
+        let mut receivers = Vec::new();
+        for rid in 2..122 {
+            let mut peer = members.peers[&2].clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, rid as u8);
+            members.peers.insert(rid, peer);
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let mut w = worker();
+            w.sender = sender;
+            w.mac = Some(tunnel::mac(members.peers[&rid].vip));
+            workers.insert(rid, w);
+            receivers.push(receiver);
+        }
+        let options = Options::default();
+        let eligible = workers.keys().copied().collect();
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        let bindings: Vec<_> = members.peers.iter().map(|(&rid, p)| (rid, p.vip)).collect();
+        let mut by_ip: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for &binding in &bindings {
+            by_ip.entry(binding.1).or_default().push(binding);
+        }
+        // Frozen pre-worker routing path, including its destination index,
+        // eligibility/policy checks and BTreeMap worker lookup for each target.
+        let previous = |frame: Vec<u8>| {
+            let route = tunnel::forwarding(&frame, vip, tunnel::mac(vip)).unwrap();
+            let targets = route.target().map_or(bindings.as_slice(), |ip| {
+                by_ip.get(&ip).map_or(&[], Vec::as_slice)
+            });
+            let frame = Arc::new(frame);
+            for &(rid, peer_ip) in targets {
+                if !options.allows(rid) {
+                    continue;
+                }
+                let w = &workers[&rid];
+                if w.stop.load(Ordering::Relaxed) {
+                    continue;
+                }
+                if w.mac.is_some_and(|mac| route.deliver_to(peer_ip, mac)) {
+                    assert!(w.sender.try_send(Arc::clone(&frame)).is_ok());
+                    w.wake.notify();
+                }
+            }
+        };
+        for unicast in [false, true] {
+            let mut frame = tunnel::gratuitous_arp(vip);
+            frame.resize(1514, 0);
+            if unicast {
+                frame[21] = 1;
+                frame[38..42].copy_from_slice(&members.peers[&121].vip.octets());
+            }
+            let iterations = if unicast { 50_000 } else { 5_000 };
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..9 {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let start = Instant::now();
+                    for _ in 0..iterations {
+                        let frame = black_box(frame.clone());
+                        if optimized {
+                            assert_eq!(forward_frame(frame, vip, black_box(&table), None), 0);
+                        } else {
+                            previous(frame);
+                        }
+                        if unicast {
+                            black_box(receivers.last().unwrap().try_recv().unwrap());
+                        } else {
+                            for receiver in &receivers {
+                                black_box(receiver.try_recv().unwrap());
+                            }
+                        }
+                    }
+                    times[usize::from(optimized)].push(start.elapsed());
+                }
+            }
+            for samples in &mut times {
+                samples.sort();
+            }
+            eprintln!(
+                "forwarding {}: {iterations} frames, 120 peers, previous={:?}, cached={:?}",
+                if unicast { "unicast" } else { "broadcast" },
+                times[0][4],
+                times[1][4]
+            );
+        }
+        for w in workers.into_values() {
+            w.join.join().unwrap();
+        }
+    }
+
+    #[test]
     fn refused_peers_retry_automatically_without_retrying_cancellation() {
         let now = Instant::now();
         let mut retries = BTreeMap::new();
@@ -2621,8 +3024,7 @@ mod membership_tests {
         };
         let (before, old_receivers) = make_workers();
         let (after, new_receivers) = make_workers();
-        let mut table = ForwardingTable::default();
-        table.rebuild(&members, &eligible);
+        let mut table = ForwardingTable::new(&members, &eligible, &after, &options);
         let mut directed = tunnel::gratuitous_arp(source);
         directed[21] = 1;
         directed[38..42].copy_from_slice(&members.peers[&2].vip.octets());
@@ -2663,7 +3065,7 @@ mod membership_tests {
             }
             dropped += u64::from(!forwarded);
             assert_eq!(
-                forward_frame(frame, source, &after, &table, &options),
+                forward_frame(frame, source, &table, options.broadcast_policy.peer()),
                 dropped
             );
             for rid in members.peers.keys() {
@@ -2673,7 +3075,7 @@ mod membership_tests {
             }
         }
         members.peers.remove(&2);
-        table.rebuild(&members, &eligible);
+        table = ForwardingTable::new(&members, &eligible, &after, &options);
         let route = tunnel::forwarding(
             &{
                 let mut frame = tunnel::gratuitous_arp(source);
@@ -2684,7 +3086,17 @@ mod membership_tests {
             tunnel::mac(source),
         )
         .unwrap();
-        assert_eq!(table.targets(&route), [(3, Ipv4Addr::new(26, 0, 0, 2))]);
+        assert_eq!(
+            table
+                .targets(&route)
+                .iter()
+                .map(|&index| {
+                    let p = &table.peers[index];
+                    (p.rid, p.vip)
+                })
+                .collect::<Vec<_>>(),
+            [(3, Ipv4Addr::new(26, 0, 0, 2))]
+        );
         for w in before.into_values().chain(after.into_values()) {
             w.join.join().unwrap();
         }
@@ -2754,6 +3166,128 @@ mod membership_tests {
     }
 
     #[test]
+    fn outgoing_broadcast_selection_is_live_and_does_not_restrict_incoming_or_unicast() {
+        let source = Ipv4Addr::new(26, 0, 0, 1);
+        let ipv4 = |destination: Ipv4Addr, mac: [u8; 6]| {
+            let mut frame = [
+                mac.as_slice(),
+                &tunnel::mac(source),
+                &[8, 0],
+                &[0x45, 0, 0, 28, 0, 0, 0, 0, 64, 17, 0, 0],
+                &source.octets(),
+                &destination.octets(),
+                &[0; 8],
+            ]
+            .concat();
+            let checksum = tunnel::checksum(&frame[14..34]);
+            frame[24..26].copy_from_slice(&checksum.to_be_bytes());
+            frame
+        };
+        let mut members = membership();
+        let template = members.peers[&2].clone();
+        let mut workers = BTreeMap::new();
+        let mut receivers = BTreeMap::new();
+        for rid in 2..=4 {
+            let mut peer = template.clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, if rid == 3 { 2 } else { rid as u8 });
+            let (sender, receiver) = mpsc::sync_channel(4);
+            let mut w = worker();
+            w.sender = sender;
+            w.mac = Some(tunnel::mac(peer.vip));
+            workers.insert(rid, w);
+            receivers.insert(rid, receiver);
+            members.peers.insert(rid, peer);
+        }
+        let eligible = BTreeSet::from([2, 3, 4]);
+        let options = Options::default();
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        options.broadcast_policy.set_peer(Some(2));
+        let broadcast = ipv4(Ipv4Addr::new(26, 255, 255, 255), [255; 6]);
+        let mut arp_request = tunnel::gratuitous_arp(source);
+        arp_request[21] = 1;
+        arp_request[38..42].copy_from_slice(&members.peers[&4].vip.octets());
+        for frame in [
+            broadcast.clone(),
+            tunnel::gratuitous_arp(source),
+            arp_request,
+        ] {
+            assert_eq!(
+                forward_frame(
+                    frame.clone(),
+                    source,
+                    &table,
+                    options.broadcast_policy.peer()
+                ),
+                0
+            );
+            assert_eq!(receivers[&2].try_recv().unwrap().as_ref(), &frame);
+            assert!(receivers[&3].try_recv().is_err());
+            assert!(receivers[&4].try_recv().is_err());
+        }
+        let unicast = ipv4(members.peers[&4].vip, tunnel::mac(members.peers[&4].vip));
+        assert_eq!(
+            forward_frame(
+                unicast.clone(),
+                source,
+                &table,
+                options.broadcast_policy.peer()
+            ),
+            0
+        );
+        assert_eq!(receivers[&4].try_recv().unwrap().as_ref(), &unicast);
+        assert!(receivers[&2].try_recv().is_err());
+        let mut incoming = broadcast.clone();
+        let peer = members.peers[&4].vip;
+        incoming[6..12].copy_from_slice(&tunnel::mac(peer));
+        incoming[26..30].copy_from_slice(&peer.octets());
+        incoming[24..26].fill(0);
+        let checksum = tunnel::checksum(&incoming[14..34]);
+        incoming[24..26].copy_from_slice(&checksum.to_be_bytes());
+        assert!(valid_inbound(&incoming, source, peer, tunnel::mac(peer)));
+        options.broadcast_policy.set_peer(Some(99));
+        assert_eq!(
+            forward_frame(
+                broadcast.clone(),
+                source,
+                &table,
+                options.broadcast_policy.peer()
+            ),
+            1
+        );
+        assert!(receivers.values().all(|rx| rx.try_recv().is_err()));
+        options.broadcast_policy.set_peer(Some(4));
+        workers[&4].stop.store(true, Ordering::Relaxed);
+        assert_eq!(
+            forward_frame(
+                broadcast.clone(),
+                source,
+                &table,
+                options.broadcast_policy.peer()
+            ),
+            1
+        );
+        assert!(receivers.values().all(|rx| rx.try_recv().is_err()));
+        workers[&4].stop.store(false, Ordering::Relaxed);
+        options.broadcast_policy.set_peer(None);
+        assert_eq!(
+            forward_frame(
+                broadcast.clone(),
+                source,
+                &table,
+                options.broadcast_policy.peer()
+            ),
+            0
+        );
+        for receiver in receivers.values() {
+            assert_eq!(receiver.try_recv().unwrap().as_ref(), &broadcast);
+        }
+        for w in workers.into_values() {
+            w.join.join().unwrap();
+        }
+    }
+
+    #[test]
     fn address_announcements_only_reach_authenticated_eligible_channels() {
         let vip = Ipv4Addr::new(26, 0, 0, 1);
         let mut workers = BTreeMap::new();
@@ -2774,8 +3308,22 @@ mod membership_tests {
             traffic_peers: Some(BTreeSet::from([2, 3, 4, 5, 6])),
             ..Options::default()
         };
+        let mut members = membership();
+        for &rid in workers.keys() {
+            let mut peer = members.peers[&2].clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, rid as u8);
+            members.peers.insert(rid, peer);
+        }
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
         assert_eq!(
-            announce_address(vip, workers.iter(), &eligible, &options),
+            announce_address(
+                vip,
+                &table,
+                None,
+                options.broadcast_policy.peer(),
+                &options.diagnostics
+            ),
             0
         );
         let mut shared = None;
@@ -2799,10 +3347,30 @@ mod membership_tests {
         }
         // Interface recreation or peer reconnection can announce again.
         assert_eq!(
-            announce_address(vip, workers.iter(), &eligible, &options),
+            announce_address(
+                vip,
+                &table,
+                None,
+                options.broadcast_policy.peer(),
+                &options.diagnostics
+            ),
             0
         );
         assert!(receivers[&2].try_recv().is_ok());
+        assert!(receivers[&3].try_recv().is_ok());
+        options.broadcast_policy.set_peer(Some(3));
+        assert_eq!(
+            announce_address(
+                vip,
+                &table,
+                None,
+                options.broadcast_policy.peer(),
+                &options.diagnostics
+            ),
+            0
+        );
+        assert!(receivers[&2].try_recv().is_err());
+        assert!(receivers[&3].try_recv().is_ok());
         for w in workers.into_values() {
             w.join.join().unwrap();
         }
@@ -2961,6 +3529,58 @@ mod ping_tests {
     use super::*;
 
     #[test]
+    fn inbound_frames_are_validated_before_publication_and_keep_their_channel_generation() {
+        let (mut local, mut remote) = crate::peer::synthetic_pair();
+        local.stream.sustain();
+        let (lifecycle, _) = mpsc::sync_channel(16);
+        let (packets, received) = mpsc::sync_channel(16);
+        let wake = Arc::new(Wake::new().unwrap());
+        let traffic = Arc::new(TrafficCounters::default());
+        let events = PeerEvents {
+            lifecycle,
+            packets,
+            vip: Ipv4Addr::new(26, 0, 0, 1),
+            traffic: traffic.clone(),
+            diagnostics: Diagnostics::default(),
+            attempt: 42,
+            wake: wake.clone(),
+        };
+        let (_frames, frames) = mpsc::sync_channel(16);
+        let (_probes, probes) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (cancel, notify) = (stop.clone(), wake.clone());
+        let worker = thread::spawn(move || {
+            forward_peer(
+                &mut local,
+                &events,
+                frames,
+                probes,
+                &cancel,
+                &notify,
+                &mut PeerActivity::default(),
+            )
+        });
+        let valid = tunnel::gratuitous_arp(Ipv4Addr::new(26, 0, 0, 2));
+        let mut invalid = valid.clone();
+        // Gratuitous replies have an existing compatibility exception. Use a
+        // directed request to exercise the normal source-identity checks.
+        invalid[21] = 1;
+        invalid[38..42].copy_from_slice(&[26, 0, 0, 1]);
+        invalid[6] ^= 1;
+        remote.send(&tunnel::encode(&invalid).unwrap()).unwrap();
+        remote.send(&tunnel::encode(&valid).unwrap()).unwrap();
+        let (rid, attempt, frame) = received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!((rid, attempt), (2, 42));
+        assert_eq!(&*frame, valid.as_slice());
+        assert!(received.try_recv().is_err());
+        assert_eq!(traffic.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(traffic.receive_queue_dropped.load(Ordering::Relaxed), 0);
+        stop.store(true, Ordering::Relaxed);
+        wake.notify();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn encrypted_ping_measures_only_the_correlated_reply_and_keeps_forwarding() {
         let (mut local, mut remote) = crate::peer::synthetic_pair();
         local.stream.sustain();
@@ -2970,6 +3590,7 @@ mod ping_tests {
         let events = PeerEvents {
             lifecycle,
             packets,
+            vip: Ipv4Addr::new(26, 0, 0, 1),
             traffic: Arc::default(),
             diagnostics: Diagnostics::default(),
             attempt: 1,

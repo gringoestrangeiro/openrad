@@ -50,6 +50,34 @@ impl Drop for Harness {
     }
 }
 
+#[test]
+fn cli_saves_queries_and_restores_broadcast_policy_without_starting_a_service() {
+    let harness = Harness::new();
+    assert!(harness.ok(&["broadcast-peer"])["data"]["broadcast_peer"].is_null());
+    assert_eq!(
+        harness.ok(&["broadcast-peer", "456"])["data"]["broadcast_peer"],
+        456
+    );
+    assert_eq!(
+        harness.ok(&["broadcast-peer"])["data"]["broadcast_peer"],
+        456
+    );
+    let invalid = harness.run(&["broadcast-peer", "missing-node"]);
+    assert!(!invalid.status.success());
+    assert_eq!(
+        harness.ok(&["broadcast-peer"])["data"]["broadcast_peer"],
+        456
+    );
+    assert!(harness.ok(&["broadcast-peer", "0.0.0.0"])["data"]["broadcast_peer"].is_null());
+    harness.ok(&["broadcast-peer", "456"]);
+    assert!(harness.ok(&["broadcast-peer", "--all"])["data"]["broadcast_peer"].is_null());
+    assert!(!harness
+        .run(&["broadcast-peer", "456", "--all"])
+        .status
+        .success());
+    assert_eq!(harness.ok(&["status"])["data"]["phase"], "stopped");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn service_inherits_the_raised_startup_descriptor_limit() {

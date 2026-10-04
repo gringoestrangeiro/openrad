@@ -113,11 +113,13 @@ def main():
             ('README.md', 'README.md'), ('CHANGELOG.md', 'CHANGELOG.md'),
             ('docs/windows.md', 'README-WINDOWS.md'),
             ('docs/windows.md', 'docs/windows.md'), ('docs/cli.md', 'docs/cli.md'),
+            ('docs/cli-pt-BR.md', 'docs/cli-pt-BR.md'),
             ('docs/desktop.md', 'docs/desktop.md'), ('docs/architecture.md', 'docs/architecture.md'),
             ('docs/linux.md', 'docs/linux.md'), ('docs/performance.md', 'docs/performance.md'),
             (f'docs/releases/{version}.md', f'docs/releases/{version}.md'),
             (f'docs/releases/{version}-changes.md', f'docs/releases/{version}-changes.md'),
             ('docs/screenshots/1.1.0-tap-authorization.png', 'docs/screenshots/1.1.0-tap-authorization.png'),
+            ('docs/screenshots/1.2.0-broadcast-settings-pt.png', 'docs/screenshots/1.2.0-broadcast-settings-pt.png'),
             ('docs/screenshots/1.0.0-networks.png', 'docs/screenshots/1.0.0-networks.png'),
             ('docs/screenshots/1.0.0-discover.png', 'docs/screenshots/1.0.0-discover.png'),
             ('docs/screenshots/1.0.0-auto-join.png', 'docs/screenshots/1.0.0-auto-join.png'),
@@ -135,6 +137,7 @@ def main():
             ('packaging/windows/Test-Windows.ps1', 'Test-Windows.ps1'),
         ]:
             copy(ROOT / source, payload / target)
+        _support.copy_release_history(payload)
         copy((args.validation or ROOT / f'docs/releases/{version}.md').resolve(), payload / 'VALIDATION.md')
         validation = payload / 'VALIDATION.md'
         validation.write_text(_support.root_release_document(validation.read_text(encoding='utf-8'), version), encoding='utf-8')

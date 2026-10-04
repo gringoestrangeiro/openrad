@@ -48,7 +48,9 @@ impl Wake {
     }
     /// Publish the queue item or cancellation flag before calling this method.
     pub fn notify(&self) {
-        if self.pending.swap(true, Ordering::AcqRel) {
+        // Packet batches often share one already-pending notification. Avoid a
+        // contended read/modify/write for every producer in that common case.
+        if self.pending.load(Ordering::Acquire) || self.pending.swap(true, Ordering::AcqRel) {
             return;
         }
         #[cfg(target_os = "linux")]

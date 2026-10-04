@@ -58,12 +58,14 @@ pub enum Notice {
     SearchFailed { query: String, message: String },
     NodeName(String),
     RelayPreference(bool),
+    BroadcastPreference(Option<u64>),
 }
 pub enum Action {
     Connect,
     Disconnect,
     ResetIdentity,
     Save(Settings),
+    BroadcastPeer(String),
     Import(PathBuf),
     Engine(runtime::Command),
     Shutdown,
@@ -73,16 +75,23 @@ pub enum Action {
 pub struct Notices(Arc<Mutex<VecDeque<Notice>>>);
 impl Notices {
     pub(crate) fn send(&self, notice: Notice) {
-        let mut queue = self.0.lock().unwrap();
-        if matches!(notice, Notice::Engine(runtime::Update::State(_)))
-            && matches!(
-                queue.back(),
-                Some(Notice::Engine(runtime::Update::State(_)))
-            )
-        {
-            queue.pop_back();
-        }
-        queue.push_back(notice);
+        let replaced = {
+            let mut queue = self.0.lock().unwrap();
+            if matches!(notice, Notice::Engine(runtime::Update::State(_)))
+                && matches!(
+                    queue.back(),
+                    Some(Notice::Engine(runtime::Update::State(_)))
+                )
+            {
+                Some(std::mem::replace(queue.back_mut().unwrap(), notice))
+            } else {
+                queue.push_back(notice);
+                None
+            }
+        };
+        // Large rosters are freed after unlocking, so producers/consumers never
+        // wait for all of a superseded snapshot's strings and maps to be freed.
+        drop(replaced);
     }
     pub fn try_iter(&self) -> std::collections::vec_deque::IntoIter<Notice> {
         std::mem::take(&mut *self.0.lock().unwrap()).into_iter()
@@ -236,10 +245,12 @@ fn manager(
     if let Some(language) = language_override {
         settings.language = language;
     }
+    let mut broadcast_peer = None;
     if dir.path.join("service.json").exists() {
         match dir.preferences() {
             Ok(preferences) => {
                 settings.force_relay = preferences.force_relay;
+                broadcast_peer = preferences.broadcast_peer;
                 settings.auto_reconnect = preferences.auto_reconnect;
                 settings.reconnect_attempts = preferences.reconnect_attempts;
                 settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
@@ -304,6 +315,7 @@ fn manager(
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendReady);
     let mut persisted = identity.is_some();
     report(Notice::Settings(settings.clone()));
+    report(Notice::BroadcastPreference(broadcast_peer));
     if let Err(error) = &loaded {
         report(Notice::Phase(Phase::Error, error.to_string()));
     } else if !service_running {
@@ -321,12 +333,14 @@ fn manager(
                 "openrad"
             })
     });
-    let configure = |settings: &Settings| daemon::ServicePreferences {
-        force_relay: settings.force_relay,
-        auto_reconnect: settings.auto_reconnect,
-        reconnect_attempts: settings.reconnect_attempts,
-        reconnect_base_delay_seconds: settings.reconnect_base_delay_seconds,
-        traffic_peers: options.traffic_peers.clone(),
+    let configure = |settings: &Settings| -> Result<daemon::ServicePreferences> {
+        let mut preferences = dir.preferences()?;
+        preferences.force_relay = settings.force_relay;
+        preferences.auto_reconnect = settings.auto_reconnect;
+        preferences.reconnect_attempts = settings.reconnect_attempts;
+        preferences.reconnect_base_delay_seconds = settings.reconnect_base_delay_seconds;
+        preferences.traffic_peers = options.traffic_peers.clone();
+        Ok(preferences)
     };
     let operation = |result: Result<()>| {
         if let Err(error) = result {
@@ -398,7 +412,7 @@ fn manager(
                     Phase::Connecting,
                     "Authenticating your saved identity…".into(),
                 ));
-                dir.save_preferences(&configure(&settings))?;
+                dir.save_preferences(&configure(&settings)?)?;
                 drop(profile_lock);
                 daemon::spawn_with_executable(&dir, options.disable_interface, &executable)?;
                 service_running = true;
@@ -433,6 +447,10 @@ fn manager(
                         if settings.force_relay != preferences.force_relay {
                             settings.force_relay = preferences.force_relay;
                             report(Notice::RelayPreference(preferences.force_relay));
+                        }
+                        if broadcast_peer != preferences.broadcast_peer {
+                            broadcast_peer = preferences.broadcast_peer;
+                            report(Notice::BroadcastPreference(broadcast_peer));
                         }
                     }
                     let phase = match reply.data["phase"].as_str() {
@@ -619,6 +637,20 @@ fn manager(
                 operation(result);
                 next_status = Instant::now();
             }
+            Ok(Action::BroadcastPeer(target)) => {
+                let result = (|| -> Result<()> {
+                    let reply = daemon::broadcast_peer(&dir, Some(target))?;
+                    ensure!(reply.ok, "{}", reply.message);
+                    broadcast_peer = serde_json::from_value(reply.data["broadcast_peer"].clone())?;
+                    report(Notice::BroadcastPreference(broadcast_peer));
+                    report(Notice::Engine(runtime::Update::Operation {
+                        message: reply.message,
+                        error: false,
+                    }));
+                    Ok(())
+                })();
+                operation(result);
+            }
             Ok(Action::Save(next)) => {
                 let result = (|| -> Result<()> {
                     openrad::protocol::validate_node_name(&next.node_name)?;
@@ -626,7 +658,7 @@ fn manager(
                         let reply = daemon::request(
                             &dir,
                             &Request::Configure {
-                                preferences: configure(&next),
+                                preferences: configure(&next)?,
                             },
                         )?;
                         ensure!(reply.ok, "{}", reply.message);
@@ -640,7 +672,7 @@ fn manager(
                             ensure!(reply.ok, "{}", reply.message);
                         }
                     } else {
-                        dir.save_preferences(&configure(&next))?;
+                        dir.save_preferences(&configure(&next)?)?;
                         if (identity.is_some() || last_identity.is_some())
                             && next.node_name != settings.node_name
                         {

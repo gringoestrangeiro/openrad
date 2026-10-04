@@ -17,6 +17,7 @@ development has not started.
 - Network favorites and saved public/private network selections with paced batch joins.
 - Peer connections over direct TCP, reliable UDP, or relay transport.
 - Authenticated peer RTT tests, optional relay-only mode, and editable device names.
+- Saved outgoing broadcast recipient selection shared between desktop and CLI.
 - Linux TAP and Windows TAP-Windows6 virtual Ethernet interfaces.
 - English, Portuguese, Russian, and Vietnamese interfaces.
 - OS-backed credential storage for desktop identities.
@@ -42,11 +43,11 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **1.1.0** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **1.2.0** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, build metadata, dependency notices, and checksums.
-Read the [1.1.0 release notes](docs/releases/1.1.0.md) for upgrade behavior,
+Read the [1.2.0 release notes](docs/releases/1.2.0.md) for upgrade behavior,
 validation, and platform limitations, and the
-[complete change inventory](docs/releases/1.1.0-changes.md) for every changed file.
+[complete change inventory](docs/releases/1.2.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
@@ -106,6 +107,15 @@ and save a named configuration to reuse the selection. Enter private passwords
 again when loading a list; configurations never store them. Batch joining starts
 only when you choose **Join selected networks**.
 
+Version 1.2.0 adds **Settings → Outgoing broadcasts** and
+`openrad broadcast-peer [RID|NAME|VPN_IP]`. Choose one outgoing recipient or
+restore all eligible peers with `openrad broadcast-peer --all`. The preference
+is saved immediately and applies without reconnecting. Incoming broadcasts
+continue arriving from all authorized peers. See the [CLI guide](docs/cli.md#outgoing-broadcast-recipient)
+for eligibility and routing details.
+
+![Outgoing broadcast settings in Portuguese](docs/screenshots/1.2.0-broadcast-settings-pt.png)
+
 ## Build from source
 
 OpenRad requires Rust 1.95 or newer. On Debian or Ubuntu, install the native
@@ -146,12 +156,13 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Linux setup](docs/linux.md) | Dependencies, permissions, TAP setup, and troubleshooting |
 | [Windows setup](docs/windows.md) | Installer, TAP driver, diagnostics, and experimental support status |
 | [Desktop usage](docs/desktop.md) | Desktop operation, profiles, identities, and connection logs |
+| [CLI em português](docs/cli-pt-BR.md) | Guia completo do CLI, serviço e destino de broadcast |
 | [CLI usage](docs/cli.md) | Commands, persistent service, profiles, and network administration |
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [1.1.0 release](docs/releases/1.1.0.md) | Packages, upgrading, verification, and limitations |
-| [1.1.0 change inventory](docs/releases/1.1.0-changes.md) | File-by-file account of all changes since v1.0.0 |
+| [1.2.0 release](docs/releases/1.2.0.md) | Packages, upgrading, verification, and limitations |
+| [1.2.0 change inventory](docs/releases/1.2.0-changes.md) | File-by-file account of all changes since v1.1.0 |
 
 ## Development
 

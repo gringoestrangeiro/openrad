@@ -299,3 +299,92 @@ verifies that a failed transform issues no write; it does not exercise an
 installed TAP driver. See the [1.0.0 release validation](releases/1.0.0.md) for
 complete scope. Live interoperability, native Windows service/driver behavior,
 end-to-end throughput, and process RSS still require measurements on real hosts.
+
+## Cross-platform forwarding workers and indexed frontends
+
+The shared engine used by CLI and desktop now dispatches TAP frames and address
+announcements to one FIFO forwarding worker. The engine owns TAP I/O and session
+orchestration; the forwarding worker validates and routes outbound frames, and
+independent peer workers encode, encrypt, authenticate, and decode their channels.
+Inbound address validation also runs on peer workers. Ethernet envelopes remain
+uncompressed, with the same flags, payloads, padding, encryption chains, and
+transport framing.
+
+- The dispatcher has a 64-entry nonblocking mailbox, in addition to the existing
+  64-entry outgoing queues per peer and 512-entry incoming-frame mailbox. At
+  most one additional routing thread runs per engine. Frames and announcements
+  use the same FIFO, preserving per-peer dispatch order.
+- Immutable endpoint tables contain queue handles, IP/MAC bindings, wake handles,
+  and cancellation flags. They rebuild only on membership/channel changes.
+  Expected O(1) hash lookups replace the IP/RID tree/binary-search lookups, and
+  fan-out no longer looks up each worker or repeats traffic-policy checks. Group
+  traffic still visits recipients in RID order; duplicate IPs keep all eligible
+  recipients. Cancellation invalidates endpoints held by queued older tables.
+- Incoming frames carry their channel generation. The engine checks that it is
+  still current before TAP delivery, preventing buffered old-channel frames
+  from taking on a replacement channel's authority.
+- Incoming offers use CID/RID hash indexes instead of peer scans for duplicate
+  admission, take, reject, and finish. Bounded expiration sweeps remain. Parsing
+  runs on the attachment worker; followup records move their original transport
+  allocation into the setup mailbox instead of being cloned twice.
+- An already-pending local wake notification uses an atomic read fast path,
+  avoiding a contended atomic swap for each packet in a batch on both platforms.
+- Desktop catalog pagination deduplicates in expected linear time with borrowed
+  names while preserving first results and server order. Discovery and bulk
+  join checks use a cached joined-name hash index. The index invalidates on name,
+  ID, order, or membership changes. Superseded snapshots are freed after releasing
+  the frontend notice mutex; phase and operation barriers remain intact.
+
+Headless regressions cover dispatcher saturation/closure, FIFO and shutdown,
+revoked endpoint tables, inbound generation/validation, offer-index cleanup,
+owned setup records, duplicate catalog pages, and joined-name cache invalidation.
+Fixed cryptographic/protocol vectors and encrypted TCP/UDP tests cover wire
+compatibility. These changes use shared Rust code on Linux and Windows; native
+Windows TAP/UAC and live interoperability are separate validation requirements.
+
+### Cached routing microbenchmark
+
+| Operation | Previous path | Cached endpoints | Speedup |
+| --- | ---: | ---: | ---: |
+| Route and drain 5,000 broadcast frames across 120 peers | 19.24 ms | 17.39 ms | 1.11× |
+| Route and drain 50,000 directed frames among 120 peers | 5.42 ms | 4.85 ms | 1.12× |
+
+These are medians of nine alternating release-mode runs on Linux x86-64 with
+Rust 1.98.1 and synthetic 1,514-byte ARP frames. Both paths share and drain
+bounded peer queues. The previous path already had an IP destination index;
+this comparison measures replacing its tree lookups and repeated worker/policy
+checks with cached endpoints. Reproduce it with:
+
+```sh
+cargo test -p openrad-client --release --lib --locked benchmark_cached_forwarding_endpoints -- --ignored --nocapture
+```
+
+This measures local routing/queue work only, excluding the new dispatcher thread
+handoff, encryption, TAP, and network I/O. It does not establish end-to-end
+throughput or latency. The worker split moves that work off the orchestration
+thread; live Linux and Windows performance still needs measurement.
+
+
+### Release 1.2.0 validation
+
+The Linux default workspace suite passes 293 tests, with eight opt-in tests
+ignored. Fixed wire/cryptographic vectors, encrypted TCP/UDP traffic, forwarding,
+RTT, localization, and frontend cache/ordering regressions are included. Five
+optional desktop CPU-rendering tests also passed; twenty synthetic captures
+were inspected, including broadcast controls in all four languages at two widths. Formatting, Clippy with warnings
+denied, and fresh workspace release builds pass for Linux and Windows GNU.
+All Windows test executables compile. Twelve selected
+Windows Rust tests passed under isolated Wine, including the TAP thread-handoff
+regression, Radmin address/recovery contracts, owned I/O and trusted PowerShell
+construction. Thirty-eight synthetic PowerShell cases and eight dummy-program
+installer-flow cases also passed. See the [1.2.0 release notes](releases/1.2.0.md)
+for the exact scope; these checks do not establish native Windows behavior.
+
+The source review checked dispatcher shutdown on full/closed queues, immutable
+endpoint indices and cancellation/generation checks, Windows event-handle
+ownership and reset races, TAP MAC translation, and overlapped buffer ownership
+through completion/cancellation. TAP I/O remains on the engine thread; worker
+messages own or reference-count their packet allocations. Each peer retains
+exclusive ownership of its cipher state, and frontend snapshot coalescing keeps
+phase/operation barriers. Native Windows TAP/UAC behavior and live throughput
+remain unverified.

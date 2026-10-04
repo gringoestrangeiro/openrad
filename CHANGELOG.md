@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.0 — 2026-10-04
+
+Fresh Linux and Windows builds include every change since v1.1.0. See the
+[release notes](docs/releases/1.2.0.md) and
+[file-by-file inventory](docs/releases/1.2.0-changes.md). Windows remains experimental.
+
+- Add a saved outgoing broadcast recipient shared by desktop and CLI. Select by RID, exact device name or VPN IP in Settings or with `openrad broadcast-peer`; restore all eligible recipients with `--all` or `0.0.0.0`. Apply changes without reconnecting, preserve incoming broadcasts and unicast/multicast routing, reject ambiguous names/IPs, and avoid redirecting broadcasts to other peers when the selected recipient is unavailable.
+- Move outbound routing and address announcements to one bounded FIFO forwarding worker, keeping TAP I/O and session orchestration responsive. Cache authenticated eligible queue endpoints with IP/RID indexes, preserve cancellation and dispatch ordering, and reject inbound frames from replaced channel generations before TAP delivery.
+- Parse peer setup records on the attachment worker and move their owned buffers through setup mailboxes. Index incoming offers by connection and peer IDs while retaining bounded admission, deduplication, expiry and cleanup.
+- Reduce repeated frontend work with linear catalog-page deduplication and a joined-network name index. Free superseded snapshots after releasing the notice-queue lock while preserving phase and operation barriers. Avoid repeated atomic exchanges for already-pending wake notifications.
+
+- Fix Windows TAP error 995 after asynchronous setup: issue the first overlapped read on the persistent engine thread after the setup worker exits, and retain buffer ownership through cancellation/completion. Add a headless named-pipe handoff/read/rearm regression.
+- Continue official Radmin adapter recovery when its service refuses to stop or its process cannot be terminated. Never kill a service whose stop request failed; confirm that the selected adapter remains administratively disabled before connecting. Return bounded worker failure details over an ACL-protected temporary named pipe and suppress raw PowerShell CLIXML progress in the connection error.
+- Translate broadcast controls and service errors in English, Portuguese, Russian and Vietnamese. Expand the CLI reference and add a complete Brazilian Portuguese guide, synthetic settings screenshot, architecture/performance notes and release inventory. Package the new guides and screenshot for both platforms.
+- Validate with 293 default Linux tests, five CPU-rendering tests and inspected synthetic screenshots, formatting and Clippy for both targets, Windows test compilation, 38 synthetic PowerShell cases, eight isolated installer-flow cases and twelve selected Windows Rust tests under Wine. Publish fresh Debian 12/Rust 1.95 Linux and Rust 1.98/MinGW Windows builds with dependency notices, driver source, build/import metadata and SHA-256 checksums; native Windows TAP/UAC and real Radmin interoperability remain unverified.
+
 ## 1.1.0 — 2026-10-02
 
 Fresh Linux and Windows builds include every change since v1.0.0. See the

@@ -11,7 +11,7 @@ use crate::{
 use anyhow::{bail, ensure, Result};
 use serde_json::json;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeSet, HashMap},
     net::{IpAddr, Ipv4Addr},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -53,11 +53,76 @@ struct Route {
     until: Instant,
     tx: SyncSender<Vec<u8>>,
 }
+struct IncomingHeader {
+    cid: u64,
+    operation: u32,
+    bytes: usize,
+    // Defer offer errors until CID deduplication: a duplicate offer must never
+    // replace a secret, even when its nested credentials are malformed.
+    offer: Option<Result<(u64, Vec<u8>)>>,
+}
+impl IncomingHeader {
+    fn parse(data: &[u8]) -> Result<Option<Self>> {
+        let fields = records(data)?;
+        let operation = int32(field(&fields, SERVER_OP)?)?;
+        if ![11, 6, 7, 23, 29].contains(&operation) {
+            return Ok(None);
+        }
+        ensure!(data.len() <= 65536, "incoming record size limit");
+        let cid = int64(field(&fields, 0x020001c1)?)?;
+        ensure!(cid != 0, "zero incoming connection ID");
+        let offer = (operation == 11).then(|| {
+            let fields = records(field(&fields, 0x1235)?)?;
+            let rid = int64(field(&fields, 0x020001e1)?)?;
+            let password = field(&fields, 0x0a0001cd)?;
+            ensure!(
+                rid != 0 && (6..=1024).contains(&password.len()),
+                "invalid incoming credentials"
+            );
+            Ok((rid, password.to_vec()))
+        });
+        Ok(Some(Self {
+            cid,
+            operation,
+            bytes: data.len(),
+            offer,
+        }))
+    }
+}
+
+/// Parsed on the attachment worker; followup records move their transport
+/// allocation through the engine and setup mailboxes without copying bytes.
+pub(crate) struct IncomingRecord {
+    header: IncomingHeader,
+    data: Vec<u8>,
+}
+impl IncomingRecord {
+    pub(crate) fn parse(data: Vec<u8>) -> Result<Option<Self>> {
+        let Some(header) = IncomingHeader::parse(&data)? else {
+            return Ok(None);
+        };
+        let data = if header.offer.is_some() {
+            Vec::new()
+        } else {
+            data
+        };
+        Ok(Some(Self { header, data }))
+    }
+    pub(crate) fn operation(&self) -> u32 {
+        self.header.operation
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.header.bytes
+    }
+}
+
 /// Bounded mailbox; unknown/offline members may arrive before the membership
 /// update, but they cannot start work. Duplicate CIDs never replace a secret.
 pub struct Hub {
-    pending: BTreeMap<u64, Offer>,
-    routes: BTreeMap<u64, Route>,
+    pending: HashMap<u64, Offer>,
+    routes: HashMap<u64, Route>,
+    pending_by_rid: HashMap<u64, u64>,
+    routes_by_rid: HashMap<u64, u64>,
     route_ip: IpAddr,
     ues: Vec<Ipv4Addr>,
     wire: SyncSender<Vec<u8>>,
@@ -65,36 +130,34 @@ pub struct Hub {
 impl Hub {
     pub fn new(route_ip: IpAddr, ues: Vec<Ipv4Addr>, wire: SyncSender<Vec<u8>>) -> Self {
         Self {
-            pending: BTreeMap::new(),
-            routes: BTreeMap::new(),
+            pending: HashMap::new(),
+            routes: HashMap::new(),
+            pending_by_rid: HashMap::new(),
+            routes_by_rid: HashMap::new(),
             route_ip,
             ues,
             wire,
         }
     }
     pub fn ingest(&mut self, data: &[u8]) -> Result<()> {
-        let operation = op(data)?;
-        if ![11, 6, 7, 23, 29].contains(&operation) {
+        let Some(header) = IncomingHeader::parse(data)? else {
             return Ok(());
-        }
-        ensure!(data.len() <= 65536, "incoming record size limit");
-        let f = records(data)?;
-        let cid = int64(field(&f, 0x020001c1)?)?;
-        ensure!(cid != 0, "zero incoming connection ID");
-        if operation == 11 {
+        };
+        self.admit(header, || data.to_vec())
+    }
+    pub(crate) fn ingest_record(&mut self, record: IncomingRecord) -> Result<()> {
+        self.admit(record.header, || record.data)
+    }
+    fn admit(&mut self, header: IncomingHeader, data: impl FnOnce() -> Vec<u8>) -> Result<()> {
+        let cid = header.cid;
+        if let Some(offer) = header.offer {
             if self.pending.contains_key(&cid) || self.routes.contains_key(&cid) {
                 return Ok(());
             }
-            let f = records(field(&f, 0x1235)?)?;
-            let rid = int64(field(&f, 0x020001e1)?)?;
-            let password = field(&f, 0x0a0001cd)?;
-            ensure!(
-                rid != 0 && (6..=1024).contains(&password.len()),
-                "invalid incoming credentials"
-            );
+            let (rid, password) = offer?;
             if self.pending.len() >= MAX_PENDING_OFFERS
-                || self.pending.values().any(|p| p.rid == rid)
-                || self.routes.values().any(|p| p.rid == rid)
+                || self.pending_by_rid.contains_key(&rid)
+                || self.routes_by_rid.contains_key(&rid)
             {
                 return Ok(());
             }
@@ -102,37 +165,54 @@ impl Hub {
                 cid,
                 Offer {
                     rid,
-                    password: password.to_vec(),
+                    password,
                     created: Instant::now(),
                     records: vec![],
                 },
             );
+            self.pending_by_rid.insert(rid, cid);
         } else if let Some(route) = self.routes.get(&cid) {
             // A full or closed mailbox cannot block the attachment heartbeat.
-            let _ = route.tx.try_send(data.to_vec());
+            let _ = route.tx.try_send(data());
         } else if let Some(p) = self.pending.get_mut(&cid) {
             if p.records.len() < 8 {
-                p.records.push(data.to_vec());
+                p.records.push(data());
             }
         }
         Ok(())
     }
     pub fn expire(&mut self) {
-        self.pending
-            .retain(|_, p| p.created.elapsed() < Duration::from_secs(30));
-        self.routes.retain(|_, p| Instant::now() < p.until);
+        let now = Instant::now();
+        self.pending.retain(|_, p| {
+            let keep = now.duration_since(p.created) < Duration::from_secs(30);
+            if !keep {
+                self.pending_by_rid.remove(&p.rid);
+            }
+            keep
+        });
+        self.routes.retain(|_, p| {
+            let keep = now < p.until;
+            if !keep {
+                self.routes_by_rid.remove(&p.rid);
+            }
+            keep
+        });
     }
     pub fn pending_rids(&self) -> BTreeSet<u64> {
-        self.pending.values().map(|p| p.rid).collect()
+        self.pending_by_rid.keys().copied().collect()
     }
     pub fn reject(&mut self, rid: u64) {
-        self.pending.retain(|_, p| p.rid != rid);
+        if let Some(cid) = self.pending_by_rid.remove(&rid) {
+            self.pending.remove(&cid);
+        }
     }
     pub fn finish(&mut self, rid: u64) {
-        self.routes.retain(|_, p| p.rid != rid);
+        if let Some(cid) = self.routes_by_rid.remove(&rid) {
+            self.routes.remove(&cid);
+        }
     }
     pub fn take(&mut self, rid: u64, policy: Policy) -> Option<Setup> {
-        let cid = *self.pending.iter().find(|(_, p)| p.rid == rid)?.0;
+        let cid = self.pending_by_rid.remove(&rid)?;
         let p = self.pending.remove(&cid)?;
         let (tx, rx) = mpsc::sync_channel(16);
         for record in p.records {
@@ -146,6 +226,7 @@ impl Hub {
                 tx,
             },
         );
+        self.routes_by_rid.insert(rid, cid);
         Some(Setup {
             cid,
             password: p.password,
@@ -570,5 +651,46 @@ mod tests {
             .ingest(&[offer(1, 11), u64v(0x020001c1, 2)].concat())
             .is_err());
         assert!(h.pending_rids().is_empty());
+    }
+
+    #[test]
+    fn peer_indexes_release_rejected_finished_and_expired_connection_ids() {
+        let (wire, _) = mpsc::sync_channel(4);
+        let mut hub = Hub::new("127.0.0.1".parse().unwrap(), vec![], wire);
+        for cid in 1..=4 {
+            hub.ingest(&offer(cid, 11)).unwrap();
+            let malformed_duplicate = [u32v(SERVER_OP, 11), u64v(0x020001c1, cid)].concat();
+            hub.ingest(&malformed_duplicate).unwrap();
+            if cid == 1 {
+                hub.reject(11);
+            } else {
+                let setup = hub.take(11, Policy::All).unwrap();
+                assert_eq!(setup.cid, cid);
+                assert_eq!(setup.password, b"synthetic-password");
+                if cid == 3 {
+                    hub.routes.get_mut(&cid).unwrap().until = Instant::now();
+                    hub.expire();
+                } else {
+                    hub.finish(11);
+                }
+            }
+            assert!(hub.pending.is_empty() && hub.pending_by_rid.is_empty());
+            assert!(hub.routes.is_empty() && hub.routes_by_rid.is_empty());
+        }
+    }
+
+    #[test]
+    fn parsed_followup_moves_its_original_allocation_into_the_setup_mailbox() {
+        let (wire, _) = mpsc::sync_channel(4);
+        let mut hub = Hub::new("127.0.0.1".parse().unwrap(), vec![], wire);
+        hub.ingest_record(IncomingRecord::parse(offer(7, 11)).unwrap().unwrap())
+            .unwrap();
+        let setup = hub.take(11, Policy::All).unwrap();
+        let data = [u32v(SERVER_OP, 29), u64v(0x020001c1, 7), tlv(0x127c, &[])].concat();
+        let allocation = data.as_ptr();
+        hub.ingest_record(IncomingRecord::parse(data).unwrap().unwrap())
+            .unwrap();
+        let received = setup.records.try_recv().unwrap();
+        assert_eq!(received.as_ptr(), allocation);
     }
 }

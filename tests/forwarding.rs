@@ -100,7 +100,11 @@ fn shared_validation_preserves_forwarding_for_valid_mutated_and_truncated_frames
             let route = tunnel::forwarding(frame, source, sender_mac);
             for target in targets {
                 for mac in [tunnel::mac(target), [255; 6], [2; 6]] {
-                    let expected = original_deliver_to(frame, source, sender_mac, target, mac);
+                    let gratuitous_reply = frame.len() <= tunnel::MAX_FRAME
+                        && tunnel::arp_endpoints(frame)
+                            .is_some_and(|(src, dst)| frame[21] == 2 && src == dst);
+                    let expected = gratuitous_reply
+                        || original_deliver_to(frame, source, sender_mac, target, mac);
                     assert_eq!(
                         route.as_ref().is_some_and(|r| r.deliver_to(target, mac)),
                         expected,

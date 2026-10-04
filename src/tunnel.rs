@@ -307,7 +307,7 @@ pub fn gratuitous_arp(vip: Ipv4Addr) -> Vec<u8> {
 /// Largest supported Ethernet frame (MTU 1500 plus header).
 pub const MAX_FRAME: usize = 1514;
 
-/// Source-validated forwarding decision, reusable across authenticated peers.
+/// Forwarding decision, reusable across authenticated peers.
 /// This contains only routing metadata; the Ethernet frame stays unchanged.
 pub struct Forwarding {
     destination: Ipv4Addr,
@@ -316,6 +316,10 @@ pub struct Forwarding {
     arp: bool,
 }
 impl Forwarding {
+    /// Accepted IPv4 broadcasts also have an Ethernet broadcast destination.
+    pub fn is_broadcast(&self) -> bool {
+        self.destination_mac == [255; 6]
+    }
     /// Group traffic has no single destination; directed ARP remains unicast
     /// here even when its Ethernet destination is the broadcast MAC.
     pub fn target(&self) -> Option<Ipv4Addr> {
@@ -329,14 +333,14 @@ impl Forwarding {
     }
 }
 
-/// Validate the source and packet header once before considering each peer.
+/// Validate the packet header and, except for gratuitous ARP replies, the source.
 pub fn forwarding(frame: &[u8], source: Ipv4Addr, source_mac: [u8; 6]) -> Option<Forwarding> {
-    if !(14..=MAX_FRAME).contains(&frame.len()) || frame[6..12] != source_mac {
+    if !(14..=MAX_FRAME).contains(&frame.len()) {
         return None;
     }
     let destination_mac = frame[..6].try_into().ok()?;
     if let Some((src, dst)) = ipv4_endpoints(frame) {
-        if src != source {
+        if src != source || frame[6..12] != source_mac {
             return None;
         }
         let group_mac = if dst == Ipv4Addr::BROADCAST || dst == Ipv4Addr::new(26, 255, 255, 255) {
@@ -358,14 +362,17 @@ pub fn forwarding(frame: &[u8], source: Ipv4Addr, source_mac: [u8; 6]) -> Option
         });
     }
     let (src, dst) = arp_endpoints(frame)?;
+    let gratuitous_reply = frame[21] == 2 && src == dst;
     // Check the ARP sender too: the Ethernet source alone is insufficient.
-    if src != source || frame[22..28] != source_mac {
+    if !gratuitous_reply
+        && (src != source || frame[6..12] != source_mac || frame[22..28] != source_mac)
+    {
         return None;
     }
     Some(Forwarding {
         destination: dst,
         destination_mac,
-        group: dst == source && destination_mac == [255; 6],
+        group: gratuitous_reply || dst == source && destination_mac == [255; 6],
         arp: true,
     })
 }

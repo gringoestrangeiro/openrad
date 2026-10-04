@@ -136,11 +136,21 @@ temporary local Task Scheduler task as SYSTEM. Its embedded worker stops the
 service whose executable is `RvControlSvc.exe`, force-terminates any remaining
 `RvControlSvc.exe` processes, then disables the selected official adapter. This
 order prevents the running service from immediately reenabling the driver.
+If the service refuses to stop, or its process cannot be terminated, recovery
+still tries to disable the selected official adapter. It never force-kills a
+service whose stop request was refused, changes service startup/recovery
+settings, or disables another adapter. The worker checks the selected GUIDs and
+administrative state for up to ten seconds, requiring two seconds of continuously
+disabled state before reporting success. A disconnected but enabled adapter
+does not count as recovered.
 OpenRad waits for the worker, removes the task, and rechecks all active adapter
 addresses for up to ten seconds before continuing the same connection attempt.
 The worker has a thirty-second execution limit; scheduler completion is awaited
 for up to forty seconds. A failed recovery leaves the connection failed and
-records an error in the usual connection/startup logs.
+records an error in the usual connection/startup logs. A temporary ACL-protected
+named pipe carries a bounded worker error back to the application, including
+adapter-disable failures and refused service-stop result codes. Errors appear
+as readable text rather than PowerShell CLIXML/module-initialization progress.
 
 This recovery is offline and uses built-in Windows PowerShell and Task Scheduler.
 Microsoft documents [SYSTEM task principals](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal),
@@ -149,7 +159,8 @@ and [adapter disabling](https://learn.microsoft.com/en-us/powershell/module/neta
 The VPN application keeps the ordinary user's profile and credentials. There is
 no PsExec download, SYSTEM application launch, driver removal, or permanent
 change to the Radmin service's startup setting. OpenRad leaves the official
-adapter disabled and its service stopped when disconnecting. To switch back,
+adapter disabled when disconnecting; its service remains stopped if recovery
+could stop it. To switch back,
 disconnect/close OpenRad, enable **Radmin VPN** in Windows network settings, and
 start its service or restart Windows. Starting official Radmin while OpenRad is
 connected can recreate a routing conflict.
@@ -159,6 +170,12 @@ still report a conflict. The automatic recovery is limited to the official
 Famatech adapter. Disabled adapters' retained addresses are ignored. The new
 SYSTEM recovery has synthetic regression coverage and cross-build validation;
 it still needs a real Windows migration test with official Radmin installed.
+
+TAP setup runs on a temporary worker thread. Its first overlapped read starts
+on the engine thread after handoff: Windows cancels pending I/O from a thread
+when that thread exits, which otherwise produces `ERROR_OPERATION_ABORTED`
+(OS error 995) on the first read. Subsequent reads and cancellation retain owned
+buffers through completion. See Microsoft's [thread exit behavior](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-exitthread).
 
 ## Graphics compatibility
 

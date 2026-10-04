@@ -32,10 +32,15 @@ On first connection, OpenRad provisions a new identity and saves it to the OS cr
 
 - **Language:** automatic system-language selection, English, Português, Русский, or Tiếng Việt. The language changes immediately, including dialogs, notifications and retained activity. Use **Save preferences** to keep the selection after restart. **Discard changes** restores the saved language; **Restore defaults** selects the system language again. Existing profiles without a language preference use automatic selection.
 - **Connection:** connect on launch, reconnect after failures, maximum retry attempts (1–10), and the initial retry delay (1–30 seconds). Later retries double the delay, capped at five minutes. The device name remains editable after registration. Saving a new name reconnects with the same identity and keeps the VPN address and network memberships. **Force Relay** uses only relay connections in both directions; saving it cancels existing channels and reconnects without direct TCP, UDP, or endpoint-discovery attempts.
+- **Outgoing broadcasts:** enter a peer RID, exact name, or VPN IP and use **Apply broadcast target**. The setting is saved immediately and applies without reconnecting. **Send to all peers**, or applying `0.0.0.0`, restores normal broadcast distribution. Incoming broadcasts remain enabled from every authorized peer. If the selected target is unavailable, outgoing broadcasts are dropped. This also restricts ARP broadcasts, which can prevent address resolution of other peers. The same setting is available through [`openrad broadcast-peer`](cli.md).
 - **Workspace:** the page shown at startup, interface scale, traffic overview and graphs, decimal or binary traffic units, visibility of offline peers, peer sorting, and the number of recent activity events shown.
 - **Developer view:** inline peer connection details, internal IDs, and live session, interface, peer, and frame counters. **Copy diagnostic summary** copies aggregate counters without credentials or packet contents.
 
 Workspace display changes preview immediately. Use **Save preferences** to keep them after restart, **Discard changes** to return to the last saved values, or **Restore defaults** to prepare the defaults for saving. The created identity's name is preserved when restoring defaults. Settings remain separate from credentials and are saved per profile.
+
+The [outgoing broadcast controls](screenshots/1.2.0-broadcast-settings-pt.png) have
+their own immediate apply/reset actions. Saving or discarding other preferences
+does not overwrite the broadcast recipient selected from either frontend.
 
 Automatic language selection uses the message locale (`LC_ALL`, then `LC_MESSAGES`, then `LANG`) and GNU `LANGUAGE` preference lists. `C`, `C.UTF-8`, and `POSIX` explicitly select English. Regional variants such as `pt_BR.UTF-8`, `pt-PT`, `ru_RU`, and `vi-VN` select the corresponding supported language; unsupported locales fall back to English. The detected language is shown beside the selector. The embedded Noto Sans font covers Cyrillic and Vietnamese accents without requiring fonts to be installed on the system.
 
@@ -137,8 +142,10 @@ eligible authenticated peers. The TAP can be ready before peer handshakes finish
 so OpenRad sends a broadcast gratuitous ARP reply announcing its TAP IP/MAC to each
 newly authenticated channel. Recreating the TAP announces it to existing channels
 as well. These 42-byte frames use the TAP's current MAC, which can differ from the
-old Wine adapter's MAC. Forwarded frames retain their original bytes; source
-IP/MAC validation and membership restrictions still apply.
+old Wine adapter's MAC. Forwarded frames retain their original bytes. Gratuitous
+ARP replies do not require matching VPN IP/MAC addresses; other source validation
+and membership restrictions still apply. The outgoing broadcast preference also
+controls these announcements.
 
 ## Diagnosing connection drops
 
