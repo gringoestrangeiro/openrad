@@ -601,7 +601,10 @@ pub struct App {
     identity: Option<(u64, String)>,
     settings: Settings,
     saved_settings: Settings,
-    broadcast_peer: Option<u64>,
+    broadcast_selection: runtime::BroadcastSelection,
+    broadcast_selected: BTreeSet<u64>,
+    broadcast_exclude: bool,
+    broadcast_dirty: bool,
     broadcast_input: String,
     system_language: Language,
     snapshot: Snapshot,
@@ -697,8 +700,11 @@ impl App {
             message: "Opening your credential store…".into(),
             identity: None,
             saved_settings: settings.clone(),
-            broadcast_peer: None,
-            broadcast_input: "0.0.0.0".into(),
+            broadcast_selection: runtime::BroadcastSelection::All,
+            broadcast_selected: BTreeSet::new(),
+            broadcast_exclude: false,
+            broadcast_dirty: false,
+            broadcast_input: String::new(),
             settings,
             system_language: Language::system(),
             snapshot: Snapshot::default(),
@@ -819,15 +825,14 @@ impl App {
                     }
                     self.saved_settings.force_relay = enabled;
                 }
-                Notice::BroadcastPreference(peer) => {
-                    let previous = self
-                        .broadcast_peer
-                        .map_or_else(|| "0.0.0.0".to_owned(), |rid| rid.to_string());
-                    if self.broadcast_input == previous {
-                        self.broadcast_input =
-                            peer.map_or_else(|| "0.0.0.0".to_owned(), |rid| rid.to_string());
+                Notice::BroadcastPreference(selection) => {
+                    if !self.broadcast_dirty {
+                        self.broadcast_selected = selection.peers().cloned().unwrap_or_default();
+                        self.broadcast_exclude =
+                            matches!(selection, runtime::BroadcastSelection::Exclude(_));
+                        self.broadcast_input.clear();
                     }
-                    self.broadcast_peer = peer;
+                    self.broadcast_selection = selection;
                 }
                 Notice::Release(release) => {
                     if !self.dismissed_releases.contains(&release.version) {
@@ -2748,30 +2753,68 @@ impl App {
     }
     fn broadcast_settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
+        self.peer_list
+            .refresh(&self.snapshot, None, "", &self.settings);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(language.text("Outgoing broadcasts")).size(18.).strong());
-            ui.add_space(12.);
-            ui.label(match self.broadcast_peer {
-                Some(peer) => language.format("Outgoing broadcasts: RID {peer}", &[("peer", &peer.to_string())]),
-                None => language.text("Outgoing broadcasts: all peers").to_owned(),
-            });
-            ui.label(RichText::new(language.text("Choose a peer by RID, exact name or VPN IP. Use 0.0.0.0 to send to all peers.")).size(11.).color(MUTED));
             ui.add_space(8.);
-            ui.add(egui::TextEdit::singleline(&mut self.broadcast_input)
-                .hint_text(language.text("Peer RID, name or VPN IP"))
-                .char_limit(256)
-                .desired_width(ui.available_width().min(360.)));
+            let summary = match &self.broadcast_selection {
+                runtime::BroadcastSelection::All => language.text("Outgoing broadcasts: all peers").to_owned(),
+                runtime::BroadcastSelection::Include(peers) => language.format("Outgoing broadcasts: {count} selected peers", &[("count", &peers.len().to_string())]),
+                runtime::BroadcastSelection::Exclude(peers) => language.format("Outgoing broadcasts: {count} excluded peers", &[("count", &peers.len().to_string())]),
+            };
+            ui.label(summary);
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!self.broadcast_input.trim().is_empty(), primary(language.text("Apply broadcast target"))).clicked() {
-                    self.backend.send(Action::BroadcastPeer(self.broadcast_input.trim().to_owned()));
+                self.broadcast_dirty |= ui.radio_value(&mut self.broadcast_exclude, false, language.text("Send only to selected peers")).changed();
+                self.broadcast_dirty |= ui.radio_value(&mut self.broadcast_exclude, true, language.text("Exclude selected peers")).changed();
+            });
+            ui.add_space(6.);
+            // Virtualized rows use the existing metadata cache; no roster scan
+            // or formatting per offscreen checkbox.
+            egui::ScrollArea::vertical().id_salt("broadcast_peers").max_height(140.).show_rows(ui, ui.spacing().interact_size.y, self.peer_list.peers.len(), |ui, rows| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                for index in rows {
+                    let peer = &self.peer_list.peers[index];
+                    let mut selected = self.broadcast_selected.contains(&peer.rid);
+                    ui.push_id(peer.rid, |ui| {
+                        if ui.add_enabled(selected || self.broadcast_selected.len() < 1024,
+                            egui::Checkbox::new(&mut selected, format!("{} · {} · RID {}", peer.name, peer.address, peer.rid))).changed() {
+                            if selected { self.broadcast_selected.insert(peer.rid); } else { self.broadcast_selected.remove(&peer.rid); }
+                            self.broadcast_dirty = true;
+                        }
+                    });
+                }
+            });
+            // Saved RIDs remain editable even before their roster is loaded.
+            let unavailable: Vec<_> = self.broadcast_selected.iter().copied().filter(|rid| !self.snapshot.peers.contains_key(rid)).collect();
+            for rid in unavailable {
+                ui.horizontal(|ui| {
+                    ui.label(format!("RID {rid}"));
+                    if ui.small_button(language.text("Remove from selection")).clicked() {
+                        self.broadcast_selected.remove(&rid);
+                        self.broadcast_dirty = true;
+                    }
+                });
+            }
+            ui.label(RichText::new(language.text("Select peers above or enter RIDs, exact names or VPN IPs below, one per line.")).size(11.).color(MUTED));
+            self.broadcast_dirty |= ui.add(egui::TextEdit::multiline(&mut self.broadcast_input)
+                .hint_text(language.text("Peer RID, name or VPN IP"))
+                .char_limit(32768).desired_rows(2)
+                .desired_width(ui.available_width())).changed();
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(!self.broadcast_selected.is_empty() || !self.broadcast_input.trim().is_empty(), primary(language.text("Apply broadcast selection"))).clicked() {
+                    let targets = self.broadcast_selected.iter().map(u64::to_string)
+                        .chain(self.broadcast_input.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned)).collect();
+                    self.broadcast_dirty = false;
+                    self.backend.send(Action::BroadcastPeers { targets, exclude: self.broadcast_exclude });
                 }
                 if ui.button(language.text("Send to all peers")).clicked() {
-                    self.broadcast_input = "0.0.0.0".into();
-                    self.backend.send(Action::BroadcastPeer(self.broadcast_input.clone()));
+                    self.broadcast_dirty = false;
+                    self.backend.send(Action::BroadcastPeers { targets: Vec::new(), exclude: false });
                 }
             });
-            ui.label(RichText::new(language.text("Saved immediately. Incoming broadcasts still arrive from every authorized peer. If the selected peer is unavailable, outgoing broadcasts are dropped.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.")).size(11.).color(MUTED));
         });
     }
     fn settings(&mut self, ui: &mut egui::Ui) {
@@ -5046,6 +5089,9 @@ mod tests {
     }
 
     fn click_button(ctx: &egui::Context, app: &mut App, text: &str) {
+        click_control(ctx, app, text, egui::accesskit::Role::Button);
+    }
+    fn click_control(ctx: &egui::Context, app: &mut App, text: &str, role: egui::accesskit::Role) {
         tall_frame(ctx, app, vec![]);
         let output = tall_frame(ctx, app, vec![]);
         let bounds = output
@@ -5054,10 +5100,8 @@ mod tests {
             .unwrap()
             .nodes
             .into_iter()
-            .find(|(_, node)| {
-                node.role() == egui::accesskit::Role::Button && node.label() == Some(text)
-            })
-            .unwrap_or_else(|| panic!("missing button: {text}"))
+            .find(|(_, node)| node.role() == role && node.label() == Some(text))
+            .unwrap_or_else(|| panic!("missing control: {text}"))
             .1
             .bounds()
             .unwrap();
@@ -5586,7 +5630,7 @@ mod tests {
         }
     }
     #[test]
-    fn broadcast_target_controls_apply_and_restore_without_changing_incoming_policy() {
+    fn broadcast_controls_include_exclude_multiple_peers_and_restore_in_every_language() {
         for preference in [
             LanguagePreference::English,
             LanguagePreference::Portuguese,
@@ -5599,26 +5643,73 @@ mod tests {
             app.backend = backend;
             app.page = Page::Settings;
             app.settings.language = preference;
-            app.broadcast_input = "26.0.0.2".into();
             let language = app.language();
             let ctx = egui::Context::default();
             configure(&ctx);
             ctx.enable_accesskit();
-            click_button(&ctx, app, language.text("Apply broadcast target"));
-            assert!(
-                matches!(actions.try_recv().unwrap(), Action::BroadcastPeer(target) if target == "26.0.0.2")
+            app.snapshot
+                .peers
+                .insert(2, cached_peer(2, "Synthetic two", &[]));
+            app.snapshot
+                .peers
+                .insert(3, cached_peer(3, "Synthetic three", &[]));
+            click_control(
+                &ctx,
+                app,
+                "Synthetic two · 26.0.0.2 · RID 2",
+                egui::accesskit::Role::CheckBox,
             );
+            click_control(
+                &ctx,
+                app,
+                "Synthetic three · 26.0.0.3 · RID 3",
+                egui::accesskit::Role::CheckBox,
+            );
+            assert_eq!(app.broadcast_selected, BTreeSet::from([2, 3]));
+            app.broadcast_input = " 26.0.0.4 \nSynthetic friend\n".into();
+            click_button(&ctx, app, language.text("Apply broadcast selection"));
+            assert!(
+                matches!(actions.try_recv().unwrap(), Action::BroadcastPeers { targets, exclude: false }
+                if targets == ["2", "3", "26.0.0.4", "Synthetic friend"])
+            );
+            let selection = runtime::BroadcastSelection::Include(BTreeSet::from([2, 3, 4]));
             app.backend
                 .notices
-                .send(Notice::BroadcastPreference(Some(2)));
+                .send(Notice::BroadcastPreference(selection.clone()));
             app.consume(&ctx);
-            tall_frame(&ctx, app, vec![]);
-            assert_eq!(app.broadcast_peer, Some(2));
+            assert_eq!(app.broadcast_selection, selection);
+            assert_eq!(app.broadcast_selected, BTreeSet::from([2, 3, 4]));
+            assert!(app.broadcast_input.is_empty());
+            click_control(
+                &ctx,
+                app,
+                language.text("Exclude selected peers"),
+                egui::accesskit::Role::RadioButton,
+            );
+            assert!(app.broadcast_exclude);
+            click_button(&ctx, app, language.text("Apply broadcast selection"));
+            assert!(
+                matches!(actions.try_recv().unwrap(), Action::BroadcastPeers { targets, exclude: true }
+                if targets == ["2", "3", "4"])
+            );
             click_button(&ctx, app, language.text("Send to all peers"));
             assert!(
-                matches!(actions.try_recv().unwrap(), Action::BroadcastPeer(target) if target == "0.0.0.0")
+                matches!(actions.try_recv().unwrap(), Action::BroadcastPeers { targets, exclude: false } if targets.is_empty())
             );
-            assert_eq!(app.broadcast_input, "0.0.0.0");
+            app.backend.notices.send(Notice::BroadcastPreference(
+                runtime::BroadcastSelection::All,
+            ));
+            app.consume(&ctx);
+            assert!(app.broadcast_selected.is_empty());
+            assert!(!app.broadcast_exclude);
+            // An update from another frontend must preserve a draft being edited.
+            app.broadcast_input = "unsaved peer".into();
+            app.broadcast_dirty = true;
+            app.backend.notices.send(Notice::BroadcastPreference(
+                runtime::BroadcastSelection::Exclude(BTreeSet::from([5])),
+            ));
+            app.consume(&ctx);
+            assert_eq!(app.broadcast_input, "unsaved peer");
         }
     }
 
@@ -5628,8 +5719,19 @@ mod tests {
     fn capture_broadcast_settings_without_profiles_credentials_or_a_display() {
         let mut fixture = Fixture::new();
         let app = fixture.app();
-        app.broadcast_peer = Some(2);
-        app.broadcast_input = "26.0.0.2".into();
+        app.broadcast_selection = runtime::BroadcastSelection::Exclude(BTreeSet::from([2, 3]));
+        app.broadcast_selected = BTreeSet::from([2, 3]);
+        app.broadcast_exclude = true;
+        app.broadcast_input.clear();
+        for (rid, name) in [
+            (2, "Synthetic Alpha"),
+            (3, "Synthetic Bravo"),
+            (4, "Synthetic Charlie"),
+            (5, "Synthetic Delta"),
+            (6, "Synthetic Echo"),
+        ] {
+            app.snapshot.peers.insert(rid, cached_peer(rid, name, &[]));
+        }
         let directory =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reports/broadcast-settings");
         std::fs::create_dir_all(&directory).unwrap();
@@ -5641,7 +5743,7 @@ mod tests {
         ] {
             app.settings.language = preference;
             for width in [448, 832] {
-                let height = 512;
+                let height = 620;
                 let ctx = egui::Context::default();
                 configure(&ctx);
                 let mut textures = egui::TexturesDelta::default();

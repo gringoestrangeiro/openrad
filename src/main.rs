@@ -122,11 +122,15 @@ enum Command {
     Ping { peer: u64 },
     /// Change the node name without replacing the identity.
     Rename { node_name: String },
-    /// Select one outgoing broadcast peer by RID, IP or name; 0.0.0.0 restores all peers.
+    /// Include or exclude outgoing broadcast peers by RID, IP or name.
+    #[command(alias = "broadcast-peers")]
     BroadcastPeer {
-        target: Option<String>,
+        targets: Vec<String>,
+        /// Send outgoing broadcasts to all eligible peers except these targets.
+        #[arg(long, requires = "targets", conflicts_with = "all")]
+        exclude: bool,
         /// Restore outgoing broadcasts to all eligible peers.
-        #[arg(long, conflicts_with = "target")]
+        #[arg(long, conflicts_with = "targets")]
         all: bool,
     },
     /// Use relays only, without direct UDP or TCP attempts.
@@ -384,9 +388,21 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         Command::RetryPeers => daemon::request(&dir, &Request::RetryPeers)?,
         Command::RetryInterface => daemon::request(&dir, &Request::RetryInterface)?,
         Command::Ping { peer } => daemon::request(&dir, &Request::Ping { peer })?,
-        Command::BroadcastPeer { target, all } => {
-            daemon::broadcast_peer(&dir, if all { Some("0.0.0.0".into()) } else { target })?
-        }
+        Command::BroadcastPeer {
+            targets,
+            exclude,
+            all,
+        } => daemon::broadcast_peers(
+            &dir,
+            if all {
+                Some(Vec::new())
+            } else if targets.is_empty() {
+                None
+            } else {
+                Some(targets)
+            },
+            exclude,
+        )?,
         Command::Rename { node_name } => {
             openrad::protocol::validate_node_name(&node_name)?;
             if dir.endpoint_exists() {

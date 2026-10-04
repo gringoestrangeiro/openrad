@@ -9,7 +9,7 @@ use crate::{
     early_log::{self, Stage},
     network::{MemberAction, NetworkPassword, NetworkRequest},
     protocol::Identity,
-    runtime::{self, Command, Snapshot, Update},
+    runtime::{self, BroadcastSelection, Command, Snapshot, Update},
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -294,6 +294,8 @@ pub struct ServicePreferences {
     pub reconnect_base_delay_seconds: u64,
     pub traffic_peers: Option<std::collections::BTreeSet<u64>>,
     pub broadcast_peer: Option<u64>,
+    /// None migrates the legacy single-recipient preference on first use.
+    pub broadcast_peers: Option<BroadcastSelection>,
 }
 impl Default for ServicePreferences {
     fn default() -> Self {
@@ -304,6 +306,7 @@ impl Default for ServicePreferences {
             reconnect_base_delay_seconds: 2,
             traffic_peers: None,
             broadcast_peer: None,
+            broadcast_peers: None,
         }
     }
 }
@@ -311,6 +314,11 @@ impl ServicePreferences {
     fn validate(&self) -> Result<()> {
         ensure!(
             self.broadcast_peer != Some(0)
+                && self.broadcast_peers.as_ref().is_none_or(|selection| {
+                    selection
+                        .peers()
+                        .is_none_or(|peers| peers.len() <= 1024 && !peers.contains(&0))
+                })
                 && (1..=10).contains(&self.reconnect_attempts)
                 && (1..=30).contains(&self.reconnect_base_delay_seconds)
                 && self
@@ -320,6 +328,20 @@ impl ServicePreferences {
             "Settings are out of range"
         );
         Ok(())
+    }
+    pub fn broadcast_selection(&self) -> BroadcastSelection {
+        self.broadcast_peers.clone().unwrap_or_else(|| {
+            self.broadcast_peer.map_or(BroadcastSelection::All, |rid| {
+                BroadcastSelection::Include(std::collections::BTreeSet::from([rid]))
+            })
+        })
+    }
+    fn set_broadcast_selection(&mut self, selection: BroadcastSelection) {
+        self.broadcast_peer = match &selection {
+            BroadcastSelection::Include(peers) if peers.len() == 1 => peers.first().copied(),
+            _ => None,
+        };
+        self.broadcast_peers = Some(selection);
     }
 }
 
@@ -362,6 +384,11 @@ pub enum Request {
     },
     BroadcastPeer {
         target: Option<String>,
+    },
+    BroadcastPeers {
+        targets: Option<Vec<String>>,
+        #[serde(default)]
+        exclude: bool,
     },
     Configure {
         preferences: ServicePreferences,
@@ -472,29 +499,100 @@ fn resolve_broadcast_peer(
     Ok(peer)
 }
 
-fn broadcast_peer_reply(peer: Option<u64>) -> Reply {
-    Reply::ok(
-        peer.map_or_else(
-            || "Outgoing broadcasts: all peers".to_owned(),
-            |peer| format!("Outgoing broadcasts: RID {peer}"),
+fn broadcast_peer_reply(selection: BroadcastSelection) -> Reply {
+    let peer = match &selection {
+        BroadcastSelection::Include(peers) if peers.len() == 1 => peers.first().copied(),
+        _ => None,
+    };
+    let message = match &selection {
+        BroadcastSelection::All => "Outgoing broadcasts: all peers".to_owned(),
+        BroadcastSelection::Include(_) if peer.is_some() => {
+            format!("Outgoing broadcasts: RID {peer}", peer = peer.unwrap())
+        }
+        BroadcastSelection::Include(peers) => format!(
+            "Outgoing broadcasts: only RIDs {}",
+            peers
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
-        json!({"broadcast_peer": peer}),
+        BroadcastSelection::Exclude(peers) => format!(
+            "Outgoing broadcasts: excluding RIDs {}",
+            peers
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    Reply::ok(
+        message,
+        json!({"broadcast_peer": peer, "broadcast_peers": selection}),
     )
+}
+
+fn resolve_broadcast_selection(
+    targets: &[String],
+    exclude: bool,
+    own_rid: u64,
+    snapshot: Option<&Snapshot>,
+) -> Result<BroadcastSelection> {
+    ensure!(
+        targets.len() <= 1024
+            && targets
+                .iter()
+                .all(|target| !target.is_empty() && target.len() <= 256),
+        "Broadcast selection supports at most 1024 peers; each target must contain 1 to 256 bytes"
+    );
+    if targets.is_empty() || targets == ["0.0.0.0"] {
+        ensure!(
+            !exclude,
+            "Specify peers to exclude from outgoing broadcasts"
+        );
+        return Ok(BroadcastSelection::All);
+    }
+    let peers = targets
+        .iter()
+        .map(|target| {
+            resolve_broadcast_peer(target, own_rid, snapshot)?
+                .context("Use 0.0.0.0 alone to restore all broadcast peers")
+        })
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    Ok(if exclude {
+        BroadcastSelection::Exclude(peers)
+    } else {
+        BroadcastSelection::Include(peers)
+    })
 }
 
 /// Query or save the shared policy without starting or reconnecting the VPN.
 pub fn broadcast_peer(dir: &DataDir, target: Option<String>) -> Result<Reply> {
+    broadcast_peers(dir, target.map(|target| vec![target]), false)
+}
+
+pub fn broadcast_peers(
+    dir: &DataDir,
+    targets: Option<Vec<String>>,
+    exclude: bool,
+) -> Result<Reply> {
     if dir.endpoint_exists() {
-        return request(dir, &Request::BroadcastPeer { target });
+        return request(dir, &Request::BroadcastPeers { targets, exclude });
     }
     let _profile_lock = dir.try_profile_lock()?;
     let _service_lock = dir.stopped_lock()?;
     let mut preferences = dir.preferences()?;
-    if let Some(target) = target {
-        preferences.broadcast_peer = resolve_broadcast_peer(&target, 0, None)?;
+    if let Some(targets) = targets {
+        preferences
+            .set_broadcast_selection(resolve_broadcast_selection(&targets, exclude, 0, None)?);
         dir.save_preferences(&preferences)?;
+    } else {
+        ensure!(
+            !exclude,
+            "Specify peers to exclude from outgoing broadcasts"
+        );
     }
-    Ok(broadcast_peer_reply(preferences.broadcast_peer))
+    Ok(broadcast_peer_reply(preferences.broadcast_selection()))
 }
 
 #[cfg(unix)]
@@ -1014,20 +1112,35 @@ impl Shared {
             Request::RetryInterface => self.queue(Command::RetryInterface),
             Request::Ping { peer } => self.command(Command::Ping { peer }),
             Request::BroadcastPeer { target } => {
+                return self.handle_result(Request::BroadcastPeers {
+                    targets: target.map(|target| vec![target]),
+                    exclude: false,
+                });
+            }
+            Request::BroadcastPeers { targets, exclude } => {
                 let mut state = self.state.lock().unwrap();
-                if let Some(target) = target {
-                    let peer =
-                        resolve_broadcast_peer(&target, self.rid, state.snapshot.as_deref())?;
+                if let Some(targets) = targets {
+                    let selection = resolve_broadcast_selection(
+                        &targets,
+                        exclude,
+                        self.rid,
+                        state.snapshot.as_deref(),
+                    )?;
                     let mut preferences = state.preferences.clone();
-                    preferences.broadcast_peer = peer;
+                    preferences.set_broadcast_selection(selection.clone());
                     self.directory
                         .as_ref()
                         .context("Profile is unavailable")?
                         .save_preferences(&preferences)?;
                     state.preferences = preferences;
-                    state.broadcast_policy.set_peer(peer);
+                    state.broadcast_policy.set_selection(selection);
+                } else {
+                    ensure!(
+                        !exclude,
+                        "Specify peers to exclude from outgoing broadcasts"
+                    );
                 }
-                broadcast_peer_reply(state.preferences.broadcast_peer)
+                broadcast_peer_reply(state.preferences.broadcast_selection())
             }
             Request::Rename { node_name } => {
                 crate::protocol::validate_node_name(&node_name)?;
@@ -1054,6 +1167,7 @@ impl Shared {
                 // settings must not overwrite a concurrent selection.
                 let mut preferences = preferences;
                 preferences.broadcast_peer = state.preferences.broadcast_peer;
+                preferences.broadcast_peers = state.preferences.broadcast_peers.clone();
                 preferences.validate()?;
                 self.directory
                     .as_ref()
@@ -1105,7 +1219,7 @@ fn supervisor(
             state.snapshot = None;
             state
                 .broadcast_policy
-                .set_peer(state.preferences.broadcast_peer);
+                .set_selection(state.preferences.broadcast_selection());
             (
                 state.identity.clone().unwrap_or_else(|| identity.clone()),
                 state.preferences.clone(),
@@ -1515,7 +1629,10 @@ mod tests {
         assert_eq!(directory.preferences().unwrap().broadcast_peer, Some(2));
         {
             let state = shared.state.lock().unwrap();
-            assert_eq!(state.broadcast_policy.peer(), Some(2));
+            assert_eq!(
+                state.broadcast_policy.snapshot().1,
+                BroadcastSelection::Include(std::collections::BTreeSet::from([2]))
+            );
             assert!(!state.restart);
         }
         assert!(
@@ -1546,13 +1663,116 @@ mod tests {
                 .ok
         );
         assert_eq!(directory.preferences().unwrap().broadcast_peer, None);
-        assert_eq!(shared.state.lock().unwrap().broadcast_policy.peer(), None);
+        assert_eq!(
+            shared.state.lock().unwrap().broadcast_policy.snapshot().1,
+            BroadcastSelection::All
+        );
         let mut legacy: ServicePreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(legacy.broadcast_peer, None);
         legacy.broadcast_peer = Some(0);
         assert!(legacy.validate().is_err());
         fs::remove_dir_all(directory.path).unwrap();
     }
+    #[test]
+    fn multiple_broadcast_targets_are_atomic_bounded_and_preserved_by_stale_settings() {
+        use std::collections::BTreeSet;
+        let path = std::env::temp_dir().join(format!(
+            "openrad-broadcast-multi-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let directory = DataDir::open(Some(path)).unwrap();
+        let mut shared = shared();
+        shared.directory = Some(directory.clone());
+        for exclude in [false, true] {
+            let reply = shared.handle(Request::BroadcastPeers {
+                targets: Some(vec!["3".into(), "2".into(), "2".into()]),
+                exclude,
+            });
+            assert!(reply.ok);
+            let selection = if exclude {
+                BroadcastSelection::Exclude(BTreeSet::from([2, 3]))
+            } else {
+                BroadcastSelection::Include(BTreeSet::from([2, 3]))
+            };
+            assert_eq!(
+                directory.preferences().unwrap().broadcast_selection(),
+                selection
+            );
+            assert_eq!(
+                shared.state.lock().unwrap().broadcast_policy.snapshot().1,
+                selection
+            );
+            assert!(!shared.state.lock().unwrap().restart);
+            assert!(
+                shared
+                    .handle(Request::Configure {
+                        preferences: ServicePreferences::default()
+                    })
+                    .ok
+            );
+            assert_eq!(
+                directory.preferences().unwrap().broadcast_selection(),
+                selection
+            );
+            for targets in [
+                vec!["2".into(), "0".into()],
+                vec!["2".into(), "123".into()],
+                vec!["0.0.0.0".into(), "2".into()],
+                vec!["2".into(); 1025],
+                vec!["x".repeat(257)],
+            ] {
+                assert!(
+                    !shared
+                        .handle(Request::BroadcastPeers {
+                            targets: Some(targets),
+                            exclude
+                        })
+                        .ok
+                );
+                assert_eq!(
+                    directory.preferences().unwrap().broadcast_selection(),
+                    selection
+                );
+                assert_eq!(
+                    shared.state.lock().unwrap().broadcast_policy.snapshot().1,
+                    selection
+                );
+            }
+        }
+        // A failed save never publishes a policy that was not persisted.
+        let saved = directory.preferences().unwrap();
+        fs::rename(
+            directory.path.join("service.json"),
+            directory.path.join("saved.json"),
+        )
+        .unwrap();
+        fs::create_dir(directory.path.join("service.json")).unwrap();
+        assert!(
+            !shared
+                .handle(Request::BroadcastPeers {
+                    targets: Some(vec!["4".into()]),
+                    exclude: false
+                })
+                .ok
+        );
+        assert_eq!(shared.state.lock().unwrap().preferences, saved);
+        let mut legacy: ServicePreferences =
+            serde_json::from_str(r#"{"broadcast_peer":2}"#).unwrap();
+        assert_eq!(
+            legacy.broadcast_selection(),
+            BroadcastSelection::Include(BTreeSet::from([2]))
+        );
+        legacy.set_broadcast_selection(BroadcastSelection::All);
+        assert_eq!(
+            serde_json::from_str::<ServicePreferences>(&serde_json::to_string(&legacy).unwrap())
+                .unwrap()
+                .broadcast_selection(),
+            BroadcastSelection::All
+        );
+        fs::remove_dir_all(directory.path).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_broken_identity_link_does_not_switch_to_credential_storage() {

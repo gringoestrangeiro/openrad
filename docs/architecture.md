@@ -34,16 +34,21 @@ A path reported as Direct TCP or Direct UDP identifies the selected peer socket.
 
 ## Traffic processing and local notifications
 
-The engine dispatches TAP frames and address announcements to one FIFO forwarding worker through a nonblocking, 64-entry mailbox. That worker validates outbound Ethernet frames and selects recipients from immutable queue endpoints. Hash indexes select unicast/directed ARP by virtual IP and selected broadcast recipients by RID; group traffic and duplicate IP bindings retain RID order. Endpoint tables are rebuilt on membership/channel changes, include only authenticated eligible traffic recipients, and share cancellation flags with peer workers. Packet fan-out needs no engine-state lock or per-target worker lookup. A full dispatcher or peer queue drops work without blocking orchestration.
+The engine dispatches TAP frames and address announcements to one FIFO forwarding worker through a nonblocking, 64-entry mailbox. That worker validates outbound Ethernet frames and selects recipients from immutable queue endpoints. Hash indexes select unicast/directed ARP by virtual IP; compiled broadcast indexes contain only selected recipients, and group traffic and duplicate IP bindings retain RID order. Endpoint tables are rebuilt on membership/channel changes, include only authenticated eligible traffic recipients, and share cancellation flags with peer workers. Packet fan-out needs no engine-state lock or per-target worker lookup. A full dispatcher or peer queue drops work without blocking orchestration.
 
 The attachment worker parses incoming peer setup records; their owned byte buffers move through the engine and setup mailboxes. Incoming offer admission, rejection, and completion use CID/RID hash indexes, with the existing bounded expiration sweeps. Each peer worker owns its transport and CBC state, reuses an envelope/encryption buffer, and decrypts received records in their owned transport buffer. All incoming Ethernet envelopes are validated before any frame is released. Source/destination checks run on that peer worker before publication; the engine rechecks current membership, policy, cancellation, and channel generation before TAP I/O. Queued frames retain the original record buffer; multiple frames share its immutable allocation. Traffic counters are published once per send batch, including successful sends before an error.
 
-An optional shared outgoing broadcast policy selects one recipient by RID for
-frames with the Ethernet broadcast destination, including directed ARP requests
-and generated gratuitous ARP announcements. The policy is sampled once per
-frame and updated without restarting channels. Its recipient must still pass
-membership, traffic-policy, and authenticated-channel checks; unavailable targets
-never fall back to all peers. Receive forwarding is independent of this policy.
+The shared outgoing broadcast policy supports all peers, a RID inclusion list,
+or a RID exclusion list. It covers the Ethernet broadcast MAC and generated
+ARP announcements. The engine checks one atomic policy revision per control-loop
+iteration and rebuilds immutable endpoint tables only on policy, membership or
+channel changes. Broadcast fan-out traverses only preselected destination indexes;
+it does not acquire a policy lock, scan excluded peers, or look up RIDs per packet.
+Exclusion mode also compiles an IP index so directed ARP keeps its normal routing.
+Inclusion mode preserves the previous single-recipient ARP override for all
+selected peers. Queued work owns its original table and keeps FIFO ordering;
+receive admission is independent of broadcast selection. Stale frontend settings
+cannot overwrite a selection made through its dedicated command.
 
 Reliable UDP caches the oldest unacknowledged data sequence and next retry deadline. A due retry pass captures the clock once. In-order payloads bypass the reorder map, while fragmented messages use one bounded payload allocation and fixed-size receipt tracking. Sequence wraparound, acknowledgement admission, fragment coverage checks, command ordering, and the existing retransmission limits remain enforced.
 

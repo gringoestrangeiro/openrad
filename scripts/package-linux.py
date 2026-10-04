@@ -58,6 +58,7 @@ def main():
                        f'docs/releases/{version}-changes.md',
                        'docs/screenshots/1.1.0-tap-authorization.png',
                        'docs/screenshots/1.2.0-broadcast-settings-pt.png',
+                       'docs/screenshots/broadcast-multiple-peers-pt.png',
                        'docs/screenshots/1.0.0-networks.png',
                        'docs/screenshots/1.0.0-discover.png',
                        'docs/screenshots/1.0.0-auto-join.png',

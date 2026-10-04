@@ -3973,5 +3973,90 @@
     "TAP do OpenRad",
     "TAP OpenRad",
     "TAP OpenRad"
+  ],
+  "Include or exclude outgoing broadcast peers by RID, IP or name": [
+    "Incluir ou excluir peers dos broadcasts de saída por RID, IP ou nome",
+    "Включить или исключить узлы из исходящей широковещательной рассылки по RID, IP или имени",
+    "Bao gồm hoặc loại trừ máy ngang hàng khỏi quảng bá gửi đi theo RID, IP hoặc tên"
+  ],
+  "Send outgoing broadcasts to all eligible peers except these targets": [
+    "Enviar broadcasts a todos os peers autorizados, exceto estes destinos",
+    "Отправлять исходящие широковещательные пакеты всем разрешённым узлам, кроме указанных",
+    "Gửi quảng bá đến mọi máy ngang hàng đủ điều kiện, trừ các máy này"
+  ],
+  "Outgoing broadcasts: only RIDs {0}": [
+    "Broadcasts de saída: somente RIDs {0}",
+    "Исходящие широковещательные пакеты: только RID {0}",
+    "Quảng bá gửi đi: chỉ các RID {0}"
+  ],
+  "Outgoing broadcasts: excluding RIDs {0}": [
+    "Broadcasts de saída: excluindo RIDs {0}",
+    "Исходящие широковещательные пакеты: исключены RID {0}",
+    "Quảng bá gửi đi: loại trừ các RID {0}"
+  ],
+  "Outgoing broadcasts: {count} selected peers": [
+    "Broadcasts de saída: {count} peers selecionados",
+    "Исходящие широковещательные пакеты: выбрано узлов — {count}",
+    "Quảng bá gửi đi: {count} máy ngang hàng đã chọn"
+  ],
+  "Outgoing broadcasts: {count} excluded peers": [
+    "Broadcasts de saída: {count} peers excluídos",
+    "Исходящие широковещательные пакеты: исключено узлов — {count}",
+    "Quảng bá gửi đi: {count} máy ngang hàng bị loại trừ"
+  ],
+  "Broadcast selection supports at most 1024 peers; each target must contain 1 to 256 bytes": [
+    "A seleção de broadcast aceita até 1024 peers; cada destino deve conter de 1 a 256 bytes",
+    "Для широковещательной рассылки можно выбрать до 1024 узлов; каждый адресат должен содержать от 1 до 256 байт",
+    "Lựa chọn quảng bá hỗ trợ tối đa 1024 máy ngang hàng; mỗi máy đích phải có từ 1 đến 256 byte"
+  ],
+  "Specify peers to exclude from outgoing broadcasts": [
+    "Informe os peers que devem ser excluídos dos broadcasts de saída",
+    "Укажите узлы, которые нужно исключить из исходящей широковещательной рассылки",
+    "Chỉ định các máy ngang hàng cần loại trừ khỏi quảng bá gửi đi"
+  ],
+  "Use 0.0.0.0 alone to restore all broadcast peers": [
+    "Use 0.0.0.0 sozinho para restaurar o broadcast para todos os peers",
+    "Используйте только 0.0.0.0, чтобы восстановить широковещательную рассылку всем узлам",
+    "Chỉ dùng 0.0.0.0 để khôi phục quảng bá đến mọi máy ngang hàng"
+  ],
+  "Send only to selected peers": [
+    "Enviar somente aos peers selecionados",
+    "Отправлять только выбранным узлам",
+    "Chỉ gửi đến các máy ngang hàng đã chọn"
+  ],
+  "Exclude selected peers": [
+    "Excluir os peers selecionados",
+    "Исключить выбранные узлы",
+    "Loại trừ các máy ngang hàng đã chọn"
+  ],
+  "Remove from selection": [
+    "Remover da seleção",
+    "Убрать из выбора",
+    "Bỏ khỏi lựa chọn"
+  ],
+  "Select peers above or enter RIDs, exact names or VPN IPs below, one per line.": [
+    "Selecione os peers acima ou informe RIDs, nomes exatos ou IPs da VPN abaixo, um por linha.",
+    "Выберите узлы выше или введите RID, точные имена или IP-адреса VPN ниже, по одному в строке.",
+    "Chọn các máy ngang hàng ở trên hoặc nhập RID, tên chính xác hay IP VPN bên dưới, mỗi máy một dòng."
+  ],
+  "Apply broadcast selection": [
+    "Aplicar seleção de broadcast",
+    "Применить выбор широковещательной рассылки",
+    "Áp dụng lựa chọn quảng bá"
+  ],
+  "Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.": [
+    "Salvo ao aplicar, sem reconectar. O recebimento de broadcasts continua habilitado. Peers excluídos não recebem broadcasts de saída, incluindo ARP.",
+    "Сохраняется при применении без переподключения. Приём широковещательных пакетов остаётся включённым. Исключённые узлы не получают исходящие широковещательные пакеты, включая ARP.",
+    "Được lưu khi áp dụng, không cần kết nối lại. Vẫn nhận quảng bá. Các máy bị loại trừ không nhận quảng bá gửi đi, kể cả ARP."
+  ],
+  "{0} · {1} · RID {2}": [
+    "{0} · {1} · RID {2}",
+    "{0} · {1} · RID {2}",
+    "{0} · {1} · RID {2}"
+  ],
+  "RID {rid}": [
+    "RID {rid}",
+    "RID {rid}",
+    "RID {rid}"
   ]
 }

@@ -58,14 +58,14 @@ pub enum Notice {
     SearchFailed { query: String, message: String },
     NodeName(String),
     RelayPreference(bool),
-    BroadcastPreference(Option<u64>),
+    BroadcastPreference(runtime::BroadcastSelection),
 }
 pub enum Action {
     Connect,
     Disconnect,
     ResetIdentity,
     Save(Settings),
-    BroadcastPeer(String),
+    BroadcastPeers { targets: Vec<String>, exclude: bool },
     Import(PathBuf),
     Engine(runtime::Command),
     Shutdown,
@@ -245,12 +245,12 @@ fn manager(
     if let Some(language) = language_override {
         settings.language = language;
     }
-    let mut broadcast_peer = None;
+    let mut broadcast_selection = runtime::BroadcastSelection::All;
     if dir.path.join("service.json").exists() {
         match dir.preferences() {
             Ok(preferences) => {
                 settings.force_relay = preferences.force_relay;
-                broadcast_peer = preferences.broadcast_peer;
+                broadcast_selection = preferences.broadcast_selection();
                 settings.auto_reconnect = preferences.auto_reconnect;
                 settings.reconnect_attempts = preferences.reconnect_attempts;
                 settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
@@ -315,7 +315,7 @@ fn manager(
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendReady);
     let mut persisted = identity.is_some();
     report(Notice::Settings(settings.clone()));
-    report(Notice::BroadcastPreference(broadcast_peer));
+    report(Notice::BroadcastPreference(broadcast_selection.clone()));
     if let Err(error) = &loaded {
         report(Notice::Phase(Phase::Error, error.to_string()));
     } else if !service_running {
@@ -448,9 +448,10 @@ fn manager(
                             settings.force_relay = preferences.force_relay;
                             report(Notice::RelayPreference(preferences.force_relay));
                         }
-                        if broadcast_peer != preferences.broadcast_peer {
-                            broadcast_peer = preferences.broadcast_peer;
-                            report(Notice::BroadcastPreference(broadcast_peer));
+                        let selection = preferences.broadcast_selection();
+                        if broadcast_selection != selection {
+                            broadcast_selection = selection;
+                            report(Notice::BroadcastPreference(broadcast_selection.clone()));
                         }
                     }
                     let phase = match reply.data["phase"].as_str() {
@@ -495,6 +496,16 @@ fn manager(
                     ));
                 }
                 _ => {}
+            }
+            // Keep offline CLI edits visible without blocking the UI thread.
+            if !service_running {
+                if let Ok(preferences) = dir.preferences() {
+                    let selection = preferences.broadcast_selection();
+                    if broadcast_selection != selection {
+                        broadcast_selection = selection;
+                        report(Notice::BroadcastPreference(broadcast_selection.clone()));
+                    }
+                }
             }
         }
         match actions.recv_timeout(Duration::from_millis(50)) {
@@ -637,12 +648,13 @@ fn manager(
                 operation(result);
                 next_status = Instant::now();
             }
-            Ok(Action::BroadcastPeer(target)) => {
+            Ok(Action::BroadcastPeers { targets, exclude }) => {
                 let result = (|| -> Result<()> {
-                    let reply = daemon::broadcast_peer(&dir, Some(target))?;
+                    let reply = daemon::broadcast_peers(&dir, Some(targets), exclude)?;
                     ensure!(reply.ok, "{}", reply.message);
-                    broadcast_peer = serde_json::from_value(reply.data["broadcast_peer"].clone())?;
-                    report(Notice::BroadcastPreference(broadcast_peer));
+                    broadcast_selection =
+                        serde_json::from_value(reply.data["broadcast_peers"].clone())?;
+                    report(Notice::BroadcastPreference(broadcast_selection.clone()));
                     report(Notice::Engine(runtime::Update::Operation {
                         message: reply.message,
                         error: false,

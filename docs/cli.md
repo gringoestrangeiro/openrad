@@ -62,7 +62,7 @@ quotes. Administration commands use a member RID, not an IP address.
 | `retry-interface` | Retry TAP setup after resolving interface/permission problems. |
 | `ping PEER_RID` | Measure RTT through an authenticated peer channel. |
 | `rename NAME` | Save the device name while preserving its identity. |
-| `broadcast-peer [TARGET] [--all]` | Query or select the sole outgoing broadcast recipient, or restore all recipients. |
+| `broadcast-peer [TARGET ...] [--exclude] [--all]` | Include selected outgoing broadcast recipients, exclude them, or restore all recipients. |
 | `force-relay true\|false` | Save or clear relay-only transport policy. |
 
 Aliases: `provision` for `init`, `public-networks` for `search`,
@@ -133,55 +133,53 @@ The service keeps watching for presence and membership changes. One person can c
 ## Outgoing broadcast recipient
 
 ```text
-openrad broadcast-peer [TARGET]
+openrad broadcast-peer [TARGET ...] [--exclude]
 openrad broadcast-peer --all
 ```
 
-Use `broadcast-peer` to send all outgoing Ethernet broadcasts, including IPv4
-broadcasts and ARP announcements, to a single peer. Incoming broadcasts still
-arrive from every authorized peer. The setting is shared with the desktop and
-saved by RID; selecting by exact name or VPN IP requires a loaded peer roster.
-An unavailable or ineligible target causes these outgoing frames to be dropped,
-with no fallback to other peers. Unicast and multicast keep their normal routing.
-The original frame addresses and payload remain unchanged. A broadcast ARP
-request for another device is sent only to the selected peer too; its normal
-receive validation may discard it, so selecting a single recipient can prevent
-ARP resolution of other peers.
+Select several peers to receive outgoing Ethernet broadcasts, or use
+`--exclude` to send to every eligible peer except the selected ones. Each
+invocation replaces the complete selection. The desktop shares this saved
+preference under **Settings → Outgoing broadcasts**. Existing single-recipient
+preferences are retained as a one-peer inclusion list.
 
 ```sh
-openrad broadcast-peer                    # Show the current setting.
-openrad broadcast-peer 123456             # Select a RID, even while disconnected.
-openrad broadcast-peer 26.1.2.3           # Select a unique peer by VPN IP.
-openrad broadcast-peer 'Synthetic friend' # Select a unique peer by exact name.
-openrad broadcast-peer 0.0.0.0            # Restore broadcasts to all eligible peers.
-openrad broadcast-peer --all              # The same restoration.
+openrad broadcast-peer                           # Query without changing the policy.
+openrad broadcast-peer 123456 789012              # Send only to these RIDs.
+openrad broadcast-peer --exclude 123456 789012    # Send to everyone except these RIDs.
+openrad broadcast-peer --exclude 123456           # Exclude just one peer.
+openrad broadcast-peer 26.1.2.3 'Synthetic friend' # Resolve two unique roster members.
+openrad broadcast-peer --all                      # Restore normal distribution.
+openrad broadcast-peer 0.0.0.0                    # The same restoration.
 ```
 
-Changes apply to new outgoing frames without reconnecting the active VPN.
+RIDs can be saved while disconnected; names and VPN IPv4 addresses require a
+loaded peer roster. Names/IPs must uniquely identify another device. Numeric
+names are interpreted as RIDs. Duplicate RIDs are deduplicated, and any invalid
+or ambiguous target rejects the entire update without changing the saved policy.
+There is a limit of 1024 targets, each 1–256 bytes. `0` is invalid;
+`0.0.0.0` must be used alone and cannot be excluded. `--all` cannot be combined
+with targets or `--exclude`. These commands do not start the service.
 
-| Target | Behavior |
-| --- | --- |
-| No argument | Query the current setting without changing it. |
-| Nonzero RID | Save that exact identity as the recipient; the service may be stopped. A RID need not already be present in the roster, but it receives traffic only when eligible and connected. |
-| VPN IPv4 address | Resolve a unique roster member and save its RID. |
-| Exact device name | Resolve a unique roster member and save its RID. Numeric names are interpreted as RIDs; use the actual RID to avoid ambiguity. |
-| `0.0.0.0` | Clear the restriction and restore normal distribution. |
-| `--all` | Clear the restriction; cannot be combined with a target argument. |
+Changes apply without reconnecting, on the engine's next control-loop refresh.
+Already queued frames retain the destinations selected when dispatched.
+Unavailable, ineligible or unauthenticated peers receive no packets. In inclusion
+mode there is no fallback to peers outside the list; excluded RIDs stay excluded
+after reconnection. If no selected destination is usable, the frame is dropped.
+All modes preserve normal queue bounds and backpressure.
 
-`0` is not a valid recipient RID. Names and IPs with multiple matches are
-rejected; choose the RID reported by `openrad peers`. A selected name or IP is
-resolved once, so later renames/address changes do not retarget the preference.
-Querying, selecting a RID, and restoring all peers work while disconnected and
-do not start the service.
+The rule covers the Ethernet broadcast MAC `ff:ff:ff:ff:ff:ff`, valid IPv4
+broadcasts (`26.255.255.255` and `255.255.255.255`) and generated gratuitous ARP.
+Unicast, multicast and incoming broadcasts retain their existing routing. Frame
+addresses and payloads are unchanged. Inclusion mode also sends directed ARP
+requests with a broadcast MAC only to the inclusion list; exclusion mode keeps
+normal ARP destination routing while omitting excluded RIDs. Either restriction
+can prevent ARP resolution of other peers.
 
-Normal IPv4 broadcast distribution includes `26.255.255.255` and
-`255.255.255.255` when the frame reaches the VPN interface. The client sends
-separately through each eligible peer channel, using direct TCP/UDP or relay
-as appropriate. Restricting the recipient changes that local selection; it
-does not turn the packet into IP unicast or ask the server to distribute it.
-Received group frames are delivered to the local interface, not flooded to
-other peers. With the restriction cleared, recipients can span all networks
-shared with this profile; the broadcast frame does not select a named network.
+The client sends once through each selected eligible peer channel, using its
+direct TCP/UDP or relay transport. Received broadcasts go to the local interface
+and are not flooded to other peers. Recipients can span all networks shared by
+this profile; a broadcast does not choose a named network.
 
 ## Private networks
 
@@ -229,10 +227,10 @@ Service replies have `ok`, `message`, and `data` fields. For example, querying a
 saved synthetic recipient with `openrad --json broadcast-peer` returns:
 
 ```json
-{"ok":true,"message":"Outgoing broadcasts: RID 123456","data":{"broadcast_peer":123456}}
+{"ok":true,"message":"Outgoing broadcasts: RID 123456","data":{"broadcast_peer":123456,"broadcast_peers":{"mode":"include","peers":[123456]}}}
 ```
 
-`data.broadcast_peer` is `null` when normal distribution is enabled. JSON keys
+`data.broadcast_peers` reports `{"mode":"all"}`, or `{"mode":"include","peers":[...]}` / `{"mode":"exclude","peers":[...]}`. The compatibility field `data.broadcast_peer` contains a RID only for a single-peer inclusion list; otherwise it is `null`. JSON keys
 and messages retain their stable values regardless of `--language`. A
 successful invocation exits with `0`; a failure exits nonzero. Errors before a
 reply can be produced are written to stderr and may produce no JSON on stdout,

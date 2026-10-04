@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — 2026-10-04
+
+Fresh Linux and Windows builds include every change since v1.3.0. See the
+[release notes](docs/releases/1.4.0.md) and
+[file-by-file inventory](docs/releases/1.4.0-changes.md). Windows remains experimental.
+
+- Add multiple outgoing broadcast recipients and an exclusion mode in CLI and desktop, preserving existing single-peer preferences and sharing changes through the service without reconnecting. Compile destination lists on policy/channel changes so broadcast fan-out performs no per-packet RID lookups or exclusion-list scans; retain normal incoming, unicast and multicast behavior.
+
+- Add virtualized multi-peer selection, include/exclude modes and offline saved-RID removal to desktop Settings. Support multiple CLI targets and `--exclude`, with atomic validation and persistence, bounded selections and compatibility with existing single-peer settings.
+- Translate controls and errors in all four languages, update CLI/desktop/architecture/performance guides, and package a synthetic Portuguese screenshot. Validate 303 default Linux tests, formatting and Linux/Windows Clippy, Windows test compilation, and eight inspected CPU-rendered settings screenshots. Synthetic routing benchmarks retain all-peer fan-out within measured variation; live throughput and latency remain unmeasured.
+
 ## 1.3.0 — 2026-10-04
 
 Fresh Linux and Windows builds include every change since the refreshed 1.2.0

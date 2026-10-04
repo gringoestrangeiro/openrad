@@ -78,6 +78,39 @@ fn cli_saves_queries_and_restores_broadcast_policy_without_starting_a_service() 
     assert_eq!(harness.ok(&["status"])["data"]["phase"], "stopped");
 }
 
+#[test]
+fn cli_includes_and_excludes_multiple_broadcast_recipients_atomically() {
+    let harness = Harness::new();
+    let included = harness.ok(&["broadcast-peer", "789", "456", "456"]);
+    assert_eq!(
+        included["data"]["broadcast_peers"],
+        serde_json::json!({"mode":"include", "peers":[456,789]})
+    );
+    assert!(included["data"]["broadcast_peer"].is_null());
+    let excluded = harness.ok(&["broadcast-peer", "--exclude", "456", "789"]);
+    assert_eq!(
+        excluded["data"]["broadcast_peers"],
+        serde_json::json!({"mode":"exclude", "peers":[456,789]})
+    );
+    assert_eq!(harness.ok(&["broadcast-peer"])["data"], excluded["data"]);
+    for args in [
+        vec!["broadcast-peer", "--exclude"],
+        vec!["broadcast-peer", "--exclude", "456", "--all"],
+        vec!["broadcast-peer", "--exclude", "0.0.0.0"],
+        vec!["broadcast-peer", "456", "0"],
+        vec!["broadcast-peer", "456", "0.0.0.0"],
+        vec!["broadcast-peer", "456", "missing-node"],
+    ] {
+        assert!(!harness.run(&args).status.success(), "{args:?}");
+        assert_eq!(harness.ok(&["broadcast-peer"])["data"], excluded["data"]);
+    }
+    assert_eq!(
+        harness.ok(&["broadcast-peer", "--all"])["data"]["broadcast_peers"],
+        serde_json::json!({"mode":"all"})
+    );
+    assert_eq!(harness.ok(&["status"])["data"]["phase"], "stopped");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn service_inherits_the_raised_startup_descriptor_limit() {
@@ -183,6 +216,22 @@ fn gui_service_start_and_cli_start_share_one_process_in_either_order() {
         assert_eq!(dir.load_identity().unwrap().rid, 123);
         assert_eq!(dir.load_identity().unwrap().vip.to_string(), "26.0.0.5");
         assert_eq!(dir.load_identity().unwrap().node_name, "renamed-from-cli");
+        // Desktop-style service requests and CLI changes share one persisted
+        // selection, including while this disposable engine is reconnecting.
+        assert!(
+            daemon::broadcast_peers(&dir, Some(vec!["456".into(), "789".into()]), true)
+                .unwrap()
+                .ok
+        );
+        assert_eq!(
+            harness.ok(&["broadcast-peer"])["data"]["broadcast_peers"],
+            serde_json::json!({"mode":"exclude", "peers":[456,789]})
+        );
+        harness.ok(&["broadcast-peer", "456", "789"]);
+        assert_eq!(
+            daemon::request(&dir, &Request::Status).unwrap().data["preferences"]["broadcast_peers"],
+            serde_json::json!({"mode":"include", "peers":[456,789]})
+        );
         harness.ok(&["force-relay", "true"]);
         assert_eq!(
             daemon::request(&dir, &Request::Status).unwrap().data["preferences"]["force_relay"],

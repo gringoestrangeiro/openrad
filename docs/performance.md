@@ -395,6 +395,40 @@ throughput or latency. The worker split moves that work off the orchestration
 thread; live Linux and Windows performance still needs measurement.
 
 
+### Broadcast inclusion and exclusion
+
+Multiple-recipient inclusion and exclusion policies compile their destination
+indexes only when the selection, membership or authenticated channels change.
+The packet path visits only actual recipients, uses no policy lock or RID/set
+lookup, and queues group traffic without repeating per-peer route checks. Directed
+ARP in exclusion mode retains an IP index. The frame allocation remains shared,
+and the FIFO dispatcher, bounded queues and cancellation flags are preserved.
+
+The following local comparison used the source before this change and the updated
+source, both compiled in release mode with Rust 1.98.1 on Linux x86-64. Nine
+alternating runs of each binary used the same CPU affinity; each run reports the
+median of nine inner samples. Frames are synthetic 1,514-byte ARP records, and
+peer queues are drained after each frame.
+
+| Routing/queue work | Before | Updated |
+| --- | --- | --- |
+| 5,000 broadcasts, all 120 peers | 18.59 ms | 18.69 ms |
+| 50,000 directed frames, roster of 120 peers | 5.16 ms | 5.45 ms |
+
+| Updated broadcast selection, 5,000 frames | Effective recipients | Time |
+| --- | --- | --- |
+| Include one peer | 1 | 0.53 ms |
+| Include 60 peers | 60 | 9.44 ms |
+| Exclude one peer | 119 | 18.84 ms |
+| Exclude 60 peers | 60 | 9.46 ms |
+
+These timings measure routing and queue draining, excluding dispatcher handoff,
+policy/table updates, encryption, TAP and network I/O. They are not measurements
+of end-to-end VPN throughput or latency. Broadcast costs remain close to the
+previous path and scale with effective recipients; live platform measurements
+remain necessary to quantify application throughput and latency. Reproduce the
+updated cases with the forwarding microbenchmark command above.
+
 ### Release 1.2.0 validation
 
 The Linux default workspace suite passes 293 tests, with eight opt-in tests

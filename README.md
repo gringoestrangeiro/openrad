@@ -17,7 +17,7 @@ development has not started.
 - Network favorites and saved public/private network selections with paced batch joins.
 - Peer connections over direct TCP, reliable UDP, or relay transport.
 - Authenticated peer RTT tests, optional relay-only mode, and editable device names.
-- Saved outgoing broadcast recipient selection shared between desktop and CLI.
+- Saved outgoing broadcast inclusion/exclusion lists shared between desktop and CLI.
 - Linux TAP and Windows TAP-Windows6 virtual Ethernet interfaces.
 - English, Portuguese, Russian, and Vietnamese interfaces.
 - OS-backed credential storage for desktop identities.
@@ -43,15 +43,14 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **1.3.0** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **1.4.0** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, build metadata, dependency notices, and checksums.
-Initial peer setup now uses more parallel direct attempts and prepares relay
-pairing during the existing direct preference window, retaining direct deadlines.
-The Windows installer includes the Radmin preparation and recovery fixes from
-the [1.2.0 refresh](docs/releases/1.2.0-windows-refresh.md).
-Read the [1.3.0 release notes](docs/releases/1.3.0.md) for upgrade behavior,
+Select several outgoing broadcast recipients, or exclude selected peers, through
+the CLI or desktop. Saved selections apply without reconnecting; destination
+lists are compiled when policy or channels change to keep broadcast fan-out fast.
+Read the [1.4.0 release notes](docs/releases/1.4.0.md) for upgrade behavior,
 validation, and platform limitations, and the
-[complete change inventory](docs/releases/1.3.0-changes.md) for every changed file.
+[complete change inventory](docs/releases/1.4.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
@@ -111,14 +110,15 @@ and save a named configuration to reuse the selection. Enter private passwords
 again when loading a list; configurations never store them. Batch joining starts
 only when you choose **Join selected networks**.
 
-Version 1.2.0 adds **Settings → Outgoing broadcasts** and
-`openrad broadcast-peer [RID|NAME|VPN_IP]`. Choose one outgoing recipient or
-restore all eligible peers with `openrad broadcast-peer --all`. The preference
-is saved immediately and applies without reconnecting. Incoming broadcasts
-continue arriving from all authorized peers. See the [CLI guide](docs/cli.md#outgoing-broadcast-recipient)
-for eligibility and routing details.
+Use **Settings → Outgoing broadcasts** to select several peers and send only
+to them, or exclude them from normal distribution. The CLI supports
+`openrad broadcast-peer RID [RID ...]` and `openrad broadcast-peer --exclude RID [RID ...]`.
+Restore every eligible recipient with `openrad broadcast-peer --all`. The saved
+selection applies without reconnecting; incoming broadcasts retain their current
+behavior. See the [CLI guide](docs/cli.md#outgoing-broadcast-recipient) for routing
+and eligibility details.
 
-![Outgoing broadcast settings in Portuguese](docs/screenshots/1.2.0-broadcast-settings-pt.png)
+![Broadcast inclusion and exclusion in Portuguese](docs/screenshots/broadcast-multiple-peers-pt.png)
 
 ## Build from source
 
@@ -165,8 +165,8 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [1.2.0 release](docs/releases/1.2.0.md) | Packages, upgrading, verification, and limitations |
-| [1.2.0 change inventory](docs/releases/1.2.0-changes.md) | File-by-file account of all changes since v1.1.0 |
+| [1.4.0 release](docs/releases/1.4.0.md) | Packages, upgrading, verification, and limitations |
+| [1.4.0 change inventory](docs/releases/1.4.0-changes.md) | File-by-file account of all changes since v1.3.0 |
 
 ## Development
 

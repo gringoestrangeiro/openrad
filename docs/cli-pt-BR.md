@@ -183,78 +183,56 @@ uso exclusivo de relays e reconecta sem tentativas diretas TCP/UDP.
 `force-relay false` restaura a seleção normal de transporte. Essas preferências
 também são usadas pelo desktop.
 
-## Broadcast de saída para um único peer
+## Incluir ou excluir peers do broadcast de saída
 
-Sem restrição, o OpenRad replica broadcasts para os peers elegíveis e
-autenticados. Para encaminhar todos os broadcasts que saem da máquina apenas
-a um peer, use:
+A seleção permite enviar broadcasts somente para um ou vários peers, ou enviar
+para todos os peers elegíveis **exceto** os escolhidos. Cada comando substitui a
+seleção inteira. CLI e desktop compartilham a mesma preferência salva pelo RID;
+a configuração antiga de um único peer é mantida como lista de inclusão.
 
-```text
-openrad broadcast-peer [DESTINO]
-openrad broadcast-peer --all
+```sh
+openrad broadcast-peer                           # Consultar a seleção.
+openrad broadcast-peer 123456 789012              # Enviar somente a estes peers.
+openrad broadcast-peer --exclude 123456           # Excluir um peer do envio.
+openrad broadcast-peer --exclude 123456 789012    # Excluir vários peers.
+openrad broadcast-peer 26.1.2.3 'Nome do peer'     # Selecionar por IP/nome exato.
+openrad broadcast-peer --all                      # Voltar a enviar a todos.
+openrad broadcast-peer 0.0.0.0                    # A mesma restauração.
 ```
 
-| Uso | Efeito |
-| --- | --- |
-| `openrad broadcast-peer` | Consulta a configuração sem alterá-la. |
-| `openrad broadcast-peer 123456` | Salva o RID indicado como único destino. |
-| `openrad broadcast-peer 26.1.2.3` | Localiza um peer pelo IP da VPN e salva seu RID. |
-| `openrad broadcast-peer 'Nome do peer'` | Localiza um peer pelo nome exato e salva seu RID. |
-| `openrad broadcast-peer 0.0.0.0` | Remove a restrição e volta a distribuir aos peers elegíveis. |
-| `openrad broadcast-peer --all` | Faz a mesma reversão. |
+RIDs funcionam com o serviço parado e não iniciam uma conexão. Nomes e IPs
+precisam da lista de peers carregada e devem identificar um único dispositivo.
+Nomes numéricos são interpretados como RIDs. Duplicatas são removidas; se qualquer
+destino for inválido ou ambíguo, a alteração inteira é rejeitada e a seleção
+anterior permanece salva. São permitidos até 1024 destinos, de 1 a 256 bytes cada.
+O RID `0` é inválido. Use `0.0.0.0` sozinho e sem `--exclude`; `--all` não pode
+ser combinado com destinos nem com `--exclude`.
 
-O valor `0.0.0.0` serve somente para limpar a configuração. O RID `0` é
-inválido, e `--all` não pode ser combinado com um destino.
+A configuração é aplicada sem reconectar, na próxima atualização do laço de
+controle do serviço. Quadros que já estavam na fila mantêm a seleção anterior.
+Peers offline, não autenticados ou não autorizados não recebem tráfego. A inclusão
+não envia a peers fora da lista como alternativa. A exclusão continua valendo
+quando o peer reconecta. Sem destinos utilizáveis, o quadro é descartado; as
+filas continuam limitadas e sem bloquear a interface.
 
-A seleção por nome ou IP precisa da lista de peers carregada pelo serviço.
-Se houver mais de um resultado, o comando falha; use o RID mostrado por
-`peers`. Nomes compostos apenas por números são interpretados como RIDs.
-A seleção por RID, a consulta e a reversão funcionam com o serviço parado e
-não iniciam uma conexão.
+A regra cobre o MAC Ethernet de broadcast `ff:ff:ff:ff:ff:ff`, broadcasts IPv4
+válidos e anúncios ARP gratuitos. Unicast, multicast e broadcasts recebidos
+mantêm o comportamento atual. IPs, MACs e conteúdo dos quadros permanecem iguais.
+A inclusão também direciona pedidos ARP com MAC de broadcast somente aos peers
+selecionados. A exclusão preserva o destino normal do pedido ARP e remove os
+RIDs excluídos. Essas restrições podem impedir a resolução ARP de outros peers.
 
-A preferência é salva pelo RID e compartilhada com o desktop. Se você
-selecionar por nome ou IP, a resolução ocorre naquele momento: renomear o
-peer ou mudar seu IP depois não transfere a configuração para outro peer.
-Salvar um RID ainda desconhecido é permitido, mas ele só recebe tráfego
-quando estiver autorizado e com uma conexão estabelecida.
+Cada destinatário recebe pelo seu canal TCP direto, UDP direto ou relay. O cliente
+não pede ao servidor que distribua um pacote para toda a rede. Broadcasts recebidos
+vão para a interface local, sem retransmissão aos outros peers. A lista pode incluir
+peers de todas as redes autorizadas compartilhadas pelo perfil.
 
-O efeito sobre os pacotes é o seguinte:
-
-- Somente os broadcasts **de saída** são restringidos. O recebimento continua
-  aceitando broadcasts de todos os peers autorizados.
-- A regra inclui quadros Ethernet com MAC de destino
-  `ff:ff:ff:ff:ff:ff`, broadcasts IPv4 válidos e os anúncios ARP gratuitos
-  gerados pelo OpenRad.
-- Os IPs, MACs e o conteúdo do quadro enviado permanecem iguais. Um pacote
-  para `26.255.255.255` continua com esse destino quando chega ao peer.
-- Se o peer escolhido estiver offline, sem autenticação, fora das redes
-  autorizadas ou bloqueado pela política de tráfego, o broadcast é
-  descartado. Ele não é distribuído aos demais nem guardado para entrega
-  futura. Filas ou janelas de transporte cheias também podem descartar frames.
-- Unicast e multicast continuam seguindo suas regras normais.
-- A alteração vale para novos quadros de saída, sem reconectar a VPN. Ela não
-  retira quadros que já foram colocados em filas antes da mudança.
-
-Isso também direciona os pedidos ARP em broadcast, inclusive pedidos pelo
-endereço de outro dispositivo, ao peer escolhido. A validação normal no
-recebimento pode descartar esses pedidos. Portanto, restringir o destino pode
-impedir a resolução ARP dos outros peers.
-
-O broadcast é distribuído pelo cliente local, com um envio por conexão. Cada
-envio usa TCP direto, UDP direto ou relay, conforme o canal daquele peer. O
-relay encaminha a transmissão da conexão correspondente; o cliente não
-manda um único pacote ao servidor para pedir que ele distribua à rede toda.
-Um broadcast recebido vai para a interface local e não é retransmitido
-automaticamente aos outros peers.
-
-Com a restrição removida, os destinatários podem abranger todas as redes
-compartilhadas pelo perfil. O quadro de broadcast não indica uma rede privada
-específica.
-
-No desktop, a mesma configuração está em **Configurações → Broadcasts de
-saída**, com os botões **Aplicar destino de broadcast** e **Enviar a todos os
-pares**. Esses controles salvam imediatamente; salvar ou descartar outras
-preferências não sobrescreve o destino de broadcast.
+No desktop, abra **Configurações → Broadcasts de saída**, marque vários peers e
+escolha **Enviar somente aos peers selecionados** ou **Excluir os peers selecionados**.
+Também é possível informar RIDs, nomes exatos ou IPs, um por linha. Use
+**Aplicar seleção de broadcast** para salvar ou **Enviar a todos os pares** para
+restaurar a distribuição normal. Salvar outras preferências não sobrescreve a
+seleção de broadcast.
 
 ## Redes privadas e senhas
 
@@ -339,7 +317,7 @@ Os argumentos em maiúsculas são marcadores para os valores que você fornece.
 | `retry-interface` | Repetir a configuração da interface. |
 | `ping RID` | Medir RTT pelo canal autenticado de um peer. |
 | `rename NOME` | Mudar o nome do dispositivo preservando a identidade. |
-| `broadcast-peer [DESTINO] [--all]` | Consultar, restringir ou restaurar os broadcasts de saída. |
+| `broadcast-peer [DESTINO ...] [--exclude] [--all]` | Consultar, incluir ou excluir peers do broadcast de saída. |
 | `force-relay true\|false` | Ativar ou desativar o uso exclusivo de relay. |
 
 Aliases disponíveis: `provision` para `init`, `public-networks` para `search`,
@@ -359,10 +337,10 @@ A resposta tem os campos `ok`, `message` e `data`. Exemplo ilustrativo de
 consulta de um destino salvo:
 
 ```json
-{"ok":true,"message":"Outgoing broadcasts: RID 123456","data":{"broadcast_peer":123456}}
+{"ok":true,"message":"Outgoing broadcasts: RID 123456","data":{"broadcast_peer":123456,"broadcast_peers":{"mode":"include","peers":[123456]}}}
 ```
 
-Com a distribuição normal habilitada, `data.broadcast_peer` é `null`.
+`data.broadcast_peers` informa `{"mode":"all"}` ou `{"mode":"include","peers":[...]}` / `{"mode":"exclude","peers":[...]}`. O campo de compatibilidade `data.broadcast_peer` contém um RID somente na inclusão de um único peer; nos demais casos, é `null`.
 As chaves e mensagens do JSON permanecem estáveis independentemente do idioma
 selecionado. Uma execução bem-sucedida retorna `0`; uma falha retorna um código
 não zero. Erros anteriores à obtenção de uma resposta podem aparecer somente

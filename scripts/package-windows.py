@@ -48,7 +48,7 @@ def root_release_document(text, version):
 
 def copy_release_history(destination):
     """Include the historical guides linked by the changelog and platform guides."""
-    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md']:
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md', '1.3.0.md', '1.3.0-changes.md']:
         target = destination / 'docs/releases' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')
@@ -163,6 +163,7 @@ def main():
             (f"docs/releases/{version}-changes.md", f"docs/releases/{version}-changes.md"),
             ('docs/screenshots/1.1.0-tap-authorization.png', 'docs/screenshots/1.1.0-tap-authorization.png'),
             ('docs/screenshots/1.2.0-broadcast-settings-pt.png', 'docs/screenshots/1.2.0-broadcast-settings-pt.png'),
+            ('docs/screenshots/broadcast-multiple-peers-pt.png', 'docs/screenshots/broadcast-multiple-peers-pt.png'),
             ("docs/screenshots/1.0.0-networks.png", "docs/screenshots/1.0.0-networks.png"),
             ("docs/screenshots/1.0.0-discover.png", "docs/screenshots/1.0.0-discover.png"),
             ("docs/screenshots/1.0.0-auto-join.png", "docs/screenshots/1.0.0-auto-join.png"),
