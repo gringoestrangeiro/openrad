@@ -27,6 +27,13 @@ int wmain(int argc, wchar_t **argv) {
         if (separator) *separator = 0;
         return counter(executable, L"desktop-count.txt");
     }
+    for (int i = 1; i < argc; ++i) {
+        if (!wcscmp(argv[i], L"prepare-radmin")) {
+            int result = counter(L"C:", L"radmin-prepare-count.txt");
+            if (result) return result;
+            return GetFileAttributesW(L"C:\\radmin-prepare-denied.txt") == INVALID_FILE_ATTRIBUTES ? 0 : 1;
+        }
+    }
     const wchar_t *directory = NULL;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!wcscmp(argv[i], L"--install-dir")) directory = argv[i + 1];
@@ -39,6 +46,7 @@ int wmain(int argc, wchar_t **argv) {
             return GetFileAttributesW(marker) == INVALID_FILE_ATTRIBUTES ? 10 : 0;
         }
         if (!wcscmp(argv[i], L"configure")) {
+            if (GetFileAttributesW(L"C:\\radmin-prepare-count.txt") == INVALID_FILE_ATTRIBUTES) return 1;
             return counter(directory, L"configured-count.txt");
         }
         if (!wcscmp(argv[i], L"remove-adapter")) return 0;

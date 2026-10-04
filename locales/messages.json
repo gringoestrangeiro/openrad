@@ -3948,5 +3948,25 @@
     "O processo de configuração TAP falhou",
     "Сбой рабочего потока настройки TAP",
     "Luồng thiết lập TAP thất bại"
+  ],
+  "Cannot stop RvControlSvc.exe/RvRvpnGui.exe or disable the official Radmin VPN adapter using administrator/SYSTEM recovery: {0}": [
+    "Não foi possível encerrar RvControlSvc.exe/RvRvpnGui.exe ou desativar o adaptador oficial do Radmin com a recuperação de administrador/SYSTEM: {0}",
+    "Не удалось завершить RvControlSvc.exe/RvRvpnGui.exe или отключить официальный адаптер Radmin с правами администратора/SYSTEM: {0}",
+    "Không thể dừng RvControlSvc.exe/RvRvpnGui.exe hoặc vô hiệu hóa bộ điều hợp Radmin chính thức bằng quyền quản trị viên/SYSTEM: {0}"
+  ],
+  "An existing 26.0.0.0/8 address conflicts with OpenRad; disconnect other VPNs and clear stale OpenRad addresses (docs/windows.md): interface {0} ({1}, {2}), address {3}; {hint}": [
+    "Um endereço existente em 26.0.0.0/8 conflita com o OpenRad; desconecte outras VPNs e remova endereços antigos do OpenRad (docs/windows.md): interface {0} ({1}, {2}), endereço {3}; {hint}",
+    "Существующий адрес в 26.0.0.0/8 конфликтует с OpenRad; отключите другие VPN и удалите старые адреса OpenRad (docs/windows.md): интерфейс {0} ({1}, {2}), адрес {3}; {hint}",
+    "Địa chỉ hiện có trong 26.0.0.0/8 xung đột với OpenRad; ngắt các VPN khác và xóa địa chỉ OpenRad cũ (docs/windows.md): giao diện {0} ({1}, {2}), địa chỉ {3}; {hint}"
+  ],
+  "another adapter": [
+    "outro adaptador",
+    "другой адаптер",
+    "bộ điều hợp khác"
+  ],
+  "OpenRad TAP": [
+    "TAP do OpenRad",
+    "TAP OpenRad",
+    "TAP OpenRad"
   ]
 }

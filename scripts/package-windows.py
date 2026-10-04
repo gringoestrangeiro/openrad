@@ -36,6 +36,7 @@ def root_release_document(text, version):
     """Keep links usable when release notes are also copied to the ZIP root."""
     return (text.replace('](../../CHANGELOG.md', '](CHANGELOG.md')
             .replace(f']({version}-changes.md)', f'](docs/releases/{version}-changes.md)')
+            .replace(f']({version}-windows-refresh.md)', f'](docs/releases/{version}-windows-refresh.md)')
             .replace('](../screenshots/', '](docs/screenshots/')
             .replace('](../linux.md', '](docs/linux.md')
             .replace('](../windows.md', '](docs/windows.md')
@@ -47,7 +48,7 @@ def root_release_document(text, version):
 
 def copy_release_history(destination):
     """Include the historical guides linked by the changelog and platform guides."""
-    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md']:
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0-windows-refresh.md']:
         target = destination / 'docs/releases' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')
@@ -198,6 +199,8 @@ def main():
             encoding="utf-8",
         )
         license_notices(metadata, output)
+        sysroot = Path(command("rustc", "--print", "sysroot"))
+        shutil.copy2(sysroot / "share/doc/rust/COPYRIGHT-library.html", output / "licenses/Rust-Standard-Library.html")
         (output / "DLL-IMPORTS.json").write_text(json.dumps({
             "target": TARGET, "audit": "Static PE imports and supplied non-system DLLs, recursively inspected on Linux",
             "windows_system_dlls_are_not_bundled": True,
@@ -206,9 +209,12 @@ def main():
         (output / "BUILD-INFO.json").write_text(json.dumps({
             "version": version, "target": TARGET, "build_date": args.build_date,
             "git_base_commit": command("git", "rev-parse", "HEAD"),
+            "source_commit": command("git", "rev-parse", "HEAD"),
             "worktree_dirty": bool(command("git", "status", "--porcelain")),
             "rustc": command("rustc", "--version"),
             "windows_runtime_tested": False,
+            "windows_support": "experimental",
+            "radmin_recovery": "Administrator worker, SYSTEM fallback and final administrator retry; forced service/GUI termination and verified adapter-disable fallbacks",
         }, indent=2) + "\n", encoding="utf-8")
         files = sorted(p for p in output.rglob("*") if p.is_file())
         (output / "SHA256SUMS.txt").write_text("".join(f"{digest(p)}  {p.relative_to(output).as_posix()}\n" for p in files), encoding="utf-8")

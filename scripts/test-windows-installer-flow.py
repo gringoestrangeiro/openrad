@@ -65,6 +65,9 @@ def main():
             arguments.append('/D=C:\\' + directory)
         command(arguments, environment, timeout=30)
         installed = test / 'wine-prefix/drive_c' / directory
+        preparations = int((test / 'wine-prefix/drive_c/radmin-prepare-count.txt').read_text())
+        if preparations != len(checks) + 1:
+            raise AssertionError(f'{label}: Radmin preparation did not run before setup/launch')
 
         def count(name):
             path = installed / name
@@ -78,7 +81,7 @@ def main():
             raise AssertionError(f'{label}: configure/desktop calls {actual}, '
                                  f'expected {(configured, desktop)}')
         checks.append({'case': label, 'configure_count': configured,
-                       'desktop_count': desktop, 'result': 'passed'})
+                       'desktop_count': desktop, 'radmin_preparations': preparations, 'result': 'passed'})
 
     run(['--no-launch'], 'Program Files/OpenRad', 1, 0,
         'first install uses Program Files without a directory override', custom=False)
@@ -90,6 +93,12 @@ def main():
     run([], 'OpenRadFresh', 1, 2, 'repeat uses recorded install location', custom=False)
     (test / 'wine-prefix/drive_c/OpenRadFresh/Uninstall-OpenRad.exe').unlink()
     run(['--no-launch'], 'OpenRadFresh', 2, 2, 'missing uninstaller repairs registration', custom=False)
+    denied = test / 'wine-prefix/drive_c/radmin-prepare-denied.txt'
+    denied.write_text('synthetic denial')
+    blocked = subprocess.run([args.wine, str(setup), '/S', '--no-launch', '/D=C:\\OpenRadBlocked'], env=environment, timeout=30, capture_output=True, text=True)
+    if blocked.returncode != 1 or (test / 'wine-prefix/drive_c/OpenRadBlocked').exists():
+        raise AssertionError('Failed Radmin preparation copied files or configured/launched OpenRad')
+    checks.append({'case': 'failed Radmin preparation blocks installation before files or TAP setup', 'result': 'passed'})
     print(json.dumps({'environment': command([args.wine, '--version'], environment) + ' on Linux',
                       'fixture_directory': str(test), 'silent_control_flow_only': True,
                       'real_openrad_executed': False,

@@ -2,13 +2,13 @@
 use crate::windows_io;
 use std::{
     ffi::OsString,
-    io,
+    io::{self, Write},
     os::windows::{
         ffi::{OsStrExt, OsStringExt},
         io::AsRawHandle,
     },
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output, Stdio},
 };
 use windows_sys::Win32::{
     Foundation::LocalFree,
@@ -71,6 +71,31 @@ pub(crate) fn powershell_command(script: &str) -> io::Result<Command> {
         ])
         .arg(encoded);
     Ok(command)
+}
+
+/// Feed a larger immutable program through a private anonymous pipe. Encoding
+/// the whole recovery program would exceed CreateProcess's command-line limit.
+/// The fixed bootstrap still uses the protected executable/modules/working dir.
+pub(crate) fn powershell_output(script: &str) -> io::Result<Output> {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    let mut child = powershell_command(
+        "[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))",
+    )?
+    .creation_flags(CREATE_NO_WINDOW)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
+    let mut input = child.stdin.take().expect("piped PowerShell stdin");
+    if let Err(error) = input.write_all(script.as_bytes()) {
+        drop(input);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    drop(input);
+    child.wait_with_output()
 }
 
 struct LocalAllocation(*mut std::ffi::c_void);
@@ -235,6 +260,21 @@ pub fn private_directory(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use base64::Engine;
+
+    #[test]
+    fn large_immutable_powershell_program_accepts_utf8_stdin() {
+        // Requires only Windows' built-in PowerShell; no elevation or networking.
+        let text = "não, ошибка, lỗi";
+        let script = format!(
+            "# {}\n$text = '{text}'; if ($text.Length -ne {}) {{ exit 2 }}; [Console]::Write('stdin-ok')",
+            "synthetic padding ".repeat(2000),
+            text.encode_utf16().count(),
+        );
+        assert!(script.len() > 32767);
+        let output = powershell_output(&script).unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(output.stdout, b"stdin-ok");
+    }
 
     #[test]
     fn elevated_powershell_uses_system_paths_and_resets_modules_before_the_script() {

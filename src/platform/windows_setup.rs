@@ -453,12 +453,20 @@ pub fn check(directory: &Path, manifest_path: &Path) -> Result<i32> {
         10
     })
 }
+pub fn prepare_radmin() -> Result<i32> {
+    crate::windows_radmin::prepare_installation()?;
+    Ok(0)
+}
+
 pub fn configure(directory: &Path) -> Result<i32> {
     let manifest = Manifest::read(&directory.join("INSTALL-MANIFEST.json"))?;
     ensure!(
         manifest.matches(directory)?,
         "An installed file failed its integrity check. Run setup again"
     );
+    // Also cover direct worker invocation and a Radmin restart while the
+    // installer was copying files. Never create/repair TAP before this succeeds.
+    prepare_radmin()?;
     let adapters = inventory()?;
     let previous = state(directory)?;
     let selected = setup::select_adapter(&adapters, previous.as_ref())?;

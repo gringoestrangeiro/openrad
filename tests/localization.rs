@@ -129,9 +129,10 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         " · Retry",
         "Famatech Radmin VPN Ethernet Adapter",
         "WindowsPowerShell/v1.0/powershell.exe",
-        "{0}\nInvoke-OpenRadRadminRecovery -InterfaceIndex @({indices})",
-        "Official Radmin VPN conflict; starting temporary SYSTEM recovery",
-        "Official Radmin VPN SYSTEM recovery finished; retrying interface address check",
+        "{0}\nInvoke-OpenRadRadminRecovery {arguments}",
+        "-InterfaceIndex @({0})",
+        "Preparing official Radmin VPN: administrator recovery with SYSTEM fallback",
+        "Official Radmin VPN processes stopped and adapters disabled",
         // These are persisted diagnostics, which deliberately stay in English.
         "Identity reset requested; pending_save={0}",
         "Identity reset saving replacement; elapsed_ms={0}",

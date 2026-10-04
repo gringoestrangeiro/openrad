@@ -13,6 +13,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Close official Radmin VPN before any adapter setup or repeat-run launch.
+    PrepareRadmin,
     Check {
         #[arg(long)]
         install_dir: PathBuf,
@@ -49,6 +51,7 @@ fn main() {
 #[cfg(windows)]
 fn execute(command: Command) -> anyhow::Result<i32> {
     match command {
+        Command::PrepareRadmin => openrad::windows_setup::prepare_radmin(),
         Command::Check {
             install_dir,
             manifest,

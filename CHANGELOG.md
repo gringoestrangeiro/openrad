@@ -12,9 +12,17 @@ Fresh Linux and Windows builds include every change since v1.1.0. See the
 - Reduce repeated frontend work with linear catalog-page deduplication and a joined-network name index. Free superseded snapshots after releasing the notice-queue lock while preserving phase and operation barriers. Avoid repeated atomic exchanges for already-pending wake notifications.
 
 - Fix Windows TAP error 995 after asynchronous setup: issue the first overlapped read on the persistent engine thread after the setup worker exits, and retain buffer ownership through cancellation/completion. Add a headless named-pipe handoff/read/rearm regression.
-- Continue official Radmin adapter recovery when its service refuses to stop or its process cannot be terminated. Never kill a service whose stop request failed; confirm that the selected adapter remains administratively disabled before connecting. Return bounded worker failure details over an ACL-protected temporary named pipe and suppress raw PowerShell CLIXML progress in the connection error.
+- Recover official Radmin adapter conflicts with readable, bounded failure details over a protected temporary named pipe. The Windows asset refresh below strengthens termination and adds installation preflight and fallback methods.
 - Translate broadcast controls and service errors in English, Portuguese, Russian and Vietnamese. Expand the CLI reference and add a complete Brazilian Portuguese guide, synthetic settings screenshot, architecture/performance notes and release inventory. Package the new guides and screenshot for both platforms.
 - Validate with 293 default Linux tests, five CPU-rendering tests and inspected synthetic screenshots, formatting and Clippy for both targets, Windows test compilation, 38 synthetic PowerShell cases, eight isolated installer-flow cases and twelve selected Windows Rust tests under Wine. Publish fresh Debian 12/Rust 1.95 Linux and Rust 1.98/MinGW Windows builds with dependency notices, driver source, build/import metadata and SHA-256 checksums; native Windows TAP/UAC and real Radmin interoperability remain unverified.
+
+### Windows asset refresh — 2026-10-04
+
+- Prepare Radmin before the installer creates/repairs TAP or opens an already-ready installation, and recheck in direct configure calls. Abort before installation changes when preparation fails.
+- Force-terminate `RvRvpnGui.exe` and `RvControlSvc.exe` even after a refused service stop. Try administrator, SYSTEM and final administrator contexts, with bounded children, CIM/sc service-stop requests and an exact-image taskkill fallback.
+- Add verified GUID-bound NetAdapter, CIM, netsh, PnP and PnPUtil disable paths; check stable process/adapter state and retry immediate restarts. Recognize numbered official driver descriptions and identify the exact interface/address in remaining conflicts.
+- Pass the larger embedded PowerShell program through private stdin to avoid Windows' command-line limit; retain protected tool/module lookup, encoded SYSTEM workers, bounded diagnostics and task/pipe cleanup.
+- Refresh only the Windows release assets and checksum file, retaining the original Linux archive and `v1.2.0` tag. Record the post-tag Windows source commit in package metadata and the [refresh guide](docs/releases/1.2.0-windows-refresh.md). Validate 295 default Linux tests, 53 synthetic PowerShell cases and nine isolated installer-flow cases; native Windows Radmin/TAP/UAC validation remains outstanding.
 
 ## 1.1.0 — 2026-10-02
 

@@ -3,7 +3,17 @@ use anyhow::{bail, ensure, Result};
 use std::net::Ipv4Addr;
 
 const DESCRIPTION: &str = "Famatech Radmin VPN Ethernet Adapter";
+#[cfg(test)]
 const CONFLICT: &str = "An existing 26.0.0.0/8 address conflicts with OpenRad; disconnect other VPNs and clear stale OpenRad addresses (docs/windows.md)";
+
+fn official_description(description: &str) -> bool {
+    description.eq_ignore_ascii_case(DESCRIPTION)
+        || description.rsplit_once(" #").is_some_and(|(base, suffix)| {
+            base.eq_ignore_ascii_case(DESCRIPTION)
+                && !suffix.is_empty()
+                && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 pub(crate) struct Address {
     pub interface: u64,
@@ -21,8 +31,13 @@ fn conflicting_adapters(openrad: u64, addresses: &[Address]) -> Result<Vec<u32>>
             // and exclude our own TAP, even if its description were spoofed.
             ensure!(
                 address.interface != openrad
-                    && address.description.eq_ignore_ascii_case(DESCRIPTION),
-                CONFLICT
+                    && official_description(&address.description),
+                "An existing 26.0.0.0/8 address conflicts with OpenRad; disconnect other VPNs and clear stale OpenRad addresses (docs/windows.md): interface {0} ({1}, {2}), address {3}; {hint}",
+                address.index,
+                address.description,
+                address.interface,
+                address.ip,
+                hint = if address.interface == openrad { "OpenRad TAP" } else { "another adapter" }
             );
             if !targets.contains(&address.index) {
                 targets.push(address.index);
@@ -61,36 +76,49 @@ pub(crate) fn prepare_addresses(
 
 #[cfg(windows)]
 pub(crate) fn recover(indices: &[u32]) -> Result<()> {
+    invoke_recovery(Some(indices))
+}
+
+#[cfg(windows)]
+pub(crate) fn prepare_installation() -> Result<()> {
+    invoke_recovery(None)
+}
+
+#[cfg(windows)]
+fn invoke_recovery(indices: Option<&[u32]>) -> Result<()> {
     use anyhow::Context;
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     ensure!(
         crate::windows_security::token_is_elevated()?,
         "Run OpenRad as administrator to disable the conflicting official Radmin VPN adapter"
     );
-    let indices = indices
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
+    let arguments = if let Some(indices) = indices {
+        format!(
+            "-InterfaceIndex @({})",
+            indices
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    } else {
+        "-Discover".into()
+    };
     // Only decimal OS interface indices enter the immutable embedded script.
     // SYSTEM executes an encoded fixed worker, never a writable installed script
     // or the VPN application. The application keeps its usual user's identity.
     let script = format!(
-        "{}\nInvoke-OpenRadRadminRecovery -InterfaceIndex @({indices})",
+        "{}\nInvoke-OpenRadRadminRecovery {arguments}",
         include_str!("windows_radmin.ps1")
     );
     crate::early_log::event(format_args!(
-        "Official Radmin VPN conflict; starting temporary SYSTEM recovery"
+        "Preparing official Radmin VPN: administrator recovery with SYSTEM fallback"
     ));
-    let output = crate::windows_security::powershell_command(&script)?
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
+    let output = crate::windows_security::powershell_output(&script)
         .context("Cannot start SYSTEM recovery for the official Radmin VPN adapter")?;
-    ensure!(output.status.success(), "Cannot stop RvControlSvc.exe/disable the official Radmin VPN adapter with SYSTEM permissions: {}", String::from_utf8_lossy(&output.stderr).trim());
+    ensure!(output.status.success(), "Cannot stop RvControlSvc.exe/RvRvpnGui.exe or disable the official Radmin VPN adapter using administrator/SYSTEM recovery: {}", String::from_utf8_lossy(&output.stderr).trim());
     crate::early_log::event(format_args!(
-        "Official Radmin VPN SYSTEM recovery finished; retrying interface address check"
+        "Official Radmin VPN processes stopped and adapters disabled"
     ));
     Ok(())
 }
@@ -181,6 +209,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(targets, [19, 20]);
+    }
+
+    #[test]
+    fn numbered_official_driver_descriptions_recover_but_similar_names_do_not() {
+        let targets =
+            conflicting_adapters(1, &[address(19, &format!("{DESCRIPTION} #2"), "26.1.2.3")])
+                .unwrap();
+        assert_eq!(targets, [19]);
+        for description in [
+            "Famatech Radmin VPN Ethernet Adapter #",
+            "Famatech Radmin VPN Ethernet Adapter #other",
+            "Famatech Radmin VPN Ethernet Adapter fake",
+        ] {
+            assert!(conflicting_adapters(1, &[address(19, description, "26.1.2.3")]).is_err());
+        }
+    }
+
+    #[test]
+    fn conflict_error_identifies_the_exact_adapter_and_address() {
+        let error = conflicting_adapters(1, &[address(20, "Ethernet", "26.1.2.3")])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("interface 20 (Ethernet, 20), address 26.1.2.3"));
+        let error = conflicting_adapters(1, &[address(1, "TAP-Windows Adapter V9", "26.1.2.3")])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("OpenRad TAP"));
     }
 
     #[test]

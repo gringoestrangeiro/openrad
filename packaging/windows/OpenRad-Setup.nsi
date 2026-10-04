@@ -112,6 +112,21 @@ Function .onInit
     File /oname=expected-manifest.json "${PAYLOAD_DIR}/INSTALL-MANIFEST.json"
     StrCpy $Worker "$PLUGINSDIR\setup-worker.exe"
     StrCpy $ErrorFile "$PLUGINSDIR\setup-error.txt"
+    ; Run before both first-time TAP creation and the already-ready launch path.
+    DetailPrint "Closing Radmin VPN and disabling its official adapter..."
+    ClearErrors
+    ExecWait '"$Worker" --error-file "$ErrorFile" prepare-radmin' $0
+    ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "The Radmin VPN preparation worker could not start."
+        SetErrorLevel 1
+        Quit
+    ${EndIf}
+    ${If} $0 != 0
+        Call ReadWorkerError
+        MessageBox MB_OK|MB_ICONSTOP "$1"
+        SetErrorLevel 1
+        Quit
+    ${EndIf}
     ClearErrors
     ${GetOptions} $Params "--repair" $0
     ${If} ${Errors}

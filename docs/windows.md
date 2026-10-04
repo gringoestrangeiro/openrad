@@ -131,45 +131,72 @@ connection detects an enabled **Famatech Radmin VPN Ethernet Adapter** with a
 OpenRad's TAP interface. The adapter's display name may have been renamed;
 recovery identifies the official driver description and selected interface.
 
-Using the application's existing administrator elevation, OpenRad registers a
-temporary local Task Scheduler task as SYSTEM. Its embedded worker stops the
-service whose executable is `RvControlSvc.exe`, force-terminates any remaining
-`RvControlSvc.exe` processes, then disables the selected official adapter. This
-order prevents the running service from immediately reenabling the driver.
-If the service refuses to stop, or its process cannot be terminated, recovery
-still tries to disable the selected official adapter. It never force-kills a
-service whose stop request was refused, changes service startup/recovery
-settings, or disables another adapter. The worker checks the selected GUIDs and
-administrative state for up to ten seconds, requiring two seconds of continuously
-disabled state before reporting success. A disconnected but enabled adapter
-does not count as recovered.
-OpenRad waits for the worker, removes the task, and rechecks all active adapter
-addresses for up to ten seconds before continuing the same connection attempt.
-The worker has a thirty-second execution limit; scheduler completion is awaited
-for up to forty seconds. A failed recovery leaves the connection failed and
-records an error in the usual connection/startup logs. A temporary ACL-protected
-named pipe carries a bounded worker error back to the application, including
-adapter-disable failures and refused service-stop result codes. Errors appear
-as readable text rather than PowerShell CLIXML/module-initialization progress.
+The installer now closes Radmin **before creating or repairing OpenRad's TAP**.
+This preparation also runs before the repeat-install path that opens an already
+ready desktop, and again inside the configure worker to catch a restart while
+files were copied. It discovers every official adapter, including hidden,
+disconnected or addressless ones; `RvRvpnGui.exe` and `RvControlSvc.exe` are also
+terminated when no official adapter is currently visible. Failed preparation
+stops installation before copying files or changing the TAP driver/device.
 
-This recovery is offline and uses built-in Windows PowerShell and Task Scheduler.
-Microsoft documents [SYSTEM task principals](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal),
-[service stop results](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/stopservice-method-in-class-win32-service),
-and [adapter disabling](https://learn.microsoft.com/en-us/powershell/module/netadapter/disable-netadapter).
-The VPN application keeps the ordinary user's profile and credentials. There is
-no PsExec download, SYSTEM application launch, driver removal, or permanent
-change to the Radmin service's startup setting. OpenRad leaves the official
-adapter disabled when disconnecting; its service remains stopped if recovery
-could stop it. To switch back,
-disconnect/close OpenRad, enable **Radmin VPN** in Windows network settings, and
-start its service or restart Windows. Starting official Radmin while OpenRad is
-connected can recreate a routing conflict.
+The embedded worker requests service stop by exact executable path through CIM
+and `sc.exe`, then force-terminates both Radmin executable names with
+`Stop-Process` and a `taskkill /F /IM` fallback. A refused service-stop request no
+longer prevents force termination. Matching an executable only in another
+service's arguments does not select that service. Other Radmin products and
+unrelated applications are retained.
 
-Other adapters using `26.x.x.x`, and stale/static addresses on the OpenRad TAP,
-still report a conflict. The automatic recovery is limited to the official
-Famatech adapter. Disabled adapters' retained addresses are ignored. The new
-SYSTEM recovery has synthetic regression coverage and cross-build validation;
-it still needs a real Windows migration test with official Radmin installed.
+Adapter recovery tries `Disable-NetAdapter`, the CIM `Win32_NetworkAdapter.Disable`
+method, `netsh interface set interface ... admin=disabled`, `Disable-PnpDevice`
+and `pnputil /disable-device`, advancing when the previous method does not leave
+the selected adapter disabled. PnPUtil's device-disable option requires Windows
+10 version 2004 or later; earlier supported Windows versions use the other
+methods. If regular PnPUtil disabling fails, recovery also tries its `/force`
+option, supported on Windows 11 22H2 or later. Every operation revalidates the original GUID and official driver
+description, including Windows' numbered ` #2` suffix. PnP operations use only
+the instance ID obtained from the same GUID's CIM record. A missing NetAdapter
+row is accepted only when that same device reports PnP disabled code 22.
+
+Recovery first runs in a short-lived administrator child. Failure escalates to
+a temporary SYSTEM task; a failed SYSTEM attempt is followed by one final
+administrator attempt. Each child has a thirty-second limit, SYSTEM task
+completion is awaited for up to forty seconds, and native fallback commands
+have two-second limits. A private stdin pipe carries the large immutable program
+to the initial PowerShell process so it does not exceed Windows' command-line
+limit. SYSTEM still executes an encoded fixed worker; it never loads writable
+installation scripts. Task and diagnostic-pipe cleanup run on failures too.
+
+The worker checks for up to ten seconds that both Radmin processes are absent
+and all selected adapters stay administratively or PnP disabled, requiring two
+seconds of stable state. It repeats termination and adapter disabling if the
+GUI/service restarts or the adapter is reenabled during this observation.
+Connection recovery then rechecks active interface addresses before proceeding.
+A protected current-user/SYSTEM named pipe returns bounded SYSTEM failure
+details. Errors are readable text and retain failed service/adapter method
+information instead of PowerShell CLIXML.
+
+This recovery is offline and uses Windows' built-in tools. Microsoft's
+[taskkill reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill),
+[NetAdapter disabling](https://learn.microsoft.com/en-us/powershell/module/netadapter/disable-netadapter),
+[CIM device disabling](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/disable-method-in-class-win32-networkadapter),
+[PnP device disabling](https://learn.microsoft.com/en-us/powershell/module/pnpdevice/disable-pnpdevice)
+and [PnPUtil syntax](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/pnputil-command-syntax)
+document these operations. The VPN application retains the user's profile and
+credentials. Recovery leaves service startup/recovery settings and installed
+Radmin files/drivers intact. The official adapter remains disabled after
+OpenRad disconnects.
+
+To switch back, disconnect/close OpenRad, enable the official Radmin adapter in
+Windows network settings and start its service. If a PnP fallback disabled the
+device, enable it in Device Manager first. Starting official Radmin while
+OpenRad is connected can recreate a routing conflict.
+
+Unrelated adapters using `26.x.x.x`, and stale/static addresses on OpenRad's own
+TAP, remain errors. The conflict now identifies the exact interface index,
+driver description, address and whether it belongs to the OpenRad TAP.
+Disabled adapters' retained addresses are ignored. Administrator/SYSTEM recovery
+has synthetic regression and cross-build coverage; native installation with
+Radmin running still requires confirmation on Windows.
 
 TAP setup runs on a temporary worker thread. Its first overlapped read starts
 on the engine thread after handoff: Windows cancels pending I/O from a thread

@@ -45,6 +45,8 @@ Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
 Version **1.2.0** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, build metadata, dependency notices, and checksums.
+The refreshed Windows 1.2.0 installer closes official Radmin VPN before creating
+or repairing TAP; see the [Windows refresh notes](docs/releases/1.2.0-windows-refresh.md).
 Read the [1.2.0 release notes](docs/releases/1.2.0.md) for upgrade behavior,
 validation, and platform limitations, and the
 [complete change inventory](docs/releases/1.2.0-changes.md) for every changed file.

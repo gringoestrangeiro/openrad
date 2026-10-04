@@ -187,15 +187,17 @@ def main():
             'version': version, 'build_date': args.build_date, 'target': TARGET,
             'rustc': command('rustc', '--version'),
             'git_base_commit': command('git', 'rev-parse', 'HEAD'),
+            'source_commit': command('git', 'rev-parse', 'HEAD'),
             'worktree_dirty': bool(command('git', 'status', '--porcelain')),
             'windows_runtime_tested_by_builder': False,
-            'windows_runtime_feedback': 'User reports successful operation on Windows 10; other Windows versions remain unverified',
+            'windows_runtime_feedback': 'Earlier Windows 10 feedback predates the refreshed Radmin recovery; this refresh has no native Windows validation',
             'windows_support': 'experimental', 'makensis': command(args.makensis, '-VERSION'),
             'windows_minimum': 'Windows 10 version 1709, x64',
             'graphics_renderers': ['auto', 'opengl', 'wgpu (DX12 hardware)', 'software (DX12 WARP CPU)'],
             'diagnostics_build': f'release-{version}',
-            'system_mode': 'Automatic temporary SYSTEM task for official Radmin VPN conflicts; application stays in user profile. Separate opt-in PsExec SYSTEM diagnostic launcher.',
-            'radmin_conflict_recovery': 'Stop RvControlSvc.exe service/processes, disable selected Famatech adapter, recheck active addresses and continue connection',
+            'system_mode': 'Administrator worker, temporary SYSTEM fallback and final administrator retry; application stays in user profile. Separate opt-in PsExec SYSTEM diagnostic launcher.',
+            'installer_prepares_radmin_before_tap': True,
+            'radmin_conflict_recovery': 'Force-terminate RvControlSvc.exe/RvRvpnGui.exe; verify GUID-bound NetAdapter/CIM/netsh/PnP/PnPUtil disabling and stable stopped state before installation or connection',
         }, indent=2) + '\n')
         # This manifest is also embedded separately for repeat-run readiness checks.
         records = [{'path': path.relative_to(payload).as_posix(), 'sha256': digest(path)} for path in sorted(payload.rglob('*')) if path.is_file()]
