@@ -4058,5 +4058,25 @@
     "RID {rid}",
     "RID {rid}",
     "RID {rid}"
+  ],
+  "Peer IP": [
+    "Peer IP",
+    "Peer IP",
+    "Peer IP"
+  ],
+  "Show the relay IP or the direct peer IP and port under each connected peer for debugging.": [
+    "Mostra o IP do relay ou o IP e a porta do peer direto abaixo de cada peer conectado para depuração.",
+    "Показывать IP ретранслятора или IP и порт прямого соединения под каждым подключённым узлом для отладки.",
+    "Hiển thị IP máy chủ chuyển tiếp hoặc IP và cổng kết nối trực tiếp bên dưới mỗi máy ngang hàng đã kết nối để gỡ lỗi."
+  ],
+  "Relay IP: {ip}": [
+    "IP do relay: {ip}",
+    "IP ретранслятора: {ip}",
+    "IP chuyển tiếp: {ip}"
+  ],
+  "Peer IP: {endpoint}": [
+    "Peer IP: {endpoint}",
+    "IP узла: {endpoint}",
+    "IP máy ngang hàng: {endpoint}"
   ]
 }

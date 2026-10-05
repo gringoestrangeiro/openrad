@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddr},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
@@ -80,6 +80,9 @@ pub struct PeerView {
     pub status: PeerState,
     pub detail: String,
     pub transport: Option<TransportPath>,
+    /// Remote socket of the authenticated channel: the peer or its relay.
+    #[serde(default)]
+    pub endpoint: Option<SocketAddr>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Traffic {
@@ -198,7 +201,7 @@ enum Message {
     Membership(Membership),
     Update(Update),
     ControlFailed(String),
-    Connected(u64, [u8; 6], TransportPath, bool),
+    Connected(u64, [u8; 6], TransportPath, bool, Option<SocketAddr>),
     PeerRecord(IncomingRecord),
     Closed(u64, Option<String>),
     Pong(u64, u64, f64),
@@ -1126,6 +1129,7 @@ fn peer_loop(
                 channel.mac,
                 channel.transport.path.unwrap(),
                 channel.transport.incoming,
+                channel.transport.endpoint,
             ))?;
             events.wake.notify();
             forward_peer(
@@ -1352,6 +1356,7 @@ fn refresh_membership(
                     status: base_peer_state(p),
                     detail: String::new(),
                     transport: None,
+                    endpoint: None,
                 });
                 continue;
             }
@@ -1366,6 +1371,7 @@ fn refresh_membership(
             view.status = base_peer_state(p);
             view.detail.clear();
             view.transport = None;
+            view.endpoint = None;
             if let Some(w) = workers.get(&p.rid) {
                 if w.cancel() {
                     diagnostics.event("peer_cancelled", json!({
@@ -1625,7 +1631,7 @@ pub fn run(
                             });
                         }
                     }
-                    Message::Connected(rid, mac, path, is_incoming) => {
+                    Message::Connected(rid, mac, path, is_incoming, endpoint) => {
                         forwarding_changed = true;
                         if workers
                             .get(&rid)
@@ -1645,6 +1651,7 @@ pub fn run(
                         if let Some(p) = snapshot.peers.get_mut(&rid) {
                             p.status = PeerState::Connected;
                             p.transport = Some(path);
+                            p.endpoint = endpoint;
                             p.detail = format!(
                                 "Authenticated {} · {}",
                                 path.label(),
@@ -1696,6 +1703,7 @@ pub fn run(
                                 );
                             }
                             p.transport = None;
+                            p.endpoint = None;
                         }
                         if let Some(w) = worker {
                             retired.push(w.join);
@@ -3686,6 +3694,8 @@ mod membership_tests {
         );
         snapshot.peers.get_mut(&2).unwrap().status = PeerState::Connected;
         snapshot.peers.get_mut(&2).unwrap().transport = Some(TransportPath::Relay);
+        let endpoint = Some("192.0.2.10:443".parse().unwrap());
+        snapshot.peers.get_mut(&2).unwrap().endpoint = endpoint;
         members.peers.get_mut(&2).unwrap().name = "renamed".into();
         members.networks.get_mut("n").unwrap().name = "new network name".into();
         refresh_membership(
@@ -3700,6 +3710,7 @@ mod membership_tests {
         assert_eq!(snapshot.networks[0].name, "new network name");
         assert_eq!(snapshot.peers[&2].status, PeerState::Connected);
         assert_eq!(snapshot.peers[&2].transport, Some(TransportPath::Relay));
+        assert_eq!(snapshot.peers[&2].endpoint, endpoint);
         assert!(!workers[&2].stop.load(Ordering::Relaxed));
         workers.into_values().next().unwrap().join.join().unwrap();
     }
@@ -3725,6 +3736,10 @@ mod membership_tests {
                 &Diagnostics::default(),
             )
             .unwrap();
+            let view = snapshot.peers.get_mut(&2).unwrap();
+            view.status = PeerState::Connected;
+            view.transport = Some(TransportPath::DirectUdp);
+            view.endpoint = Some("192.0.2.20:12345".parse().unwrap());
             match change {
                 "vip" => members.peers.get_mut(&2).unwrap().vip = Ipv4Addr::new(26, 0, 0, 3),
                 "server" => members.peers.get_mut(&2).unwrap().server = Some("192.0.2.2".into()),
@@ -3751,6 +3766,9 @@ mod membership_tests {
             if change == "leave" {
                 assert!(snapshot.peers.is_empty());
                 assert!(snapshot.networks.is_empty());
+            }
+            if matches!(change, "vip" | "server" | "offline" | "roster_only") {
+                assert_eq!(snapshot.peers[&2].endpoint, None);
             }
             workers.into_values().next().unwrap().join.join().unwrap();
         }

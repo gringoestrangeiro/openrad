@@ -101,6 +101,7 @@ pub struct Settings {
     pub show_recent_activity: bool,
     pub recent_activity_count: usize,
     pub show_peer_details: bool,
+    pub show_peer_ip: bool,
     pub show_internal_ids: bool,
     pub show_diagnostics: bool,
     pub force_relay: bool,
@@ -129,6 +130,7 @@ impl Default for Settings {
             show_recent_activity: true,
             recent_activity_count: 12,
             show_peer_details: false,
+            show_peer_ip: false,
             show_internal_ids: false,
             show_diagnostics: false,
             force_relay: false,
@@ -535,10 +537,13 @@ mod tests {
         assert_eq!(settings.start_page, StartPage::Networks);
         assert_eq!(settings.language, LanguagePreference::System);
         assert!(settings.show_offline_peers);
+        assert!(!settings.show_peer_ip);
+        assert!(!Settings::default().show_peer_ip);
         let mut changed = settings;
         changed.start_page = StartPage::Discover;
         changed.peer_sort = PeerSort::Status;
         changed.show_diagnostics = true;
+        changed.show_peer_ip = true;
         changed.language = LanguagePreference::Vietnamese;
         let restored: Settings =
             serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();

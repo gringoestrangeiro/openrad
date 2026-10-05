@@ -1585,6 +1585,7 @@ mod tests {
                     status: runtime::PeerState::Offline,
                     detail: String::new(),
                     transport: None,
+                    endpoint: None,
                 },
             );
         }
@@ -1995,6 +1996,23 @@ mod tests {
                 network_id: "synthetic-id".into(),
             }],
             roles: BTreeMap::from([("synthetic-id".into(), BTreeMap::from([(123, 2)]))]),
+            peers: BTreeMap::from([(
+                2,
+                runtime::PeerView {
+                    peer: crate::protocol::Peer {
+                        rid: 2,
+                        name: "Synthetic peer".into(),
+                        vip: "26.0.0.2".parse().unwrap(),
+                        server: None,
+                        state: 1,
+                        network_ids: ["synthetic-id".into()].into_iter().collect(),
+                    },
+                    status: runtime::PeerState::Connected,
+                    detail: String::new(),
+                    transport: Some(crate::peer::TransportPath::DirectUdp),
+                    endpoint: Some("192.0.2.20:12345".parse().unwrap()),
+                },
+            )]),
             ..Default::default()
         };
         let expected = serde_json::to_value(&snapshot).unwrap();
@@ -2006,7 +2024,18 @@ mod tests {
         assert_eq!(reply.data["snapshot"], expected);
         assert_eq!(reply.data["rid"], 123);
         assert_eq!(reply.data["phase"], "connected");
-        assert!(serde_json::from_value::<Snapshot>(reply.data["snapshot"].clone()).is_ok());
+        let restored: Snapshot = serde_json::from_value(reply.data["snapshot"].clone()).unwrap();
+        assert_eq!(
+            restored.peers[&2].endpoint,
+            Some("192.0.2.20:12345".parse().unwrap())
+        );
+        let mut legacy = reply.data["snapshot"].clone();
+        legacy["peers"]["2"]
+            .as_object_mut()
+            .unwrap()
+            .remove("endpoint");
+        let restored: Snapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.peers[&2].endpoint, None);
         shared.update(Update::State(Snapshot::default()));
         assert_eq!(serde_json::to_value(previous.as_ref()).unwrap(), expected);
         assert!(shared.status().data["snapshot"]["networks"]

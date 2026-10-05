@@ -256,6 +256,7 @@ struct PeerRowLayout {
     language: Language,
     show_internal_ids: bool,
     show_details: bool,
+    show_peer_ip: bool,
     selected_network: bool,
 }
 enum CachedPing {
@@ -290,6 +291,7 @@ struct CachedPeerRow {
     status: PeerState,
     detail: String,
     transport: Option<openrad::peer::TransportPath>,
+    endpoint: Option<std::net::SocketAddr>,
     role: Option<u32>,
     own_role: Option<u32>,
     ping: CachedPing,
@@ -310,6 +312,7 @@ impl CachedPeerRow {
             && self.status == peer.status
             && self.detail == peer.detail
             && self.transport == peer.transport
+            && self.endpoint == peer.endpoint
             && self.role == role
             && self.own_role == own_role
             && self.separator == separator
@@ -331,6 +334,7 @@ impl CachedPeerRow {
             status: peer.status.clone(),
             detail: peer.detail.clone(),
             transport: peer.transport,
+            endpoint: peer.endpoint,
             role,
             own_role,
             ping: CachedPing::new(ping),
@@ -359,6 +363,7 @@ impl PeerRowCache {
             language,
             show_internal_ids: settings.show_internal_ids,
             show_details: settings.show_peer_details,
+            show_peer_ip: settings.show_peer_ip,
             selected_network,
         };
         if self.layout.as_ref() != Some(&layout) {
@@ -2262,6 +2267,20 @@ impl App {
                                 .color(MUTED),
                         );
                     }
+                    if self.settings.show_peer_ip && peer.status == PeerState::Connected {
+                        if let (Some(path), Some(endpoint)) = (peer.transport, peer.endpoint) {
+                            let address = if path == openrad::peer::TransportPath::Relay {
+                                language
+                                    .format("Relay IP: {ip}", &[("ip", &endpoint.ip().to_string())])
+                            } else {
+                                language.format(
+                                    "Peer IP: {endpoint}",
+                                    &[("endpoint", &endpoint.to_string())],
+                                )
+                            };
+                            ui.label(RichText::new(address).monospace().size(11.).color(MUTED));
+                        }
+                    }
                     if separator {
                         ui.separator();
                     }
@@ -2995,6 +3014,8 @@ impl App {
                     .strong(),
             );
             ui.add_space(12.);
+            ui.checkbox(&mut self.settings.show_peer_ip, language.text("Peer IP"));
+            ui.label(RichText::new(language.text("Show the relay IP or the direct peer IP and port under each connected peer for debugging.")).size(11.).color(MUTED));
             ui.checkbox(
                 &mut self.settings.show_peer_details,
                 language.text("Show peer connection details under each row"),
@@ -4706,6 +4727,7 @@ mod tests {
                 status: PeerState::Connected,
                 detail: "Authenticated Direct UDP · Incoming".into(),
                 transport: Some(openrad::peer::TransportPath::DirectUdp),
+                endpoint: None,
             },
         );
         app.has_searched = true;
@@ -4757,6 +4779,7 @@ mod tests {
             status: PeerState::Connected,
             detail: String::new(),
             transport: None,
+            endpoint: None,
         }
     }
     #[test]
@@ -4994,6 +5017,25 @@ mod tests {
         let (_, next_extent) = render(app);
         assert!((extent.y - next_extent.y).abs() < 0.1);
         let old_height = app.peer_rows.rows[&80].height;
+        let peer = app.snapshot.peers.get_mut(&80).unwrap();
+        peer.transport = Some(openrad::peer::TransportPath::DirectUdp);
+        peer.endpoint = Some("192.0.2.80:12345".parse().unwrap());
+        app.settings.show_peer_ip = true;
+        render(app);
+        assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
+        app.settings.show_peer_ip = false;
+        render(app);
+        assert!((app.peer_rows.rows[&80].height - old_height).abs() < 0.1);
+        app.snapshot.peers.get_mut(&80).unwrap().endpoint =
+            Some("[2001:db8::80]:23456".parse().unwrap());
+        assert!(!app.peer_rows.rows[&80].matches(
+            &app.snapshot.peers[&80],
+            None,
+            None,
+            None,
+            false
+        ));
+        render(app);
         app.settings.show_internal_ids = true;
         render(app);
         assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
@@ -5041,6 +5083,7 @@ mod tests {
                     status,
                     detail: String::new(),
                     transport: None,
+                    endpoint: None,
                 },
             );
         }
@@ -5123,6 +5166,104 @@ mod tests {
                     },
                 ],
             );
+        }
+    }
+    #[test]
+    fn peer_ip_toggle_saves_and_shows_only_active_transport_addresses_in_every_language() {
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            let (backend, actions) = Backend::recording_fixture();
+            app.backend = backend;
+            app.phase = Phase::Connected;
+            app.settings.language = preference;
+            app.settings.show_traffic = false;
+            app.snapshot.networks.push(Network {
+                name: "Synthetic LAN".into(),
+                network_id: "a".into(),
+            });
+            for (rid, path, endpoint) in [
+                (2, openrad::peer::TransportPath::Relay, "192.0.2.10:443"),
+                (
+                    3,
+                    openrad::peer::TransportPath::DirectUdp,
+                    "198.51.100.20:12345",
+                ),
+                (
+                    4,
+                    openrad::peer::TransportPath::DirectTcp,
+                    "[2001:db8::30]:23456",
+                ),
+            ] {
+                let mut peer = cached_peer(rid, &format!("Synthetic peer {rid}"), &["a"]);
+                peer.transport = Some(path);
+                peer.endpoint = Some(endpoint.parse().unwrap());
+                app.snapshot.peers.insert(rid, peer);
+            }
+            let mut offline = cached_peer(5, "Synthetic offline peer", &["a"]);
+            offline.status = PeerState::Offline;
+            offline.transport = Some(openrad::peer::TransportPath::DirectTcp);
+            offline.endpoint = Some("203.0.113.40:34567".parse().unwrap());
+            app.snapshot.peers.insert(5, offline);
+            app.snapshot
+                .peers
+                .insert(6, cached_peer(6, "Synthetic legacy peer", &["a"]));
+            let language = app.language();
+            let expected = [
+                language.format("Relay IP: {ip}", &[("ip", "192.0.2.10")]),
+                language.format(
+                    "Peer IP: {endpoint}",
+                    &[("endpoint", "198.51.100.20:12345")],
+                ),
+                language.format(
+                    "Peer IP: {endpoint}",
+                    &[("endpoint", "[2001:db8::30]:23456")],
+                ),
+            ];
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            tall_frame(&ctx, app, vec![]);
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            assert!(expected.iter().all(|label| !text.contains(label)));
+            app.page = Page::Settings;
+            click_control(&ctx, app, "Peer IP", egui::accesskit::Role::CheckBox);
+            assert!(app.settings.show_peer_ip);
+            click_button(&ctx, app, language.text("Save preferences"));
+            let Action::Save(saved) = actions.try_recv().unwrap() else {
+                panic!("expected saved preferences");
+            };
+            app.paths.save_settings(&saved).unwrap();
+            assert!(app.paths.settings().unwrap().show_peer_ip);
+            app.page = Page::Networks;
+            tall_frame(&ctx, app, vec![]);
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            for label in &expected {
+                assert!(text.contains(label), "{preference:?}: missing {label}");
+            }
+            assert!(!text
+                .iter()
+                .any(|label| label.contains("192.0.2.10:443") || label.contains("203.0.113.40")));
+            assert!(text.contains(&"26.0.0.3".into()));
+            app.snapshot.peers.get_mut(&3).unwrap().endpoint =
+                Some("198.51.100.21:45678".parse().unwrap());
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            assert!(!text.contains(&expected[1]));
+            assert!(text.contains(&language.format(
+                "Peer IP: {endpoint}",
+                &[("endpoint", "198.51.100.21:45678")]
+            )));
+            app.snapshot.peers.get_mut(&3).unwrap().status = PeerState::Failed;
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            assert!(!text.iter().any(|label| label.contains("198.51.100.21")));
+            app.page = Page::Settings;
+            click_button(&ctx, app, language.text("Restore defaults"));
+            assert!(!app.settings.show_peer_ip);
         }
     }
     #[test]
@@ -5356,6 +5497,7 @@ mod tests {
                     status: PeerState::Connected,
                     detail: String::new(),
                     transport: Some(openrad::peer::TransportPath::Relay),
+                    endpoint: None,
                 },
             );
             let ctx = egui::Context::default();
@@ -5435,6 +5577,7 @@ mod tests {
                 status: PeerState::Connected,
                 detail: String::new(),
                 transport: Some(openrad::peer::TransportPath::DirectUdp),
+                endpoint: None,
             },
         );
         let directory =
@@ -5497,6 +5640,7 @@ mod tests {
         for (rid, name, transport) in [
             (2, "Alex", openrad::peer::TransportPath::Relay),
             (3, "Maya", openrad::peer::TransportPath::DirectUdp),
+            (4, "Noah", openrad::peer::TransportPath::DirectTcp),
         ] {
             app.snapshot.peers.insert(
                 rid,
@@ -5512,6 +5656,15 @@ mod tests {
                     status: PeerState::Connected,
                     detail: String::new(),
                     transport: Some(transport),
+                    endpoint: Some(
+                        match transport {
+                            openrad::peer::TransportPath::Relay => "192.0.2.10:443",
+                            openrad::peer::TransportPath::DirectUdp => "198.51.100.20:12345",
+                            openrad::peer::TransportPath::DirectTcp => "[2001:db8::30]:23456",
+                        }
+                        .parse()
+                        .unwrap(),
+                    ),
                 },
             );
         }
@@ -5559,6 +5712,18 @@ mod tests {
         for (page, filename, language, width) in [
             (
                 Page::Networks,
+                "peer-ip-portuguese",
+                LanguagePreference::Portuguese,
+                1152,
+            ),
+            (
+                Page::Settings,
+                "peer-ip-settings-portuguese",
+                LanguagePreference::Portuguese,
+                1152,
+            ),
+            (
+                Page::Networks,
                 "favorites-and-alignment",
                 LanguagePreference::English,
                 1152,
@@ -5594,6 +5759,8 @@ mod tests {
                 768,
             ),
         ] {
+            app.settings.show_peer_ip = filename.starts_with("peer-ip");
+            let height = if page == Page::Settings { 2600 } else { 1000 };
             app.snapshot.interface_ready = filename != "tap-authorization-portuguese";
             app.snapshot.interface_error = (filename == "tap-authorization-portuguese").then(||
                 "TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.".into());
@@ -5608,7 +5775,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            Vec2::new(width as f32, 1000.),
+                            Vec2::new(width as f32, height as f32),
                         )),
                         ..Default::default()
                     },
@@ -5621,8 +5788,8 @@ mod tests {
             let mut output = final_output.unwrap();
             output.textures_delta = textures;
             let pixels =
-                crate::graphics::software_test::render_offscreen(&ctx, output, width, 1000);
-            let mut ppm = format!("P6\n{width} 1000\n255\n").into_bytes();
+                crate::graphics::software_test::render_offscreen(&ctx, output, width, height);
+            let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
             for pixel in pixels.as_chunks::<4>().0 {
                 ppm.extend(&pixel[..3]);
             }

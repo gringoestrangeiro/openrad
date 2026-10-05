@@ -467,6 +467,7 @@ mod interaction_tests {
                 status: PeerState::Offline,
                 detail: String::new(),
                 transport: None,
+                endpoint: None,
             },
         );
         snapshot
