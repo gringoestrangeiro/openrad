@@ -443,7 +443,12 @@ impl PeerChannel {
                     mapping = None;
                     match result {
                         Ok((socket, endpoint)) => {
-                            let cid = pending.as_ref().unwrap().0;
+                            let cid = pending
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("mapped candidates before NewConnection")
+                                })?
+                                .0;
                             coord.send(&advertise_mapped_udp(cid, endpoint)?)?;
                             mapped_socket = Some(socket);
                             mapped_received = mapped_nonce.is_some();

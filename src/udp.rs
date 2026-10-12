@@ -119,8 +119,7 @@ fn discover_mapping_at(
     duration: Duration,
 ) -> Result<SocketAddr> {
     socket.set_nonblocking(true)?;
-    let transactions: [[u8; 16]; 2] =
-        std::array::from_fn(|_| crate::crypto::random(16).try_into().unwrap());
+    let transactions: [[u8; 16]; 2] = std::array::from_fn(|_| crate::crypto::random_array());
     let mut addresses = [None; 2];
     let until = Instant::now() + duration;
     let mut next = Instant::now();
@@ -136,7 +135,7 @@ fn discover_mapping_at(
             for (index, server) in servers.iter().enumerate() {
                 if addresses[index].is_none() {
                     let request = [vec![0, 1, 0, 0], transactions[index].to_vec()].concat();
-                    socket.send_to(&request, mapped(*server))?;
+                    send_best_effort(socket.send_to(&request, mapped(*server)))?;
                 }
             }
             sends += 1;
@@ -312,7 +311,7 @@ pub(crate) fn bind_dual_stack() -> std::io::Result<UdpSocket> {
             Some(socket2::Protocol::UDP),
         )?;
         socket.set_only_v6(false)?;
-        socket.bind(&"[::]:0".parse::<SocketAddr>().unwrap().into())?;
+        socket.bind(&SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), 0).into())?;
         Ok(socket.into())
     }
     #[cfg(not(windows))]
@@ -328,7 +327,7 @@ pub(crate) fn listen_dual_stack() -> std::io::Result<std::net::TcpListener> {
             Some(socket2::Protocol::TCP),
         )?;
         socket.set_only_v6(false)?;
-        socket.bind(&"[::]:0".parse::<SocketAddr>().unwrap().into())?;
+        socket.bind(&SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), 0).into())?;
         socket.listen(8)?;
         Ok(socket.into())
     }
@@ -347,11 +346,57 @@ const RECEIVE_WINDOW: u16 = 512;
 /// kernel buffer holds the rest instead of the channel failing.
 const READY_HIGH_WATER: usize = 128;
 const RETRY_INTERVAL: Duration = Duration::from_millis(400);
+/// A datagram the kernel could not accept yet is retried soon, not after a full
+/// retransmission interval.
+const REFUSED_RETRY: Duration = Duration::from_millis(10);
+
+/// Whether the kernel refused a datagram only for lack of send-buffer space.
+/// A burst on a slow uplink fills the socket's send buffer while earlier
+/// datagrams wait in the device queue, and a nonblocking socket then reports
+/// this condition. It is congestion, not a dead peer: ENET retransmits what
+/// stays unacknowledged, so the channel must not fail.
+fn send_refused(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ENOBUFS) {
+        return true;
+    }
+    #[cfg(windows)]
+    // WSAENOBUFS
+    if error.raw_os_error() == Some(10055) {
+        return true;
+    }
+    false
+}
+/// The `last` timestamp that makes a command due again after `REFUSED_RETRY`.
+fn refused_last(now: Instant) -> Instant {
+    now.checked_sub(RETRY_INTERVAL - REFUSED_RETRY)
+        .unwrap_or(now)
+}
+#[cfg(test)]
+thread_local! {
+    /// Makes this thread's datagram sends report a full kernel send buffer.
+    static REFUSE_SENDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Send one best-effort datagram: congestion drops it, other errors surface.
+fn send_best_effort(result: std::io::Result<usize>) -> Result<()> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if send_refused(&error) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
 
 struct Pending {
     command: Vec<u8>,
     last: Instant,
     tries: u8,
+    /// When the command was first queued. A full kernel send buffer retries
+    /// soon without counting as a failed attempt, so `tries` alone cannot
+    /// bound sustained congestion; `queued` provides the wall-clock bound.
+    queued: Instant,
 }
 struct Fragment {
     total: usize,
@@ -419,7 +464,9 @@ impl Enet {
                         && valid_punch(&buffer[..n], nonce)
                         && matches!(buffer[6], b'P' | b'A') =>
                 {
-                    socket.send_to(&punch(nonce, source.port(), local_port, b'C'), source)?;
+                    send_best_effort(
+                        socket.send_to(&punch(nonce, source.port(), local_port, b'C'), source),
+                    )?;
                     break canonical(source);
                 }
                 Ok(_) => {}
@@ -490,7 +537,9 @@ impl Enet {
                         break a;
                     }
                     if buffer[6] == b'P' {
-                        socket.send_to(&punch(nonce, a.port(), local_port, b'A'), source)?;
+                        send_best_effort(
+                            socket.send_to(&punch(nonce, a.port(), local_port, b'A'), source),
+                        )?;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -524,7 +573,7 @@ impl Enet {
         Self {
             socket,
             endpoint,
-            cookie: crate::crypto::random(4).try_into().unwrap(),
+            cookie: crate::crypto::random_array(),
             remote_id: 0x7fff,
             connected: false,
             incoming_nonce: None,
@@ -552,7 +601,9 @@ impl Enet {
     pub fn sustain(&mut self) {
         self.deadline = None;
     }
-    fn transmit(&self, command: &[u8]) -> Result<()> {
+    /// Whether the datagram was handed to the kernel; `false` means the send
+    /// buffer was full (see `send_refused`).
+    fn transmit(&self, command: &[u8]) -> Result<bool> {
         Self::transmit_to(&self.socket, self.remote_id, self.started, command)
     }
     fn transmit_to(
@@ -560,7 +611,11 @@ impl Enet {
         remote_id: u16,
         started: Instant,
         command: &[u8],
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        #[cfg(test)]
+        if REFUSE_SENDS.with(|refuse| refuse.get()) {
+            return Ok(false);
+        }
         // Reliable datagrams include a CRC checksum.
         // The packet header is a checksum, while CONNECT carries its own cookie.
         let mut header = [0; 8];
@@ -588,7 +643,12 @@ impl Enet {
             // which reads them and emits one connected UDP datagram.
             let sent = unsafe { libc::sendmsg(socket.as_raw_fd(), &message, 0) };
             if sent < 0 {
-                return Err(std::io::Error::last_os_error().into());
+                let error = std::io::Error::last_os_error();
+                return if send_refused(&error) {
+                    Ok(false)
+                } else {
+                    Err(error.into())
+                };
             }
             ensure!(
                 sent as usize == header.len() + command.len(),
@@ -600,15 +660,22 @@ impl Enet {
             let mut packet = Vec::with_capacity(header.len() + command.len());
             packet.extend_from_slice(&header);
             packet.extend_from_slice(command);
-            socket.send(&packet)?;
+            match socket.send(&packet) {
+                Ok(_) => {}
+                Err(error) if send_refused(&error) => return Ok(false),
+                Err(error) => return Err(error.into()),
+            }
         }
-        Ok(())
+        Ok(true)
     }
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
         ensure!(self.pending.len() < 256, "UDP send window exhausted");
-        self.transmit(&command)?;
+        // A refused datagram stays pending and is retransmitted shortly; only a
+        // real socket error fails the channel.
+        let sent = self.transmit(&command)?;
         let key = (command[1], u16be(&command, 2));
-        let last = Instant::now();
+        let now = Instant::now();
+        let last = if sent { now } else { refused_last(now) };
         if key.0 == 0 && self.oldest_pending.is_none() {
             self.oldest_pending = Some(key.1);
         }
@@ -619,7 +686,8 @@ impl Enet {
             Pending {
                 command,
                 last,
-                tries: 1,
+                tries: u8::from(sent),
+                queued: now,
             },
         );
         Ok(())
@@ -797,10 +865,20 @@ impl Enet {
             let mut retry = p.last + RETRY_INTERVAL;
             if now >= retry {
                 ensure!(p.tries < 20, "UDP acknowledgement timeout");
-                p.tries += 1;
-                p.last = now;
-                Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)?;
-                retry = now + RETRY_INTERVAL;
+                // Bound sustained send-buffer congestion even when `tries`
+                // never advances and liveness stays fresh from incoming data.
+                ensure!(
+                    now.duration_since(p.queued) < Duration::from_secs(35),
+                    "UDP send congestion timeout"
+                );
+                if Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)? {
+                    p.tries += 1;
+                    p.last = now;
+                } else {
+                    // Not transmitted, so not a failed attempt: try again soon.
+                    p.last = refused_last(now);
+                }
+                retry = p.last + RETRY_INTERVAL;
             }
             next_retry = Some(next_retry.map_or(retry, |next| next.min(retry)));
         }
@@ -813,12 +891,12 @@ impl Enet {
             .is_some_and(|nonce| valid_punch(b, nonce))
         {
             if matches!(b[6], b'P' | b'A') {
-                self.socket.send(&punch(
+                send_best_effort(self.socket.send(&punch(
                     self.incoming_nonce.unwrap(),
                     self.endpoint.port(),
                     self.socket.local_addr()?.port(),
                     b'C',
-                ))?;
+                )))?;
             }
             return Ok(());
         }
@@ -933,6 +1011,8 @@ impl Enet {
                 let mut ack = [1, channel, 0, 0, 0, 0, 0, 0];
                 ack[4..6].copy_from_slice(&seq.to_be_bytes());
                 ack[6..8].copy_from_slice(&time.to_be_bytes());
+                // A lost ACK only makes the sender retransmit, and duplicates of
+                // delivered commands are acknowledged again.
                 self.transmit(&ack)?;
             }
             self.last_receive = Instant::now();
@@ -1419,6 +1499,95 @@ mod tests {
             std::io::ErrorKind::WouldBlock
         );
     }
+    #[test]
+    fn only_send_buffer_exhaustion_counts_as_congestion() {
+        use std::io::{Error, ErrorKind};
+        assert!(send_refused(&Error::from(ErrorKind::WouldBlock)));
+        #[cfg(unix)]
+        assert!(send_refused(&Error::from_raw_os_error(libc::ENOBUFS)));
+        #[cfg(unix)]
+        assert!(send_refused(&Error::from_raw_os_error(libc::EAGAIN)));
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::NotConnected,
+            ErrorKind::PermissionDenied,
+            ErrorKind::Other,
+        ] {
+            assert!(!send_refused(&Error::from(kind)));
+        }
+        assert!(send_best_effort(Err(Error::from(ErrorKind::WouldBlock))).is_ok());
+        assert!(send_best_effort(Err(Error::from(ErrorKind::ConnectionRefused))).is_err());
+        assert!(send_best_effort(Ok(7)).is_ok());
+    }
+
+    #[test]
+    fn a_full_send_buffer_keeps_commands_pending_and_retries_them_soon() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        REFUSE_SENDS.set(true);
+        // This used to fail the whole channel with a WouldBlock error.
+        e.send(b"queued while the kernel buffer is full").unwrap();
+        assert_eq!(e.pending.len(), 1);
+        assert_eq!(e.pending[&(0, 1)].tries, 0);
+        // The refused command is due again after REFUSED_RETRY, not 400 ms.
+        let due = e.next_retry.unwrap();
+        assert!(due <= Instant::now() + REFUSED_RETRY);
+        remote.set_nonblocking(true).unwrap();
+        assert_eq!(
+            remote.recv(&mut [0; 4096]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        remote.set_nonblocking(false).unwrap();
+        // A retransmission that is refused again is not a failed attempt.
+        std::thread::sleep(REFUSED_RETRY + Duration::from_millis(5));
+        e.pump().unwrap();
+        assert_eq!(e.pending[&(0, 1)].tries, 0);
+        REFUSE_SENDS.set(false);
+        std::thread::sleep(REFUSED_RETRY + Duration::from_millis(5));
+        e.pump().unwrap();
+        let command = received_command(&remote);
+        assert_eq!(&command[..4], &[0x86, 0, 0, 1]);
+        assert_eq!(&command[6..], b"queued while the kernel buffer is full");
+        assert_eq!(e.pending[&(0, 1)].tries, 1);
+        e.ingest(&packet(&[1, 0, 0, 0, 0, 1, 0, 42])).unwrap();
+        assert!(e.pending.is_empty());
+    }
+
+    #[test]
+    fn a_congested_send_buffer_times_out_instead_of_retrying_forever() {
+        let (mut e, _remote) = pair();
+        REFUSE_SENDS.set(true);
+        e.send(b"congested").unwrap();
+        assert_eq!(e.pending[&(0, 1)].tries, 0);
+        // Age the queued command past the congestion bound while keeping the
+        // retransmission due now; liveness stays fresh so only the new bound
+        // can fail the channel.
+        let pending = e.pending.get_mut(&(0, 1)).unwrap();
+        pending.queued = Instant::now() - Duration::from_secs(36);
+        pending.last = Instant::now() - RETRY_INTERVAL;
+        e.last_receive = Instant::now();
+        refresh_retry_deadline(&mut e);
+        let error = e.pump().unwrap_err().to_string();
+        assert!(error.contains("congestion"), "unexpected error: {error}");
+        REFUSE_SENDS.set(false);
+    }
+
+    #[test]
+    fn a_refused_acknowledgement_does_not_drop_the_delivered_message() {
+        let (mut e, _remote) = pair();
+        REFUSE_SENDS.set(true);
+        let mut wire = vec![0, 0, 0, 0, 0x80, 0, 0, 42];
+        wire.extend(reliable(1, b"payload"));
+        let crc = crate::session::rendezvous_checksum(&wire);
+        wire[..4].copy_from_slice(&crc.to_be_bytes());
+        // The ACK cannot be written; delivery and the channel are unaffected.
+        e.ingest(&wire).unwrap();
+        REFUSE_SENDS.set(false);
+        assert_eq!(e.ready.pop_front().unwrap(), b"payload");
+    }
+
     fn reliable(sequence: u16, data: &[u8]) -> Vec<u8> {
         [
             vec![0x86, 0],

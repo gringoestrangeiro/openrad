@@ -24,7 +24,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -166,11 +166,20 @@ impl BroadcastPolicy {
         self.0.revision.load(Ordering::Acquire)
     }
     pub(crate) fn snapshot(&self) -> (u64, BroadcastSelection) {
-        let selection = self.0.selection.lock().unwrap();
+        // A plain value: recover it if another thread panicked while holding it.
+        let selection = self
+            .0
+            .selection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         (self.revision(), selection.clone())
     }
     pub(crate) fn set_selection(&self, selection: BroadcastSelection) {
-        let mut current = self.0.selection.lock().unwrap();
+        let mut current = self
+            .0
+            .selection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if *current != selection {
             *current = selection;
             self.0.revision.fetch_add(1, Ordering::Release);
@@ -207,6 +216,18 @@ enum Message {
     Pong(u64, u64, f64),
 }
 
+/// The panic hook logs the location and backtrace. The payload is not repeated
+/// in errors, which can reach user interfaces.
+pub(crate) const ENGINE_PANIC: &str =
+    "VPN engine stopped after an internal error; see the startup log";
+
+/// Run engine work so that a panic becomes an error instead of unwinding past
+/// the cleanup that follows it (or silently ending a thread that others wait
+/// on). The panic hook has already logged the location and backtrace.
+pub(crate) fn contain_panic<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!(ENGINE_PANIC)))
+}
 pub const PING_TIMEOUT: Duration = Duration::from_millis(3000);
 pub const PING_TIMEOUT_MESSAGE: &str = "Peer not responding — they may be using a strict firewall.";
 pub const NETWORK_JOIN_DELAY: Duration = Duration::from_millis(50);
@@ -367,7 +388,9 @@ fn control_loop(
         pending: VecDeque::new(),
         wake: config.wake.clone(),
     };
-    let result = (|| -> Result<()> {
+    // The engine learns of a dead control worker only through ControlFailed. A
+    // panic must still produce it, or heartbeats would stop silently.
+    let result = contain_panic(|| -> Result<()> {
         let mut next_id = 100;
         let mut sequence = 0u32;
         let mut pending: Vec<Pending> = Vec::new();
@@ -668,7 +691,7 @@ fn control_loop(
             }
         }
         Ok(())
-    })();
+    });
     diagnostics.event("control_closed", json!({
         "cancelled": stop.load(Ordering::Relaxed), "error": result.as_ref().err().map(|e| format!("{e:#}")),
         "records_received": received, "last_operation": last_operation,
@@ -774,9 +797,8 @@ impl ForwardingTable {
         }
         let (revision, selection) = options.broadcast_policy.snapshot();
         table.broadcast_revision = revision;
-        if !matches!(selection, BroadcastSelection::All) {
+        if let Some(selected) = selection.peers() {
             table.broadcast_include = matches!(selection, BroadcastSelection::Include(_));
-            let selected = selection.peers().unwrap();
             // Compile once per table/policy change, retaining RID order. Directed
             // ARP in exclusion mode keeps its indexed destination lookup.
             let targets: Vec<_> = if table.broadcast_include {
@@ -918,7 +940,10 @@ impl Forwarder {
     }
     /// Return rejected-frame accounting; a full mailbox cannot block TAP I/O.
     fn dispatch(&self, work: ForwardWork) -> Result<u64> {
-        match self.sender.as_ref().unwrap().try_send(work) {
+        let Some(sender) = self.sender.as_ref() else {
+            bail!("forwarding worker closed");
+        };
+        match sender.try_send(work) {
             Ok(()) => Ok(0),
             Err(mpsc::TrySendError::Full(work)) => Ok(match work {
                 ForwardWork::Frame { .. } => 1,
@@ -1092,8 +1117,10 @@ fn peer_loop(
             }),
         );
     };
+    // A panicking peer worker would otherwise end without reporting `Closed`,
+    // leaving a zombie entry that is never retried or replaced.
     let result =
-        (|| -> Result<()> {
+        contain_panic(|| -> Result<()> {
             let mut channel = if let Some(setup) = incoming {
                 setup.accept_observed(
                     identity.rid,
@@ -1142,7 +1169,7 @@ fn peer_loop(
                 &mut activity,
             )?;
             Ok(())
-        })();
+        });
     let error = if stop.load(Ordering::Relaxed) {
         None
     } else {
@@ -1502,7 +1529,10 @@ pub fn run(
     let mut queued = Vec::new();
     let mut due_retries = 0;
     let mut retry_policy = retry_pacer.policy(Instant::now(), 0);
-    let result = (|| -> Result<()> {
+    // A panic in the main loop must still reach the teardown below, which stops
+    // and joins every worker. Without it the peer threads would keep running
+    // with nobody left to drive or stop them.
+    let result = contain_panic(|| -> Result<()> {
         loop {
             wake.clear();
             if stop.load(Ordering::Relaxed) {
@@ -1989,6 +2019,10 @@ pub fn run(
                 }
                 let forwarding = (|| -> Result<()> {
                     for _ in 0..64 {
+                        // The Linux TAP descriptor is nonblocking and reports
+                        // WouldBlock below, so a separate poll per frame would
+                        // only add a system call.
+                        #[cfg(not(target_os = "linux"))]
                         if !t.ready(0)? {
                             break;
                         }
@@ -2074,7 +2108,7 @@ pub fn run(
             wake.wait(tap.as_ref().and_then(Tap::poll_fd), wait)?;
         }
         Ok(())
-    })();
+    });
     diagnostics.event("session_end", json!({
         "cancelled": stop.load(Ordering::Relaxed), "error": result.as_ref().err().map(|e| format!("{e:#}")),
         "uptime_ms": started.elapsed().as_millis(),
@@ -2101,6 +2135,44 @@ pub fn run(
         let _ = worker.join();
     }
     result
+}
+
+#[cfg(test)]
+mod containment_tests {
+    use super::*;
+
+    #[test]
+    fn panics_become_errors_and_ordinary_results_pass_through() {
+        assert_eq!(contain_panic(|| Ok(5)).unwrap(), 5);
+        let error = contain_panic(|| -> Result<()> { bail!("ordinary failure") }).unwrap_err();
+        assert_eq!(error.to_string(), "ordinary failure");
+        let error = contain_panic(|| -> Result<()> {
+            let secret = 424_242;
+            panic!("synthetic fault carrying the value {secret}");
+        })
+        .unwrap_err();
+        // The panic payload (which could name values) is never repeated.
+        assert_eq!(error.to_string(), ENGINE_PANIC);
+        assert!(!format!("{error:#}").contains("424242"));
+    }
+
+    #[test]
+    fn broadcast_policy_survives_a_panic_while_its_lock_is_held() {
+        let policy = BroadcastPolicy::default();
+        let held = policy.clone();
+        let result = std::thread::spawn(move || {
+            let _guard = held.0.selection.lock().unwrap();
+            panic!("synthetic fault while holding the policy lock");
+        })
+        .join();
+        assert!(result.is_err());
+        assert!(policy.0.selection.is_poisoned());
+        policy.set_selection(BroadcastSelection::Include(BTreeSet::from([4])));
+        assert_eq!(
+            policy.snapshot().1,
+            BroadcastSelection::Include(BTreeSet::from([4]))
+        );
+    }
 }
 
 #[cfg(test)]

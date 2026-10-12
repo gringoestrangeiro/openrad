@@ -273,7 +273,7 @@ impl Setup {
         let mut tcp_candidates = vec![];
         let mut udp_candidates = vec![];
         let mut mapped_candidates = vec![];
-        let nonce = u16::from_be_bytes(crate::crypto::random(2).try_into().unwrap()).max(1);
+        let nonce = u16::from_be_bytes(crate::crypto::random_array()).max(1);
         let password = &self.password;
         let cid = self.cid;
         let peer_rid = peer.rid;
@@ -421,7 +421,7 @@ impl Setup {
                         // addresses cannot install two different TCP winners.
                         // Its old ten-second budget starts after queueing.
                         let stream = Framed::from_socket(
-                            stream.socket,
+                            stream.into_socket()?,
                             Duration::from_secs(10),
                             Some(cancel.clone()),
                         )?;

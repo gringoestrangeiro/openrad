@@ -105,7 +105,12 @@ impl Diagnostics {
             "event": event,
             "details": details,
         });
-        if inner.sender.as_ref().unwrap().try_send(record).is_err() {
+        // The sender is only taken while the last handle is being dropped.
+        if inner
+            .sender
+            .as_ref()
+            .is_none_or(|sender| sender.try_send(record).is_err())
+        {
             inner.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }

@@ -74,9 +74,16 @@ pub enum Action {
 #[derive(Clone, Default)]
 pub struct Notices(Arc<Mutex<VecDeque<Notice>>>);
 impl Notices {
+    /// The queue holds plain notices; if a producer panicked while holding the
+    /// lock, the UI thread must keep running rather than panic on every poll.
+    fn lock(&self) -> std::sync::MutexGuard<'_, VecDeque<Notice>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     pub(crate) fn send(&self, notice: Notice) {
         let replaced = {
-            let mut queue = self.0.lock().unwrap();
+            let mut queue = self.lock();
             if matches!(notice, Notice::Engine(runtime::Update::State(_)))
                 && matches!(
                     queue.back(),
@@ -94,7 +101,7 @@ impl Notices {
         drop(replaced);
     }
     pub fn try_iter(&self) -> std::collections::vec_deque::IntoIter<Notice> {
-        std::mem::take(&mut *self.0.lock().unwrap()).into_iter()
+        std::mem::take(&mut *self.lock()).into_iter()
     }
 }
 pub struct Backend {
@@ -946,6 +953,26 @@ impl storage::Vault for ProfileVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_notice_queue_keeps_working_after_a_producer_panics_while_holding_it() {
+        let notices = Notices::default();
+        let producer = notices.clone();
+        let panicked = thread::spawn(move || {
+            let _held = producer.0.lock().unwrap();
+            panic!("synthetic fault while holding the notice queue");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(notices.0.is_poisoned());
+        notices.send(Notice::NodeName("after the fault".into()));
+        let received: Vec<_> = notices.try_iter().collect();
+        assert!(matches!(
+            received.as_slice(),
+            [Notice::NodeName(name)] if name == "after the fault"
+        ));
+        assert_eq!(notices.try_iter().count(), 0);
+    }
 
     #[test]
     fn reply_fields_move_without_losing_other_status_fields() {

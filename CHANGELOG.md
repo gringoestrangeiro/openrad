@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0 — 2026-10-12
+
+Fresh Linux and Windows builds include every change since v1.4.0. See the
+[release notes](docs/releases/1.5.0.md) and
+[file-by-file inventory](docs/releases/1.5.0-changes.md). Windows remains experimental.
+
+- Add an optional per-peer transport address display in the desktop, off by default. Enable **Settings → Peer IP** to show `Peer IP: {endpoint}` for direct channels and `Relay IP: {ip}` for relay channels, only while `Connected`. The service publishes the authenticated channel endpoint through snapshots; the UI remeasures rows when it changes and retains language/scale/layout invalidation.
+- Speed up the packet path without changing wire formats: sliced 8-byte CRC, pipelined 32-block CBC receive, word-wise record authentication, cached handshake prime, 8 KiB TCP/relay read-ahead with a single read-timeout setup, in-place membership updates and single-pass display-name decoding. Document loopback microbenchmarks and their limits in the performance guide; live throughput remains unmeasured.
+- Contain faults and reduce stalls: treat a full UDP send buffer as 10 ms congestion retry with best-effort punches/ACKs instead of failing the channel, bound sustained congestion to a 35 s timeout, validate member updates before applying peers or roles, convert engine/control/peer/setup panics into errors, recover poisoned locks, split service/config locking, and use nonblocking Linux TAP reads.
+- Translate new controls and errors in all four languages, update desktop/architecture/performance guides, and package two synthetic Portuguese screenshots.
+- Validate 329 default Linux tests, formatting and Linux/Windows Clippy, Windows test compilation, and inspected CPU-rendered screenshots. Synthetic benchmarks are loopback-only; native Windows TAP/UAC/interoperability and live network measurements remain outstanding.
+
 ## 1.4.0 — 2026-10-04
 
 Fresh Linux and Windows builds include every change since v1.3.0. See the

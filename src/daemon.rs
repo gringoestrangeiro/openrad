@@ -29,7 +29,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, PoisonError,
     },
     thread,
     time::{Duration, Instant},
@@ -814,6 +814,10 @@ struct State {
 }
 struct Shared {
     state: Mutex<State>,
+    /// Serializes read-modify-write changes to persisted settings and identity.
+    /// They hit the disk or credential store, which can be slow or wait on the
+    /// user; `state` must stay free for the engine, which publishes through it.
+    config: Mutex<()>,
     shutdown: AtomicBool,
     next_id: AtomicU64,
     rid: u64,
@@ -835,6 +839,7 @@ impl Shared {
                 session_stop: None,
                 pending: BTreeMap::new(),
             }),
+            config: Mutex::new(()),
             shutdown: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             rid: id.rid,
@@ -842,9 +847,18 @@ impl Shared {
             disable_interface,
         }
     }
+    /// A panic on another thread must not turn every later request, and the
+    /// engine's own status updates, into panics. The state is plain data whose
+    /// fields are each valid on their own.
+    fn lock_state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn lock_config(&self) -> MutexGuard<'_, ()> {
+        self.config.lock().unwrap_or_else(PoisonError::into_inner)
+    }
     fn stop(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        if let Some(stop) = &self.state.lock().unwrap().session_stop {
+        if let Some(stop) = &self.lock_state().session_stop {
             stop.store(true, Ordering::Relaxed);
         }
     }
@@ -856,7 +870,7 @@ impl Shared {
                 rtt_ms,
                 error,
             } => {
-                if let Some(waiter) = self.state.lock().unwrap().pending.remove(&id) {
+                if let Some(waiter) = self.lock_state().pending.remove(&id) {
                     let _ = waiter.send(Reply {
                         ok: error.is_none(),
                         message: error.unwrap_or_else(|| "Peer RTT measured".into()),
@@ -866,7 +880,7 @@ impl Shared {
             }
             Update::Ping { .. } => {}
             Update::State(snapshot) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.lock_state();
                 state.phase = "connected";
                 state.error = None;
                 state.snapshot = Some(Arc::new(snapshot));
@@ -877,7 +891,7 @@ impl Shared {
                 error,
                 catalog,
             } => {
-                let waiter = self.state.lock().unwrap().pending.remove(&id);
+                let waiter = self.lock_state().pending.remove(&id);
                 if let Some(waiter) = waiter {
                     let data = catalog
                         .map(|(networks, cursor)| json!({"networks":networks,"cursor":cursor}))
@@ -894,7 +908,7 @@ impl Shared {
     }
     fn disconnected(&self, error: String) {
         let pending = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             state.phase = "reconnecting";
             state.error = Some(error.clone());
             state.sender = None;
@@ -912,7 +926,7 @@ impl Shared {
         // Keep the immutable snapshot alive without cloning the roster or
         // holding the engine state lock throughout JSON construction.
         let (phase, node_name, preferences, error, snapshot) = {
-            let state = self.state.lock().unwrap();
+            let state = self.lock_state();
             (
                 state.phase,
                 state.identity.as_ref().map(|id| id.node_name.clone()),
@@ -940,7 +954,7 @@ impl Shared {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel();
         let sender = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state();
             if state.phase != "connected" && state.phase != "connecting" {
                 return Reply::error(
                     "Service is reconnecting; run `openrad status` and retry shortly",
@@ -956,7 +970,7 @@ impl Shared {
             id,
             command: Box::new(command),
         }) {
-            self.state.lock().unwrap().pending.remove(&id);
+            self.lock_state().pending.remove(&id);
             return Reply::error(match error {
                 mpsc::TrySendError::Full(_) => "Service command queue is full; retry shortly",
                 mpsc::TrySendError::Disconnected(_) => "Service connection is unavailable",
@@ -969,7 +983,7 @@ impl Shared {
         }) {
             Ok(reply) => reply,
             Err(_) => {
-                self.state.lock().unwrap().pending.remove(&id);
+                self.lock_state().pending.remove(&id);
                 if let Some(peer) = ping {
                     Reply {
                         ok: false,
@@ -986,7 +1000,7 @@ impl Shared {
     }
     fn queue(&self, command: Command) -> Reply {
         let sender = {
-            let state = self.state.lock().unwrap();
+            let state = self.lock_state();
             if state.phase != "connected" {
                 return Reply::error("Service is reconnecting; retry shortly");
             }
@@ -1001,7 +1015,7 @@ impl Shared {
         }
     }
     fn resolve_network(&self, name: &str) -> Result<String> {
-        let state = self.state.lock().unwrap();
+        let state = self.lock_state();
         ensure!(
             state.phase == "connected",
             "Service is reconnecting; retry shortly"
@@ -1031,10 +1045,10 @@ impl Shared {
         Ok(match command {
             Request::Status => self.status(),
             Request::Networks => {
-                let state = self.state.lock().unwrap();
-                let snapshot = state
+                let snapshot = self
+                    .lock_state()
                     .snapshot
-                    .as_ref()
+                    .clone()
                     .context("Membership is not loaded yet; run `openrad status`")?;
                 let networks: Vec<_> = snapshot.networks.iter().map(|n| json!({
                     "name":n.name,"id":n.network_id,
@@ -1046,10 +1060,11 @@ impl Shared {
                 )
             }
             Request::Peers => {
-                let state = self.state.lock().unwrap();
-                let snapshot = state
+                // Serializing a large roster must not hold up engine updates.
+                let snapshot = self
+                    .lock_state()
                     .snapshot
-                    .as_ref()
+                    .clone()
                     .context("Membership is not loaded yet; run `openrad status`")?;
                 Reply::ok(
                     format!("{} peers", snapshot.peers.len()),
@@ -1059,7 +1074,7 @@ impl Shared {
             Request::Search { query, cursor } => self.command(Command::Search { query, cursor }),
             Request::Join { name, password } => {
                 {
-                    let state = self.state.lock().unwrap();
+                    let state = self.lock_state();
                     if let Some(network) = state.snapshot.as_ref().and_then(|snapshot| {
                         snapshot
                             .networks
@@ -1118,20 +1133,25 @@ impl Shared {
                 });
             }
             Request::BroadcastPeers { targets, exclude } => {
-                let mut state = self.state.lock().unwrap();
+                let _serial = self.lock_config();
                 if let Some(targets) = targets {
+                    let (snapshot, mut preferences) = {
+                        let state = self.lock_state();
+                        (state.snapshot.clone(), state.preferences.clone())
+                    };
                     let selection = resolve_broadcast_selection(
                         &targets,
                         exclude,
                         self.rid,
-                        state.snapshot.as_deref(),
+                        snapshot.as_deref(),
                     )?;
-                    let mut preferences = state.preferences.clone();
                     preferences.set_broadcast_selection(selection.clone());
                     self.directory
                         .as_ref()
                         .context("Profile is unavailable")?
                         .save_preferences(&preferences)?;
+                    // Publish only after the save: a failed save never applies.
+                    let mut state = self.lock_state();
                     state.preferences = preferences;
                     state.broadcast_policy.set_selection(selection);
                 } else {
@@ -1140,17 +1160,23 @@ impl Shared {
                         "Specify peers to exclude from outgoing broadcasts"
                     );
                 }
-                broadcast_peer_reply(state.preferences.broadcast_selection())
+                broadcast_peer_reply(self.lock_state().preferences.broadcast_selection())
             }
             Request::Rename { node_name } => {
                 crate::protocol::validate_node_name(&node_name)?;
-                let mut state = self.state.lock().unwrap();
-                let mut identity = state.identity.clone().context("No identity loaded")?;
+                let _serial = self.lock_config();
+                let mut identity = self
+                    .lock_state()
+                    .identity
+                    .clone()
+                    .context("No identity loaded")?;
                 identity.node_name = node_name;
+                // A credential store may wait for the user to unlock it.
                 self.directory
                     .as_ref()
                     .context("Profile is unavailable")?
                     .save_identity(&identity)?;
+                let mut state = self.lock_state();
                 state.identity = Some(identity);
                 state.restart = true;
                 if let Some(stop) = &state.session_stop {
@@ -1162,17 +1188,23 @@ impl Shared {
                 )
             }
             Request::Configure { preferences } => {
-                let mut state = self.state.lock().unwrap();
+                let _serial = self.lock_config();
                 // Broadcast selection has its own command; stale frontend
-                // settings must not overwrite a concurrent selection.
+                // settings must not overwrite a concurrent selection. Every
+                // writer of the preferences holds `config`, so what is read
+                // here is still current when the new value is published.
                 let mut preferences = preferences;
-                preferences.broadcast_peer = state.preferences.broadcast_peer;
-                preferences.broadcast_peers = state.preferences.broadcast_peers.clone();
+                {
+                    let state = self.lock_state();
+                    preferences.broadcast_peer = state.preferences.broadcast_peer;
+                    preferences.broadcast_peers = state.preferences.broadcast_peers.clone();
+                }
                 preferences.validate()?;
                 self.directory
                     .as_ref()
                     .context("Profile is unavailable")?
                     .save_preferences(&preferences)?;
+                let mut state = self.lock_state();
                 let restart = preferences.force_relay != state.preferences.force_relay
                     || preferences.traffic_peers != state.preferences.traffic_peers;
                 state.preferences = preferences;
@@ -1185,7 +1217,7 @@ impl Shared {
                 Reply::ok("Settings saved", Value::Null)
             }
             Request::Reconnect => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.lock_state();
                 state.restart = true;
                 if let Some(stop) = &state.session_stop {
                     stop.store(true, Ordering::Relaxed);
@@ -1211,7 +1243,7 @@ fn supervisor(
         let (tx, rx) = mpsc::sync_channel(COMMAND_QUEUE_LIMIT);
         let session_stop = Arc::new(AtomicBool::new(false));
         let (identity, preferences) = {
-            let mut state = shared.state.lock().unwrap();
+            let mut state = shared.lock_state();
             state.phase = "connecting";
             state.sender = Some(tx);
             state.session_stop = Some(session_stop.clone());
@@ -1232,21 +1264,27 @@ fn supervisor(
             diagnostics: diagnostics.clone(),
             force_relay: preferences.force_relay,
             traffic_peers: preferences.traffic_peers.clone(),
-            broadcast_policy: shared.state.lock().unwrap().broadcast_policy.clone(),
+            broadcast_policy: shared.lock_state().broadcast_policy.clone(),
         };
         let started = Instant::now();
-        let outcome = runtime::run(
-            identity.clone(),
-            modulus.clone(),
-            options,
-            rx,
-            session_stop,
-            move |update| shared_updates.update(update),
-        );
+        // An internal panic must reconnect like any other engine failure. If it
+        // killed this thread instead, the control socket would keep answering
+        // for an engine that no longer exists. `run` finishes its own teardown
+        // (stops and joins workers) even when its main loop panics.
+        let outcome = runtime::contain_panic(|| {
+            runtime::run(
+                identity.clone(),
+                modulus.clone(),
+                options,
+                rx,
+                session_stop,
+                move |update| shared_updates.update(update),
+            )
+        });
         if shared.shutdown.load(Ordering::Relaxed) {
             break;
         }
-        if shared.state.lock().unwrap().restart {
+        if shared.lock_state().restart {
             failures = 0;
             shared.disconnected("Reconnecting with the same identity…".into());
             continue;
@@ -1264,9 +1302,8 @@ fn supervisor(
         }
         failures = failures.saturating_add(1);
         if !preferences.auto_reconnect || failures > preferences.reconnect_attempts {
-            shared.state.lock().unwrap().phase = "error";
-            while !shared.shutdown.load(Ordering::Relaxed) && !shared.state.lock().unwrap().restart
-            {
+            shared.lock_state().phase = "error";
+            while !shared.shutdown.load(Ordering::Relaxed) && !shared.lock_state().restart {
                 thread::sleep(Duration::from_millis(50));
             }
             continue;
@@ -1279,7 +1316,7 @@ fn supervisor(
         );
         let until = Instant::now() + delay;
         while !shared.shutdown.load(Ordering::Relaxed)
-            && !shared.state.lock().unwrap().restart
+            && !shared.lock_state().restart
             && Instant::now() < until
         {
             thread::sleep(Duration::from_millis(100));
@@ -1362,7 +1399,11 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     drop(profile_lock);
     let mut shared = Shared::new(&identity, disable_interface);
     shared.directory = Some(dir.clone());
-    shared.state.get_mut().unwrap().preferences = dir.preferences()?;
+    shared
+        .state
+        .get_mut()
+        .unwrap_or_else(PoisonError::into_inner)
+        .preferences = dir.preferences()?;
     let shared = Arc::new(shared);
     let on_signal = shared.clone();
     ctrlc::set_handler(move || on_signal.stop())?;
@@ -1371,6 +1412,12 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
         thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
     let mut control_workers = Vec::new();
     while !shared.shutdown.load(Ordering::Relaxed) {
+        // The supervisor only returns after shutdown is requested. If it ended
+        // earlier it panicked; stop serving rather than answer for a dead engine.
+        if worker.is_finished() {
+            shared.stop();
+            break;
+        }
         reap_control_workers(&mut control_workers);
         // Leave excess clients in the bounded OS backlog. The Windows listener
         // also needs room for its next instance to keep the pipe name occupied.
@@ -1441,7 +1488,11 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceListening);
     let mut shared = Shared::new(&identity, disable_interface);
     shared.directory = Some(dir.clone());
-    shared.state.get_mut().unwrap().preferences = dir.preferences()?;
+    shared
+        .state
+        .get_mut()
+        .unwrap_or_else(PoisonError::into_inner)
+        .preferences = dir.preferences()?;
     let shared = Arc::new(shared);
     let worker_shared = shared.clone();
     let worker =
@@ -1449,6 +1500,9 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     let mut control_workers = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.shutdown.load(Ordering::Relaxed) {
+            if worker.is_finished() {
+                break;
+            }
             reap_control_workers(&mut control_workers);
             if control_workers.len() >= CONTROL_CONNECTION_LIMIT {
                 thread::sleep(Duration::from_millis(50));
@@ -1567,6 +1621,34 @@ mod tests {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
     }
+    #[test]
+    fn a_panic_while_holding_the_state_lock_does_not_disable_the_service() {
+        let shared = Arc::new(shared());
+        let poisoner = shared.clone();
+        let result = thread::spawn(move || {
+            let _guard = poisoner.state.lock().unwrap();
+            panic!("synthetic fault while holding the service state");
+        })
+        .join();
+        assert!(result.is_err());
+        assert!(shared.state.is_poisoned());
+        // Status, commands, restart requests and shutdown all keep working.
+        let status = shared.handle(Request::Status);
+        assert!(status.ok);
+        assert_eq!(status.data["phase"], "connecting");
+        assert!(!shared.handle(Request::Peers).ok);
+        assert!(shared.handle(Request::Reconnect).ok);
+        assert!(shared.lock_state().restart);
+        shared.update(Update::Operation {
+            message: "ignored".into(),
+            error: false,
+        });
+        shared.disconnected("synthetic".into());
+        assert_eq!(shared.lock_state().phase, "reconnecting");
+        shared.stop();
+        assert!(shared.shutdown.load(Ordering::Relaxed));
+    }
+
     #[test]
     fn broadcast_targets_resolve_by_rid_name_or_ip_and_reject_ambiguous_matches() {
         let mut snapshot = Snapshot::default();

@@ -15,19 +15,47 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Capacity of the per-connection read-ahead buffer. Typical tunnel records are
+/// below 2 KiB, so one `read` usually returns a record and often several.
+const READ_AHEAD: usize = 8 * 1024;
+/// Poll slice used while waiting for frames; keeps cancellation responsive.
+const POLL_SLICE: Duration = Duration::from_millis(200);
+
 pub struct Framed {
+    /// Direct socket access is for addresses and shutdown. Reads must go through
+    /// `receive`, which may hold already-read bytes (see `into_socket`).
     pub socket: TcpStream,
     deadline: Option<Instant>,
     received: usize,
     records: usize,
     stop: Option<Arc<AtomicBool>>,
+    /// Bytes `inbound[start..end]` were read from the socket but not consumed.
+    /// Allocated on the first `receive`; control-only streams never pay for it.
+    inbound: Box<[u8]>,
+    start: usize,
+    end: usize,
+    /// Whether the socket read timeout is already `POLL_SLICE`, so a frame does
+    /// not cost an extra `setsockopt` call.
+    poll_timeout: bool,
 }
 impl Framed {
+    /// Release the socket for a new owner. Refuses if bytes were already read
+    /// ahead, which the new owner could otherwise never see.
+    pub(crate) fn into_socket(self) -> Result<TcpStream> {
+        ensure!(self.start == self.end, "stream holds unread buffered bytes");
+        Ok(self.socket)
+    }
+    fn use_poll_timeout(&mut self) -> Result<()> {
+        if !self.poll_timeout {
+            self.socket.set_read_timeout(Some(POLL_SLICE))?;
+            self.poll_timeout = true;
+        }
+        Ok(())
+    }
     /// Validate the universal connector before acknowledging it. The CID and
     /// remote RID come exclusively from the authenticated attachment session.
     pub fn accept_rendezvous(&mut self, rid: u64, cid: u64) -> Result<()> {
-        self.socket
-            .set_read_timeout(Some(Duration::from_millis(200)))?;
+        self.use_poll_timeout()?;
         let mut data = [0; 24];
         self.read_exact_until(
             &mut data,
@@ -60,8 +88,7 @@ impl Framed {
         .concat();
         self.socket
             .write_all(&[vec![0, 20, 0, 1], body.clone()].concat())?;
-        self.socket
-            .set_read_timeout(Some(Duration::from_millis(200)))?;
+        self.use_poll_timeout()?;
         let mut response = [0; 4];
         let until = self
             .deadline
@@ -132,6 +159,10 @@ impl Framed {
             received: 0,
             records: 0,
             stop,
+            inbound: Box::default(),
+            start: 0,
+            end: 0,
+            poll_timeout: false,
         })
     }
     fn check_cancelled(&self) -> Result<()> {
@@ -165,10 +196,13 @@ impl Framed {
             "session deadline/record budget"
         );
         let until = Instant::now() + remaining.min(Duration::from_secs(10));
-        self.socket
-            .set_read_timeout(Some(Duration::from_millis(200)))?;
+        self.use_poll_timeout()?;
+        if self.inbound.is_empty() {
+            self.inbound = vec![0; READ_AHEAD].into_boxed_slice();
+        }
+        self.fill_inbound(4, until)?;
         let mut header = [0; 4];
-        self.read_exact_until(&mut header, until)?;
+        header.copy_from_slice(&self.inbound[self.start..self.start + 4]);
         let len = u32::from_be_bytes(header) as usize;
         ensure!(
             len > 0
@@ -176,13 +210,68 @@ impl Framed {
                 && (self.deadline.is_none() || len <= 32 * 1024 * 1024 - self.received),
             "frame/byte budget"
         );
-        let mut b = vec![0; len];
-        self.read_exact_until(&mut b, until)?;
+        let b = if 4 + len <= READ_AHEAD {
+            // Common case: the frame fits the buffer. Anything read beyond it
+            // stays buffered for the next call instead of costing a syscall.
+            self.fill_inbound(4 + len, until)?;
+            let body = self.inbound[self.start + 4..self.start + 4 + len].to_vec();
+            self.start += 4 + len;
+            body
+        } else {
+            self.start += 4;
+            let mut body = vec![0; len];
+            self.read_exact_until(&mut body, until)?;
+            body
+        };
+        if self.start == self.end {
+            self.start = 0;
+            self.end = 0;
+        }
         self.received = self.received.saturating_add(len);
         self.records = self.records.saturating_add(1);
         Ok(b)
     }
+    /// Buffer at least `min` unread bytes (`min <= READ_AHEAD`), reading as much
+    /// as is available in one call.
+    fn fill_inbound(&mut self, min: usize, until: Instant) -> Result<()> {
+        while self.end - self.start < min {
+            self.check_cancelled()?;
+            ensure!(Instant::now() < until, "frame receive timeout");
+            if self.start == self.end {
+                self.start = 0;
+                self.end = 0;
+            } else if self.start + min > self.inbound.len() {
+                self.inbound.copy_within(self.start..self.end, 0);
+                self.end -= self.start;
+                self.start = 0;
+            }
+            match self.socket.read(&mut self.inbound[self.end..]) {
+                Ok(0) => bail!("remote endpoint closed the connection"),
+                Ok(n) => self.end += n,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
     fn read_exact_until(&mut self, mut buffer: &mut [u8], until: Instant) -> Result<()> {
+        // Bytes already read ahead come first, preserving stream order.
+        let buffered = (self.end - self.start).min(buffer.len());
+        if buffered > 0 {
+            buffer[..buffered].copy_from_slice(&self.inbound[self.start..self.start + buffered]);
+            self.start += buffered;
+            buffer = &mut buffer[buffered..];
+            if self.start == self.end {
+                self.start = 0;
+                self.end = 0;
+            }
+        }
         while !buffer.is_empty() {
             self.check_cancelled()?;
             ensure!(Instant::now() < until, "frame receive timeout");
@@ -211,6 +300,10 @@ impl Framed {
     }
     pub fn ready(&self, timeout_ms: i32) -> Result<bool> {
         self.check_cancelled()?;
+        if self.start != self.end {
+            // Read-ahead bytes are invisible to the kernel's readiness state.
+            return Ok(true);
+        }
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
@@ -236,6 +329,9 @@ impl Framed {
     }
     pub(crate) fn ready_or_wake(&self, timeout_ms: i32, wake: &crate::wake::Wake) -> Result<bool> {
         self.check_cancelled()?;
+        if self.start != self.end {
+            return Ok(true);
+        }
         #[cfg(target_os = "linux")]
         let ready = {
             use std::os::fd::AsRawFd;
@@ -523,23 +619,44 @@ fn write_frame(writer: &mut impl Write, payload: &[u8]) -> io::Result<()> {
 
 /// The checksum feeds each byte into the low byte after shifting.
 pub fn rendezvous_checksum(data: &[u8]) -> u32 {
-    checksum_bytes(data.iter().copied())
+    !crc_update(u32::MAX, data)
 }
 
 /// ENET checksums treat their first four (checksum) bytes as zero.
 pub(crate) fn enet_checksum(data: &[u8]) -> u32 {
-    checksum_bytes([0; 4].into_iter().chain(data[4..].iter().copied()))
+    !crc_update(ZERO_PREFIX_STATE, data.get(4..).unwrap_or_default())
 }
 
 pub(crate) fn checksum_slices(first: &[u8], second: &[u8]) -> u32 {
-    checksum_bytes(first.iter().chain(second).copied())
+    !crc_update(crc_update(u32::MAX, first), second)
 }
-fn checksum_bytes(bytes: impl IntoIterator<Item = u8>) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
+
+/// Absorb `data` into the running register. One step shifts the register by a
+/// byte and feeds the data byte into its low byte: `s' = L(s) ^ byte`, where
+/// `L` multiplies by x^8 modulo the (linear) generator. Because `L` is linear,
+/// eight steps collapse to `L^8(s) ^ L^7(b0) ^ ... ^ L(b6) ^ b7`. `L^8(s)` is
+/// four table lookups on the serial chain; the data terms do not depend on the
+/// register, so they overlap. `L^k(b)` is a plain shift for k <= 3, so only
+/// bytes b0..b3 need tables (`SLICE_DATA`) and b4..b7 enter as one big-endian
+/// word. This replaces a one-lookup-per-byte dependency chain.
+#[inline]
+fn crc_update(mut crc: u32, data: &[u8]) -> u32 {
+    let (words, tail) = data.as_chunks::<8>();
+    for word in words {
+        crc = SLICE_STATE[3][(crc >> 24) as usize]
+            ^ SLICE_STATE[2][(crc >> 16) as u8 as usize]
+            ^ SLICE_STATE[1][(crc >> 8) as u8 as usize]
+            ^ SLICE_STATE[0][crc as u8 as usize]
+            ^ SLICE_DATA[3][word[0] as usize]
+            ^ SLICE_DATA[2][word[1] as usize]
+            ^ SLICE_DATA[1][word[2] as usize]
+            ^ SLICE_DATA[0][word[3] as usize]
+            ^ u32::from_be_bytes([word[4], word[5], word[6], word[7]]);
+    }
+    for &byte in tail {
         crc = CRC_TABLE[(crc >> 24) as usize] ^ ((crc << 8) | byte as u32);
     }
-    !crc
+    crc
 }
 
 const CRC_TABLE: [u32; 256] = {
@@ -563,6 +680,62 @@ const CRC_TABLE: [u32; 256] = {
     table
 };
 
+/// `L(s)`: shift the register one byte and reduce the byte shifted out.
+const fn shift_byte(state: u32) -> u32 {
+    (state << 8) ^ CRC_TABLE[(state >> 24) as usize]
+}
+const fn shift_bytes(mut state: u32, count: u32) -> u32 {
+    let mut step = 0;
+    while step < count {
+        state = shift_byte(state);
+        step += 1;
+    }
+    state
+}
+
+/// `SLICE_STATE[k][v] = L^8(v << 8k)`: the contribution of register byte `k`.
+const SLICE_STATE: [[u32; 256]; 4] = {
+    let mut tables = [[0; 256]; 4];
+    let mut lane = 0;
+    while lane < 4 {
+        let mut value = 0;
+        while value < 256 {
+            tables[lane][value] = shift_bytes((value as u32) << (8 * lane), 8);
+            value += 1;
+        }
+        lane += 1;
+    }
+    tables
+};
+
+/// `SLICE_DATA[i][v] = L^(4 + i)(v)`: the contribution of data byte `3 - i` of
+/// the first half of an eight-byte word (b3 -> L^4 ... b0 -> L^7).
+const SLICE_DATA: [[u32; 256]; 4] = {
+    let mut tables = [[0; 256]; 4];
+    let mut lane = 0;
+    while lane < 4 {
+        let mut value = 0;
+        while value < 256 {
+            tables[lane][value] = shift_bytes(value as u32, 4 + lane as u32);
+            value += 1;
+        }
+        lane += 1;
+    }
+    tables
+};
+
+/// Register after absorbing the four zero bytes that stand in for the ENET
+/// checksum field.
+const ZERO_PREFIX_STATE: u32 = {
+    let mut state = u32::MAX;
+    let mut step = 0;
+    while step < 4 {
+        state = shift_byte(state);
+        step += 1;
+    }
+    state
+};
+
 #[cfg(test)]
 mod checksum_tests {
     use super::*;
@@ -582,6 +755,46 @@ mod checksum_tests {
             crc = table ^ ((crc << 8) | byte as u32);
         }
         !crc
+    }
+
+    #[test]
+    fn sliced_checksum_matches_bitwise_for_every_length_and_pattern() {
+        let random_bytes = crate::crypto::random(2048);
+        for len in 0..=300 {
+            for pattern in 0..4 {
+                let data: Vec<u8> = match pattern {
+                    0 => random_bytes[..len].to_vec(),
+                    1 => vec![0; len],
+                    2 => vec![0xff; len],
+                    _ => random_bytes[random_bytes.len() - len..].to_vec(),
+                };
+                assert_eq!(
+                    rendezvous_checksum(&data),
+                    bitwise_checksum(&data),
+                    "len {len} pattern {pattern}"
+                );
+                // Splitting the input at any point must not change the register.
+                for split in [0, len / 3, len / 2, len.saturating_sub(1), len] {
+                    assert_eq!(
+                        checksum_slices(&data[..split], &data[split..]),
+                        bitwise_checksum(&data)
+                    );
+                }
+                if len >= 4 {
+                    let mut zeroed = data.clone();
+                    zeroed[..4].fill(0);
+                    assert_eq!(enet_checksum(&data), bitwise_checksum(&zeroed));
+                }
+            }
+        }
+        // Large ENET-sized buffers at every start alignment of the word loop.
+        for offset in 0..8 {
+            let data = &random_bytes[offset..];
+            assert_eq!(rendezvous_checksum(data), bitwise_checksum(data));
+        }
+        // A datagram shorter than the checksum field must not panic; it hashes
+        // as the zeroed field alone.
+        assert_eq!(enet_checksum(&[1, 2, 3]), bitwise_checksum(&[0; 4]));
     }
 
     #[test]
@@ -1225,5 +1438,202 @@ mod frame_write_tests {
             io::ErrorKind::WriteZero
         );
         assert_eq!(writer.calls, 1);
+    }
+}
+
+#[cfg(test)]
+mod framed_read_tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    fn pair() -> (Framed, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let reader = listener.accept().unwrap().0;
+        (
+            Framed::from_socket(reader, Duration::from_secs(10), None).unwrap(),
+            writer,
+        )
+    }
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = (payload.len() as u32).to_be_bytes().to_vec();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+    fn wait_readable(stream: &Framed) {
+        let started = Instant::now();
+        while !stream.ready(20).unwrap() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "no data arrived"
+            );
+        }
+    }
+
+    #[test]
+    fn frames_batched_into_one_read_stay_visible_to_readiness_checks() {
+        let (mut reader, mut writer) = pair();
+        let payloads: Vec<Vec<u8>> = (1..=6).map(|n| vec![n as u8; 100 * n]).collect();
+        let mut wire = Vec::new();
+        for payload in &payloads {
+            wire.extend(frame(payload));
+        }
+        writer.write_all(&wire).unwrap();
+        wait_readable(&reader);
+        // Give the kernel time to deliver the whole burst before the first read.
+        std::thread::sleep(Duration::from_millis(50));
+        for payload in &payloads {
+            // The kernel queue may now be empty; buffered frames must still be ready.
+            assert!(reader.ready(0).unwrap());
+            assert_eq!(&reader.receive(65536).unwrap(), payload);
+        }
+        assert!(!reader.ready(10).unwrap());
+    }
+
+    #[test]
+    fn oversized_and_split_frames_reassemble_in_order() {
+        let (mut reader, mut writer) = pair();
+        let big: Vec<u8> = (0..30_000u32).map(|i| (i * 7) as u8).collect();
+        let small = b"small tail".to_vec();
+        let first = frame(b"first");
+        let mut wire = first.clone();
+        wire.extend(frame(&big));
+        wire.extend(frame(&small));
+        // Dribble the stream so frame boundaries fall inside reads.
+        let sender = std::thread::spawn(move || {
+            for chunk in wire.chunks(997) {
+                writer.write_all(chunk).unwrap();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            writer
+        });
+        assert_eq!(reader.receive(65536).unwrap(), b"first");
+        assert_eq!(reader.receive(65536).unwrap(), big);
+        assert_eq!(reader.receive(65536).unwrap(), small);
+        drop(sender.join().unwrap());
+    }
+
+    #[test]
+    fn single_byte_delivery_and_eof_after_complete_frames() {
+        let (mut reader, mut writer) = pair();
+        let bytes = frame(b"slowly");
+        let sender = std::thread::spawn(move || {
+            for byte in bytes {
+                writer.write_all(&[byte]).unwrap();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            writer.write_all(&frame(b"last")).unwrap();
+            // Dropping closes the stream right after a complete frame.
+        });
+        assert_eq!(reader.receive(64).unwrap(), b"slowly");
+        assert_eq!(reader.receive(64).unwrap(), b"last");
+        sender.join().unwrap();
+        let error = reader.receive(64).unwrap_err();
+        assert!(error.to_string().contains("closed the connection"));
+    }
+
+    #[test]
+    fn frame_limits_are_enforced_before_the_body_is_consumed() {
+        let (mut reader, mut writer) = pair();
+        writer.write_all(&frame(&[1; 10])).unwrap();
+        assert!(reader
+            .receive(9)
+            .unwrap_err()
+            .to_string()
+            .contains("frame/byte budget"));
+        let (mut reader, mut writer) = pair();
+        writer.write_all(&0u32.to_be_bytes()).unwrap();
+        assert!(reader.receive(64).is_err());
+    }
+
+    #[test]
+    fn a_socket_with_read_ahead_bytes_cannot_be_handed_to_another_owner() {
+        let (mut reader, mut writer) = pair();
+        let mut wire = frame(b"one");
+        wire.extend(frame(b"two"));
+        writer.write_all(&wire).unwrap();
+        wait_readable(&reader);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(reader.receive(64).unwrap(), b"one");
+        assert!(reader.into_socket().is_err());
+        let (mut reader, mut writer) = pair();
+        writer.write_all(&frame(b"only")).unwrap();
+        assert_eq!(reader.receive(64).unwrap(), b"only");
+        assert!(reader.into_socket().is_ok());
+    }
+
+    #[test]
+    fn framing_survives_random_sizes_around_the_buffer_edge_and_arbitrary_chunking() {
+        let (mut reader, mut writer) = pair();
+        // Sizes straddle the read-ahead capacity (frame + 4-byte header).
+        let sizes = [
+            1usize, 2, 3, 4, 5, 100, 1500, 4096, 8186, 8187, 8188, 8189, 8190, 8191, 8192, 8193,
+            16_000, 16_384, 70_000,
+        ];
+        let frames: Vec<Vec<u8>> = (0..400)
+            .map(|index| {
+                let len = sizes[rand::random::<usize>() % sizes.len()];
+                (0..len).map(|byte| (byte + index) as u8).collect()
+            })
+            .collect();
+        let wire: Vec<u8> = frames.iter().flat_map(|f| frame(f)).collect();
+        let sender = std::thread::spawn(move || {
+            let mut at = 0;
+            while at < wire.len() {
+                let chunk = match rand::random::<u8>() % 4 {
+                    0 => 1 + rand::random::<usize>() % 7,
+                    1 => 1 + rand::random::<usize>() % 1500,
+                    2 => 1 + rand::random::<usize>() % 20_000,
+                    _ => wire.len(),
+                }
+                .min(wire.len() - at);
+                writer.write_all(&wire[at..at + chunk]).unwrap();
+                at += chunk;
+                if rand::random::<u8>().is_multiple_of(16) {
+                    std::thread::sleep(Duration::from_micros(300));
+                }
+            }
+        });
+        for (index, expected) in frames.iter().enumerate() {
+            let received = reader.receive(65_536 * 2).unwrap();
+            assert_eq!(received.len(), expected.len(), "frame {index}");
+            assert!(received == *expected, "frame {index} content");
+        }
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn buffered_frames_stay_ready_for_wake_aware_workers() {
+        let (mut reader, mut writer) = pair();
+        let mut wire = frame(b"one");
+        wire.extend(frame(b"two"));
+        writer.write_all(&wire).unwrap();
+        wait_readable(&reader);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(reader.receive(64).unwrap(), b"one");
+        // A pending local notification must not hide an already-read frame.
+        let wake = crate::wake::Wake::new().unwrap();
+        wake.notify();
+        assert!(reader.ready_or_wake(0, &wake).unwrap());
+        assert_eq!(reader.receive(64).unwrap(), b"two");
+        // With nothing buffered, the pending notification wins and the worker
+        // handles its local work first.
+        assert!(!reader.ready_or_wake(0, &wake).unwrap());
+    }
+
+    #[test]
+    fn rendezvous_reads_consume_buffered_bytes_before_the_socket() {
+        let (mut reader, mut writer) = pair();
+        let mut wire = frame(b"head");
+        wire.extend_from_slice(&[9, 8, 7, 6]);
+        writer.write_all(&wire).unwrap();
+        wait_readable(&reader);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(reader.receive(64).unwrap(), b"head");
+        let mut tail = [0; 4];
+        reader
+            .read_exact_until(&mut tail, Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(tail, [9, 8, 7, 6]);
     }
 }

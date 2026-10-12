@@ -1,14 +1,18 @@
 //! Wire-compatible RSA, SH authentication and encrypted channels.
 use aes::{
-    cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit},
+    cipher::{
+        consts::U16, generic_array::GenericArray, inout::InOutBuf, BlockDecrypt, BlockEncrypt,
+        KeyInit,
+    },
     Aes256,
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use md4::{Digest, Md4};
 use num_bigint::BigUint;
 use num_traits::Zero;
 use rand::{rngs::OsRng, RngCore};
 use sha1::Sha1;
+use std::sync::OnceLock;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -25,6 +29,12 @@ pub fn random(n: usize) -> Vec<u8> {
     let mut v = vec![0; n];
     OsRng.fill_bytes(&mut v);
     v
+}
+/// Fixed-size random bytes, without an allocation or a length conversion.
+pub fn random_array<const N: usize>() -> [u8; N] {
+    let mut bytes = [0; N];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
 }
 pub fn hash(v: &[u8]) -> Vec<u8> {
     Sha1::digest(v).to_vec()
@@ -46,13 +56,34 @@ fn padded(v: &[u8], width: usize) -> Vec<u8> {
 }
 
 pub fn auth8(region: &[u8]) -> [u8; 8] {
-    let sum = region.chunks(8).fold(0u64, |a, b| {
+    // Whole words sum without a per-chunk copy so the loop can vectorize; only
+    // the zero-padded tail needs a scratch word. Wrapping addition commutes, so
+    // the result equals the original sequential sum.
+    let (words, tail) = region.as_chunks::<8>();
+    let mut sum = words
+        .iter()
+        .fold(0u64, |a, word| a.wrapping_add(u64::from_le_bytes(*word)));
+    if !tail.is_empty() {
         let mut word = [0; 8];
-        word[..b.len()].copy_from_slice(b);
-        a.wrapping_add(u64::from_le_bytes(word))
-    });
+        word[..tail.len()].copy_from_slice(tail);
+        sum = sum.wrapping_add(u64::from_le_bytes(word));
+    }
     let digest = Md4::digest(sum.to_le_bytes());
     std::array::from_fn(|i| digest[i].wrapping_add(digest[i + 8]))
+}
+
+/// Cached group parameters: the prime is constant, so decoding it from hex and
+/// converting it to a big integer once avoids repeating that work per handshake.
+pub(crate) fn group_prime() -> Result<&'static (Vec<u8>, BigUint)> {
+    static PRIME_VALUE: OnceLock<Option<(Vec<u8>, BigUint)>> = OnceLock::new();
+    PRIME_VALUE
+        .get_or_init(|| {
+            let bytes = hex::decode(PRIME).ok()?;
+            let value = number(&bytes);
+            Some((bytes, value))
+        })
+        .as_ref()
+        .ok_or_else(|| anyhow!("unsupported SH group"))
 }
 
 pub struct Channel {
@@ -116,21 +147,38 @@ impl Channel {
         );
         self.decrypt_owned(ciphertext.to_vec())
     }
+    /// CBC decryption has no serial dependency between blocks (each plaintext
+    /// needs only two adjacent ciphertext blocks), so the AES backend can
+    /// pipeline several blocks at once. Groups are decrypted in place after
+    /// saving their ciphertext on the stack; the saved copy supplies the
+    /// chaining values. `data` is a nonempty multiple of 16 bytes.
+    fn cbc_decrypt_in_place(&mut self, data: &mut [u8]) {
+        const GROUP: usize = 32 * 16;
+        let mut iv = self.dec_iv;
+        let mut scratch = [0u8; GROUP];
+        for group in data.chunks_mut(GROUP) {
+            let saved = &mut scratch[..group.len()];
+            saved.copy_from_slice(group);
+            let (blocks, _) = InOutBuf::from(&mut *group).into_chunks::<U16>();
+            self.cipher.decrypt_blocks_inout(blocks);
+            for (b, v) in group[..16].iter_mut().zip(iv) {
+                *b ^= v;
+            }
+            let (_, rest) = group.split_at_mut(16);
+            for (b, v) in rest.iter_mut().zip(&saved[..saved.len() - 16]) {
+                *b ^= v;
+            }
+            iv.copy_from_slice(&saved[saved.len() - 16..]);
+        }
+        self.dec_iv = iv;
+    }
     /// Reuse the received ciphertext allocation for authenticated plaintext.
     pub fn decrypt_owned(&mut self, mut out: Vec<u8>) -> Result<Vec<u8>> {
         ensure!(
             !out.is_empty() && out.len().is_multiple_of(16) && out.len() <= 4 * 1024 * 1024,
             "invalid ciphertext length"
         );
-        for block in out.as_chunks_mut::<16>().0 {
-            let next = *block;
-            self.cipher
-                .decrypt_block(GenericArray::from_mut_slice(block));
-            for (b, v) in block.iter_mut().zip(self.dec_iv) {
-                *b ^= v;
-            }
-            self.dec_iv = next;
-        }
+        self.cbc_decrypt_in_place(&mut out);
         let n = out.len();
         let pad = out[n - 1] as usize;
         ensure!((9..25).contains(&pad) && pad < n, "invalid channel padding");
@@ -232,23 +280,23 @@ impl ShClient {
     pub fn parameters(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         ensure!(self.state == 2, "SH unexpected parameters");
         let values = sh_parse(data, 2, &[0x30000000, 0x40000000, 0x50000000])?;
+        let (prime, n) = group_prime()?;
         ensure!(
-            values[0] == hex::decode(PRIME)? && values[1] == [5],
+            values[0] == prime.as_slice() && values[1] == [5],
             "unsupported SH group"
         );
         self.salt = values[2].to_vec();
-        self.public = serial(&BigUint::from(5u32).modpow(&self.private, &number(values[0])));
+        self.public = serial(&BigUint::from(5u32).modpow(&self.private, n));
         self.state = 4;
         Ok(sh_message(3, 0x60000000, &self.public))
     }
     pub fn challenge(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         ensure!(self.state == 4, "SH unexpected challenge");
         let b = sh_parse(data, 4, &[0x60000000])?[0];
-        let prime = hex::decode(PRIME)?;
-        let n = number(&prime);
+        let (prime, n) = group_prime()?;
         let bv = number(b);
         ensure!(
-            b.len() <= prime.len() && !bv.is_zero() && bv < n,
+            b.len() <= prime.len() && !bv.is_zero() && bv < *n,
             "invalid SH peer public"
         );
         let identity = identity_bytes(self.rid);
@@ -264,13 +312,13 @@ impl ShClient {
         let u = number(&hash(
             &[padded(&self.public, prime.len()), padded(b, prime.len())].concat(),
         ));
-        let v = BigUint::from(5u32).modpow(&x, &n);
-        let base = (bv + &n - ((&k * v) % &n)) % &n;
-        let shared = serial(&base.modpow(&(&self.private + u * x), &n));
+        let v = BigUint::from(5u32).modpow(&x, n);
+        let base = (bv + n - ((&k * v) % n)) % n;
+        let shared = serial(&base.modpow(&(&self.private + u * x), n));
         self.key = (0u32..2)
             .flat_map(|i| hash(&[shared.clone(), i.to_be_bytes().to_vec()].concat()))
             .collect();
-        let prefix: Vec<u8> = hash(&prime)
+        let prefix: Vec<u8> = hash(prime)
             .iter()
             .zip(hash(&[5]))
             .map(|(x, y)| x ^ y)
@@ -352,7 +400,7 @@ impl ShServer {
         );
         self.state = 3;
         Ok([
-            sh_message(2, 0x30000000, &hex::decode(PRIME)?),
+            sh_message(2, 0x30000000, &group_prime()?.0),
             sh_record(0x40000000, &[5]),
             sh_record(0x50000000, &self.salt),
         ]
@@ -361,11 +409,10 @@ impl ShServer {
     pub fn public(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         ensure!(self.state == 3, "SH unexpected client public");
         let a = sh_parse(data, 3, &[0x60000000])?[0];
-        let prime = hex::decode(PRIME)?;
-        let n = number(&prime);
+        let (prime, n) = group_prime()?;
         let av = number(a);
         ensure!(
-            a.len() <= prime.len() && !av.is_zero() && av < n,
+            a.len() <= prime.len() && !av.is_zero() && av < *n,
             "invalid SH client public"
         );
         let identity = identity_bytes(self.rid);
@@ -377,18 +424,18 @@ impl ShServer {
             .concat(),
         ));
         let g = BigUint::from(5u32);
-        let v = g.modpow(&x, &n);
+        let v = g.modpow(&x, n);
         let k = number(&hash(&[prime.clone(), padded(&[5], prime.len())].concat()));
-        let b = serial(&((k * &v + g.modpow(&self.private, &n)) % &n));
+        let b = serial(&((k * &v + g.modpow(&self.private, n)) % n));
         let u = number(&hash(
             &[padded(a, prime.len()), padded(&b, prime.len())].concat(),
         ));
         ensure!(!u.is_zero(), "zero SH scrambling parameter");
-        let shared = serial(&((av * v.modpow(&u, &n)) % &n).modpow(&self.private, &n));
+        let shared = serial(&((av * v.modpow(&u, n)) % n).modpow(&self.private, n));
         self.key = (0u32..2)
             .flat_map(|i| hash(&[shared.clone(), i.to_be_bytes().to_vec()].concat()))
             .collect();
-        let prefix: Vec<u8> = hash(&prime)
+        let prefix: Vec<u8> = hash(prime)
             .iter()
             .zip(hash(&[5]))
             .map(|(x, y)| x ^ y)
@@ -456,4 +503,96 @@ pub fn rsa_session(modulus: &[u8], purpose: u32) -> Result<(Vec<u8>, Vec<u8>)> {
     let value = number(&encoded);
     ensure!(value < n, "RSA encoded message exceeds modulus");
     Ok((padded(&serial(&value.modpow(&e, &n)), width), secret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The original sequential algorithm, retained as the behavioral reference.
+    fn reference_auth8(region: &[u8]) -> [u8; 8] {
+        let sum = region.chunks(8).fold(0u64, |a, b| {
+            let mut word = [0; 8];
+            word[..b.len()].copy_from_slice(b);
+            a.wrapping_add(u64::from_le_bytes(word))
+        });
+        let digest = Md4::digest(sum.to_le_bytes());
+        std::array::from_fn(|i| digest[i].wrapping_add(digest[i + 8]))
+    }
+
+    fn reference_cbc_decrypt(cipher: &Aes256, iv: &mut [u8; 16], data: &mut [u8]) {
+        for block in data.as_chunks_mut::<16>().0 {
+            let next = *block;
+            cipher.decrypt_block(GenericArray::from_mut_slice(block));
+            for (b, v) in block.iter_mut().zip(*iv) {
+                *b ^= v;
+            }
+            *iv = next;
+        }
+    }
+
+    #[test]
+    fn auth8_matches_the_sequential_sum_for_every_tail_length() {
+        let data: Vec<u8> = (0..300u32).map(|i| (i * 167 + 13) as u8).collect();
+        for len in 0..=data.len() {
+            assert_eq!(auth8(&data[..len]), reference_auth8(&data[..len]), "{len}");
+        }
+        // Wrapping overflow of the 64-bit sum is part of the format.
+        assert_eq!(auth8(&[0xff; 64]), reference_auth8(&[0xff; 64]));
+    }
+
+    #[test]
+    fn grouped_cbc_decryption_matches_block_by_block_across_records() {
+        let key = [0x5au8; 32];
+        let mut channel = Channel::new(&key).unwrap();
+        let cipher = Aes256::new(GenericArray::from_slice(&key));
+        let mut iv = [0u8; 16];
+        // Sizes straddle the pipelining width and the 32-block stack group.
+        for blocks in [
+            1usize, 2, 7, 8, 9, 31, 32, 33, 63, 64, 65, 96, 97, 257, 4096,
+        ] {
+            let ciphertext = random(blocks * 16);
+            let mut expected = ciphertext.clone();
+            reference_cbc_decrypt(&cipher, &mut iv, &mut expected);
+            let mut actual = ciphertext.clone();
+            channel.cbc_decrypt_in_place(&mut actual);
+            assert_eq!(actual, expected, "{blocks} blocks");
+            assert_eq!(channel.dec_iv, iv, "chain state after {blocks} blocks");
+            assert_eq!(&channel.dec_iv[..], &ciphertext[ciphertext.len() - 16..]);
+        }
+    }
+
+    #[test]
+    fn records_round_trip_and_tampering_is_rejected_for_all_small_lengths() {
+        let key = [0x11u8; 32];
+        let mut sender = Channel::new(&key).unwrap();
+        let mut receiver = Channel::new(&key).unwrap();
+        for len in (1..=600).chain([1514, 1524, 4000]) {
+            let plain = random(len);
+            let wire = sender.encrypt(&plain).unwrap();
+            assert_eq!(wire.len() % 16, 0);
+            assert_eq!(receiver.decrypt_owned(wire).unwrap(), plain, "{len}");
+        }
+        // A corrupted record fails authentication but still advances the CBC
+        // chain (to its last ciphertext block), exactly as before. Corrupting
+        // only the first block leaves that block unchanged, so the following
+        // genuine record stays decryptable.
+        let wire = sender.encrypt(&[7u8; 100]).unwrap();
+        let mut bad = wire.clone();
+        bad[3] ^= 1;
+        assert!(receiver.decrypt_owned(bad).is_err());
+        let next = sender.encrypt(b"after the rejected record").unwrap();
+        assert_eq!(
+            receiver.decrypt_owned(next).unwrap(),
+            b"after the rejected record"
+        );
+    }
+
+    #[test]
+    fn cached_group_prime_matches_the_published_constant() {
+        let (bytes, value) = group_prime().unwrap();
+        assert_eq!(bytes.len(), 192);
+        assert_eq!(hex::encode(bytes), PRIME);
+        assert_eq!(*value, BigUint::from_bytes_be(bytes));
+    }
 }

@@ -452,3 +452,88 @@ messages own or reference-count their packet allocations. Each peer retains
 exclusive ownership of its cipher state, and frontend snapshot coalescing keeps
 phase/operation barriers. Native Windows TAP/UAC behavior and live throughput
 remain unverified.
+
+## Sliced checksum, pipelined CBC receive and fault containment
+
+### Packet path
+
+- The ENET and rendezvous CRC folds eight bytes per step. The register update
+  is linear, so eight serial one-byte steps collapse to four table lookups on the
+  register plus data terms that do not depend on it. Eight 1 KiB tables are built
+  at compile time from the existing table. Checksum values are unchanged.
+- CBC decryption has no serial dependency between blocks, so received records are
+  decrypted in place through the AES backend's multi-block path, 32 blocks at a
+  time, with the group's ciphertext saved on the stack for chaining. The chain
+  state after each record, padding checks and authentication results (including
+  after a rejected record) are unchanged. CBC encryption remains serial.
+- The record authenticator sums whole 64-bit words instead of copying every
+  eight-byte chunk, and the handshake group prime is decoded once.
+- TCP and relay channels read ahead up to 8 KiB, so one system call can supply
+  several records, and set their read timeout once instead of before every
+  record. Linux TAP reads no longer poll before each read (the descriptor is
+  nonblocking, and this is now enforced when it is received).
+- Membership snapshots and changes update members in place after validating them,
+  instead of cloning each member's network set, and display names are decoded in
+  one pass. Eligibility checks our own role once per network, not per member.
+
+### Local measurements
+
+| Operation | Before | After | Speedup |
+| --- | ---: | ---: | ---: |
+| ENET CRC of a 1,536-byte datagram | 2,630 ns | 685 ns | 3.8× |
+| Record authenticator over 1,520 bytes | 453 ns | 77 ns | 5.9× |
+| Encrypt a 1,524-byte tunnel record | 1,841 ns | 1,476 ns | 1.25× |
+| Decrypt a 1,536-byte tunnel record | 839 ns | 390 ns | 2.2× |
+| Receive one pre-queued 1,536-byte TCP record | 1.06 µs | 0.19 µs | 5.5× |
+| Complete peer authentication handshake (both sides) | 1.97 ms | 2.03 ms | unchanged |
+
+Rows 1 to 4 are medians of five alternating release-mode runs of the previous and
+current source on Linux x86-64 (11th Gen Intel Core i5-11400H) with Rust 1.98.1.
+The TCP row reads records that were queued before the reader started, which
+isolates receive cost from scheduler wake-ups. The handshake is dominated by
+big-integer modular exponentiation; the two medians overlap within run-to-run
+noise, so no improvement is claimed.
+
+A loopback test of the reliable-UDP layer alone (no encryption, TAP or peer
+logic) sends 150,000 1,536-byte messages. Per-thread CPU time per message fell
+from 5.6–6.1 µs to 3.6–3.8 µs at each end (about 35% less), and wall-clock
+throughput rose from 156–229 MB/s to 290–329 MB/s across five runs of each. The previous code also
+showed large run-to-run variance in that test, plausibly from receive-buffer
+overruns followed by 400 ms retransmissions while the checksum slowed the
+receiver; the new code was steadier. This is an in-process loopback measurement.
+It cannot be read as VPN throughput, which also includes TAP I/O, encryption and
+real networks.
+
+With data already queued, the new TCP receive path is much cheaper per record.
+When records trickle in one at a time, the receiver sleeps and wakes more often;
+on loopback that moves some wake-up cost onto the sending thread, so wall-clock
+time for a fast sender can look slightly worse even though CPU per record fell.
+
+### Robustness
+
+- A nonblocking UDP socket whose send buffer fills during a burst (for example on
+  a slow uplink) used to fail the whole peer channel. It is now congestion: the
+  command stays pending and is retried soon, ACK and punch replies are
+  best-effort, and every other socket error still fails the channel.
+- A malformed member update used to delete that member from the in-memory roster
+  before reporting the error. Updates are now validated before they are applied.
+- Panics in the engine, control worker, peer workers and setup tasks become errors
+  with normal cleanup and retry, instead of leaving orphaned threads or a peer
+  that never reports `Closed`. A service whose supervisor died now stops serving.
+- The service state mutex, broadcast policy and event log recover from poisoning.
+  The state lock is no longer held while preferences or the identity are saved
+  (an `fsync`, or a credential-store prompt that waits for the user), which could
+  stall packet delivery through the engine's snapshot publication.
+- Several avoidable panics were removed (fixed-size random arrays, cached group
+  prime, in-place roster updates, missing-sender cases).
+
+Regression coverage compares the checksum with a bit-at-a-time reference for
+every length from 0 to 300 at all split points, CBC decryption with a
+block-by-block reference across chained records, the authenticator with the
+sequential sum for every tail length, and TCP framing with randomized sizes
+around the buffer edge and arbitrary chunking. Further tests cover refused UDP
+sends, roster integrity, eligibility rules, display-name decoding, poisoned
+locks, and panic containment. Wire formats, encryption chaining, authentication,
+retransmission limits and peer admission are unchanged. Native Windows TAP and
+live interoperability were not measured; the Windows-specific code was compiled
+and linted for the GNU target only.

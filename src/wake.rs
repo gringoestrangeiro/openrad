@@ -4,7 +4,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 #[cfg(not(any(target_os = "linux", windows)))]
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::{
     io,
     sync::atomic::{AtomicBool, Ordering},
@@ -74,7 +74,7 @@ impl Wake {
         }
         #[cfg(not(any(target_os = "linux", windows)))]
         {
-            let _guard = self.parked.0.lock().unwrap();
+            let _guard = self.parked.0.lock().unwrap_or_else(PoisonError::into_inner);
             self.parked.1.notify_one();
         }
     }
@@ -162,9 +162,14 @@ impl Wake {
         #[cfg(not(any(target_os = "linux", windows)))]
         {
             let _ = network_fd;
-            let guard = self.parked.0.lock().unwrap();
+            let guard = self.parked.0.lock().unwrap_or_else(PoisonError::into_inner);
             if !self.is_pending() {
-                drop(self.parked.1.wait_timeout(guard, timeout).unwrap());
+                drop(
+                    self.parked
+                        .1
+                        .wait_timeout(guard, timeout)
+                        .unwrap_or_else(PoisonError::into_inner),
+                );
             }
             Ok(false)
         }

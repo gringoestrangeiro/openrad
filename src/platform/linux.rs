@@ -82,6 +82,9 @@ impl Tap {
         let mut sudo = Command::new("/usr/bin/sudo");
         sudo.arg("-n").args(&arguments);
         let file = authorize_helper(sudo, &arguments, cancelled)?;
+        // The engine reads the TAP without polling first; a blocking descriptor
+        // would stall its event loop whenever the interface is idle.
+        ensure_nonblocking(&file)?;
         Ok(Self {
             file,
             read_buffer: Vec::new(),
@@ -109,6 +112,23 @@ impl Tap {
         Ok(())
     }
 }
+fn ensure_nonblocking(file: &File) -> Result<()> {
+    let descriptor = file.as_raw_fd();
+    // SAFETY: F_GETFL/F_SETFL take no pointers and the descriptor is owned by `file`.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags >= 0
+        && (flags & libc::O_NONBLOCK != 0
+            // SAFETY: as above; only sets a status flag on the owned descriptor.
+            || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0)
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "TAP descriptor cannot be made nonblocking: {}",
+        std::io::Error::last_os_error()
+    )
+}
+
 // A detached service has no launching terminal's sudo timestamp. Keep the
 // noninteractive sudo path for administrator-managed authorization, then ask the
 // session's Polkit agent. stdin remains the descriptor socket, never a password.

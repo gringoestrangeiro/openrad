@@ -5,7 +5,7 @@ use std::{
     fs::{DirBuilder, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 #[cfg(unix)]
@@ -91,7 +91,8 @@ impl EventLog {
         let Some(file) = &self.0 else {
             return Ok(());
         };
-        let mut f = file.lock().unwrap();
+        // A panic elsewhere must not make every later event fail.
+        let mut f = file.lock().unwrap_or_else(PoisonError::into_inner);
         serde_json::to_writer(&mut *f, &v)?;
         f.write_all(b"\n")?;
         f.flush()?;

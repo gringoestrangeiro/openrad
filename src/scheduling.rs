@@ -164,7 +164,9 @@ impl<T: Send> SetupTasks<T> {
             .name(name.into())
             .spawn_scoped(scope, move || {
                 let started = Instant::now();
-                let result = work(cancel);
+                // A panicking worker must still report, or the coordinator
+                // would count it as running until the whole setup times out.
+                let result = crate::runtime::contain_panic(|| work(cancel));
                 let _ = sender.send(SetupResult {
                     name,
                     elapsed: started.elapsed(),
@@ -398,5 +400,40 @@ mod tests {
             peer_priority(incoming, retry, connected, traffic, failures, rid)
         });
         assert_eq!(queued.map(|p| p.5), [100, 1, 2, 99]);
+    }
+}
+
+#[cfg(test)]
+mod panic_tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_transport_worker_reports_a_failure_instead_of_vanishing() {
+        thread::scope(|scope| {
+            let mut tasks = SetupTasks::<u32>::new();
+            tasks
+                .spawn(scope, "panics", |_| -> anyhow::Result<u32> {
+                    panic!("synthetic worker fault")
+                })
+                .unwrap();
+            tasks.spawn(scope, "succeeds", |_| Ok(7)).unwrap();
+            let mut outcomes = Vec::new();
+            let until = Instant::now() + Duration::from_secs(5);
+            while !tasks.is_idle() {
+                assert!(Instant::now() < until, "a worker never reported");
+                if let Some(done) = tasks.poll() {
+                    outcomes.push((done.name, done.result.map_err(|e| e.to_string())));
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            outcomes.sort_by_key(|(name, _)| *name);
+            assert_eq!(outcomes.len(), 2);
+            assert_eq!(outcomes[0].0, "panics");
+            assert_eq!(
+                outcomes[0].1.as_ref().unwrap_err(),
+                crate::runtime::ENGINE_PANIC
+            );
+            assert_eq!(outcomes[1].1, Ok(7));
+        });
     }
 }

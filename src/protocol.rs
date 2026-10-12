@@ -2,7 +2,7 @@
 use anyhow::{anyhow, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
     net::Ipv4Addr,
     path::Path,
 };
@@ -52,7 +52,7 @@ pub fn int64(b: &[u8]) -> Result<u64> {
     ensure!(b.len() == 8, "invalid u64 width");
     Ok(u64::from_be_bytes(b.try_into()?))
 }
-fn utf16(b: &[u8]) -> Result<Vec<u16>> {
+fn utf16_units(b: &[u8]) -> Result<impl Iterator<Item = u16> + '_> {
     ensure!(
         (2..=8192).contains(&b.len()) && b.len().is_multiple_of(2) && b.ends_with(&[0, 1]),
         "invalid UTF16 text"
@@ -61,8 +61,10 @@ fn utf16(b: &[u8]) -> Result<Vec<u16>> {
         .as_chunks::<2>()
         .0
         .iter()
-        .map(|b| u16::from_be_bytes([b[0], b[1]]))
-        .collect())
+        .map(|b| u16::from_be_bytes([b[0], b[1]])))
+}
+fn utf16(b: &[u8]) -> Result<Vec<u16>> {
+    Ok(utf16_units(b)?.collect())
 }
 pub fn text(b: &[u8]) -> Result<String> {
     let s = String::from_utf16(&utf16(b)?)?;
@@ -77,9 +79,13 @@ pub fn text(b: &[u8]) -> Result<String> {
 pub fn display_text(b: &[u8]) -> Result<String> {
     // These names reach terminals as well as the desktop. Do not allow remote
     // members to emit escape sequences, overwrite lines or spoof CLI output.
-    Ok(String::from_utf16_lossy(&utf16(b)?)
-        .chars()
-        .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+    // One pass, one allocation: unpaired surrogates and control characters both
+    // become U+FFFD, exactly as lossy decoding followed by filtering would.
+    Ok(char::decode_utf16(utf16_units(b)?)
+        .map(|c| match c {
+            Ok(c) if !c.is_control() => c,
+            _ => '\u{fffd}',
+        })
         .collect())
 }
 pub fn tlv(tag: u32, b: &[u8]) -> Vec<u8> {
@@ -724,6 +730,64 @@ impl Membership {
         }
         Ok(())
     }
+    /// Apply one network entry (tag 0x1315 body).
+    fn read_network(&mut self, value: &[u8]) -> Result<()> {
+        let f = records(value)?;
+        let id = network_id(field(&f, 0x0d000309)?)?;
+        let name = display_text(field(&f, 0x03000306)?)?;
+        let role = if self.own_rid != 0 {
+            optional(&f, 0x0100030a)?.map(int32).transpose()?
+        } else {
+            None
+        };
+        if let Some(role) = role {
+            self.roles
+                .entry(id.clone())
+                .or_default()
+                .insert(self.own_rid, role);
+        }
+        self.networks.insert(
+            id.clone(),
+            Network {
+                name,
+                network_id: id,
+            },
+        );
+        Ok(())
+    }
+    /// Apply one member entry (tag 0x1317 body). Memberships already known for
+    /// the member are kept. Everything is validated before the roster changes.
+    fn read_peer(&mut self, value: &[u8]) -> Result<()> {
+        let f = records(value)?;
+        let rid = int64(field(&f, 0x020001e1)?)?;
+        let name = display_text(field(&f, 0x03000304)?)?;
+        let vip = Ipv4Addr::from(int32(field(&f, 0x01000305)?)?);
+        let server = optional(&f, 0x030001c9)?.map(text).transpose()?;
+        let state = optional(&f, 0x010003a0)?
+            .map(int32)
+            .transpose()?
+            .unwrap_or(0);
+        match self.peers.entry(rid) {
+            Entry::Occupied(entry) => {
+                let peer = entry.into_mut();
+                peer.name = name;
+                peer.vip = vip;
+                peer.server = server;
+                peer.state = state;
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Peer {
+                    rid,
+                    name,
+                    vip,
+                    server,
+                    state,
+                    network_ids: BTreeSet::new(),
+                });
+            }
+        }
+        Ok(())
+    }
     pub fn snapshot(&mut self, data: &[u8]) -> Result<()> {
         let r = records(data)?;
         let Some(root) = optional(&r, 0x1316)? else {
@@ -731,46 +795,10 @@ impl Membership {
         };
         let entries = records(root)?;
         for r in &entries {
-            if r.tag == 0x1315 {
-                let f = records(r.value)?;
-                let id = network_id(field(&f, 0x0d000309)?)?;
-                if self.own_rid != 0 {
-                    if let Some(role) = optional(&f, 0x0100030a)? {
-                        self.roles
-                            .entry(id.clone())
-                            .or_default()
-                            .insert(self.own_rid, int32(role)?);
-                    }
-                }
-                self.networks.insert(
-                    id.clone(),
-                    Network {
-                        name: display_text(field(&f, 0x03000306)?)?,
-                        network_id: id,
-                    },
-                );
-            } else if r.tag == 0x1317 {
-                let f = records(r.value)?;
-                let rid = int64(field(&f, 0x020001e1)?)?;
-                let network_ids = self
-                    .peers
-                    .get(&rid)
-                    .map(|p| p.network_ids.clone())
-                    .unwrap_or_default();
-                self.peers.insert(
-                    rid,
-                    Peer {
-                        rid,
-                        name: display_text(field(&f, 0x03000304)?)?,
-                        vip: Ipv4Addr::from(int32(field(&f, 0x01000305)?)?),
-                        server: optional(&f, 0x030001c9)?.map(text).transpose()?,
-                        state: optional(&f, 0x010003a0)?
-                            .map(int32)
-                            .transpose()?
-                            .unwrap_or(0),
-                        network_ids,
-                    },
-                );
+            match r.tag {
+                0x1315 => self.read_network(r.value)?,
+                0x1317 => self.read_peer(r.value)?,
+                _ => {}
             }
         }
         for r in entries.iter().filter(|r| r.tag == 0x1318) {
@@ -792,30 +820,40 @@ impl Membership {
         for r in entries.iter().filter(|r| r.tag == 0x131e) {
             let f = records(r.value)?;
             let rid = int64(field(&f, 0x020001e1)?)?;
-            self.read_role(&f, rid)?;
             let id = network_id(field(&f, 0x0d000309)?)?;
             if let Some(vip) = optional(&f, 0x01000305)? {
-                let old = self.peers.remove(&rid);
-                let mut ids = old
-                    .as_ref()
-                    .map(|p| p.network_ids.clone())
-                    .unwrap_or_default();
-                ids.insert(id);
-                self.peers.insert(
-                    rid,
-                    Peer {
-                        rid,
-                        name: display_text(field(&f, 0x03000304)?)?,
-                        vip: Ipv4Addr::from(int32(vip)?),
-                        server: optional(&f, 0x030001c9)?.map(text).transpose()?,
-                        state: old.map(|p| p.state).unwrap_or(0),
-                        network_ids: ids,
-                    },
-                );
+                // Validate every field first: a malformed update must not
+                // leave the member missing from the roster, nor leave a
+                // stale role behind.
+                let name = display_text(field(&f, 0x03000304)?)?;
+                let vip = Ipv4Addr::from(int32(vip)?);
+                let server = optional(&f, 0x030001c9)?.map(text).transpose()?;
+                self.read_role(&f, rid)?;
+                match self.peers.entry(rid) {
+                    Entry::Occupied(entry) => {
+                        let peer = entry.into_mut();
+                        peer.name = name;
+                        peer.vip = vip;
+                        peer.server = server;
+                        peer.network_ids.insert(id);
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(Peer {
+                            rid,
+                            name,
+                            vip,
+                            server,
+                            state: 0,
+                            network_ids: BTreeSet::from([id]),
+                        });
+                    }
+                }
+            } else {
+                self.read_role(&f, rid)?;
             }
         }
         for r in entries.iter().filter(|r| r.tag == 0x1323) {
-            self.snapshot(&tlv(0x1316, &tlv(0x1315, r.value)))?;
+            self.read_network(r.value)?;
         }
         for r in entries.iter().filter(|r| r.tag == 0x1318) {
             let f = records(r.value)?;
@@ -853,21 +891,24 @@ impl Membership {
                 "requested network missing: {name}"
             );
         }
+        // Our own role is a property of the network, so exclude those networks
+        // once here instead of re-checking it for every member.
         let ids: BTreeSet<_> = self
             .networks
             .values()
-            .filter(|n| names.is_empty() || names.contains(&n.name))
+            .filter(|n| {
+                (names.is_empty() || names.contains(&n.name))
+                    && self.role(&n.network_id, own) != Some(0)
+            })
             .map(|n| n.network_id.as_str())
             .collect();
         Ok(self.peers.values().filter(move |p| {
             p.rid != own
                 && p.server.is_some()
                 && [1, 5].contains(&p.state)
-                && p.network_ids.iter().any(|id| {
-                    ids.contains(id.as_str())
-                        && self.role(id, own) != Some(0)
-                        && self.role(id, p.rid) != Some(0)
-                })
+                && p.network_ids
+                    .iter()
+                    .any(|id| ids.contains(id.as_str()) && self.role(id, p.rid) != Some(0))
         }))
     }
 }
@@ -924,6 +965,186 @@ mod tests {
             record["node_name"] = serde_json::json!(name);
             assert!(Identity::from_secret(&serde_json::to_vec(&record).unwrap()).is_err());
         }
+    }
+
+    fn network_entry(id: u8, name: &str, own_role: Option<u32>) -> Vec<u8> {
+        let mut fields = vec![tlv(0x0d000309, &[id; 16]), textv(0x03000306, name).unwrap()];
+        if let Some(role) = own_role {
+            fields.push(u32v(0x0100030a, role));
+        }
+        tlv(0x1315, &fields.concat())
+    }
+    fn member_entry(rid: u64, network: u8, role: Option<u32>) -> Vec<u8> {
+        let mut fields = vec![u64v(0x020001e1, rid), tlv(0x0d000309, &[network; 16])];
+        if let Some(role) = role {
+            fields.push(u32v(0x0100030a, role));
+        }
+        tlv(0x1318, &fields.concat())
+    }
+    fn full_peer(rid: u64, name: &str, state: u32, server: Option<&str>) -> Vec<u8> {
+        let mut fields = vec![
+            u64v(0x020001e1, rid),
+            textv(0x03000304, name).unwrap(),
+            u32v(0x01000305, 0x1a000000 + rid as u32),
+            u32v(0x010003a0, state),
+        ];
+        if let Some(server) = server {
+            fields.push(textv(0x030001c9, server).unwrap());
+        }
+        tlv(0x1317, &fields.concat())
+    }
+    fn snapshot_of(entries: Vec<Vec<u8>>) -> Vec<u8> {
+        [u32v(SERVER_OP, 38), tlv(0x1316, &entries.concat())].concat()
+    }
+
+    #[test]
+    fn a_malformed_member_update_leaves_the_roster_unchanged() {
+        let mut membership = Membership {
+            own_rid: 1,
+            ..Membership::default()
+        };
+        membership
+            .snapshot(&snapshot_of(vec![
+                network_entry(0xa, "Alpha", Some(2)),
+                full_peer(7, "old name", 1, Some("192.0.2.1")),
+                member_entry(7, 0xa, Some(1)),
+            ]))
+            .unwrap();
+        let before = membership.peers[&7].clone();
+        assert_eq!(before.network_ids.len(), 1);
+        let roles_before = membership.roles.clone();
+        // A change for a known member whose name field is missing, carrying a
+        // role that must not be applied either.
+        let broken = tlv(
+            0x131e,
+            &[
+                u64v(0x020001e1, 7),
+                tlv(0x0d000309, &[0xa; 16]),
+                u32v(0x01000305, 0x1a000099),
+                u32v(0x0100030a, 99),
+            ]
+            .concat(),
+        );
+        let data = [u32v(SERVER_OP, 41), tlv(0x131f, &broken)].concat();
+        assert!(membership.changes(&data).is_err());
+        let after = &membership.peers[&7];
+        assert_eq!(after.name, before.name);
+        assert_eq!(after.vip, before.vip);
+        assert_eq!(after.network_ids, before.network_ids);
+        assert_eq!(after.state, before.state);
+        assert_eq!(membership.roles, roles_before);
+        // A well-formed change updates the member and adds the network, and a
+        // known member keeps the state it already had.
+        let good = tlv(
+            0x131e,
+            &[
+                u64v(0x020001e1, 7),
+                tlv(0x0d000309, &[0xb; 16]),
+                u32v(0x01000305, 0x1a000099),
+                textv(0x03000304, "new name").unwrap(),
+            ]
+            .concat(),
+        );
+        membership
+            .changes(&[u32v(SERVER_OP, 41), tlv(0x131f, &good)].concat())
+            .unwrap();
+        let after = &membership.peers[&7];
+        assert_eq!(after.name, "new name");
+        assert_eq!(after.vip, Ipv4Addr::from(0x1a000099));
+        assert_eq!(after.network_ids.len(), 2);
+        assert_eq!(after.state, 1);
+        assert_eq!(after.server, None);
+    }
+
+    #[test]
+    fn eligibility_honors_roles_presence_and_network_filters() {
+        let mut membership = Membership {
+            own_rid: 1,
+            ..Membership::default()
+        };
+        // We are a member of Alpha, pending in Beta and have no role in Gamma.
+        let mut entries = vec![
+            network_entry(0xa, "Alpha", Some(2)),
+            network_entry(0xb, "Beta", Some(0)),
+            network_entry(0xc, "Gamma", None),
+        ];
+        let online = Some("192.0.2.1");
+        for (rid, state, server) in [
+            (2, 1, online),
+            (3, 1, online),
+            (4, 1, online),
+            (5, 5, online),
+            (6, 0, online),
+            (7, 1, None),
+            (8, 1, online),
+        ] {
+            entries.push(full_peer(rid, &format!("peer{rid}"), state, server));
+        }
+        entries.extend([
+            member_entry(2, 0xa, Some(1)),
+            member_entry(3, 0xb, Some(1)),
+            member_entry(4, 0xa, Some(0)),
+            member_entry(5, 0xa, Some(1)),
+            member_entry(5, 0xb, Some(1)),
+            member_entry(6, 0xa, Some(1)),
+            member_entry(7, 0xa, Some(1)),
+            member_entry(8, 0xc, Some(1)),
+            member_entry(1, 0xa, Some(2)),
+        ]);
+        membership.snapshot(&snapshot_of(entries)).unwrap();
+        let rids = |names: &[String]| -> Vec<u64> {
+            membership
+                .eligible_refs(1, names)
+                .unwrap()
+                .map(|p| p.rid)
+                .collect()
+        };
+        // 3 only shares Beta (we are pending there), 4 is pending in Alpha,
+        // 6 is offline and 7 has no server; 5 qualifies through Alpha alone.
+        assert_eq!(rids(&[]), [2, 5, 8]);
+        assert_eq!(rids(&["Alpha".into()]), [2, 5]);
+        assert_eq!(rids(&["Beta".into()]), Vec::<u64>::new());
+        assert_eq!(rids(&["Gamma".into()]), [8]);
+        assert_eq!(rids(&["Alpha".into(), "Gamma".into()]), [2, 5, 8]);
+        assert!(membership.eligible_refs(1, &["Missing".into()]).is_err());
+        assert_eq!(membership.eligible(1, &[]).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn display_text_matches_lossy_decoding_followed_by_control_filtering() {
+        let reference = |units: &[u16]| -> String {
+            String::from_utf16_lossy(units)
+                .chars()
+                .map(|c| if c.is_control() { '\u{fffd}' } else { c })
+                .collect()
+        };
+        let pool = [
+            0x0041u16, 0x00e9, 0x0000, 0x001b, 0x000a, 0x007f, 0x0085, 0x2028, 0xd83d, 0xde00,
+            0xd800, 0xdc00, 0xdfff, 0x4e2d,
+        ];
+        for round in 0..2000 {
+            let len = 1 + round % 24;
+            let units: Vec<u16> = (0..len)
+                .map(|_| {
+                    if rand::random::<u8>() < 200 {
+                        pool[rand::random::<usize>() % pool.len()]
+                    } else {
+                        rand::random()
+                    }
+                })
+                .collect();
+            let mut bytes: Vec<u8> = units.iter().flat_map(|u| u.to_be_bytes()).collect();
+            bytes.extend([0, 1]);
+            assert_eq!(
+                display_text(&bytes).unwrap(),
+                reference(&units),
+                "{units:x?}"
+            );
+        }
+        for invalid in [&[][..], &[0, 1][..], &[0, 65, 0, 0][..], &[0, 65, 1][..]] {
+            assert_eq!(display_text(invalid).is_ok(), invalid == [0, 1]);
+        }
+        assert!(display_text(&vec![0; 8194]).is_err());
     }
 
     fn peer(rid: u64, name_utf16: &[u8]) -> Vec<u8> {

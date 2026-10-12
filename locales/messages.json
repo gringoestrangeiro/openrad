@@ -1464,6 +1464,11 @@
     "Удалённая сторона закрыла подключение",
     "Điểm cuối từ xa đã đóng kết nối"
   ],
+  "stream holds unread buffered bytes": [
+    "O fluxo contém bytes em buffer ainda não lidos",
+    "В потоке остались непрочитанные буферизованные байты",
+    "Luồng vẫn còn byte đã đệm chưa được đọc"
+  ],
   "TCP connect timeout": [
     "O tempo da conexão TCP esgotou",
     "Время подключения TCP истекло",
@@ -2159,6 +2164,11 @@
     "Время подтверждения UDP истекло",
     "Xác nhận UDP hết thời gian chờ"
   ],
+  "UDP send congestion timeout": [
+    "Congestionamento de envio UDP esgotou o tempo limite",
+    "Время ожидания при перегрузке отправки UDP истекло",
+    "Tắc nghẽn gửi UDP hết thời gian chờ"
+  ],
   "truncated ENET command": [
     "Comando ENET truncado",
     "Обрезанная команда ENET",
@@ -2358,6 +2368,11 @@
     "TUNSETOWNER falhou",
     "Сбой TUNSETOWNER",
     "TUNSETOWNER thất bại"
+  ],
+  "TAP descriptor cannot be made nonblocking: {0}": [
+    "O descritor TAP não pode ser tornado não bloqueante: {0}",
+    "Не удалось перевести дескриптор TAP в неблокирующий режим: {0}",
+    "Không thể chuyển mô tả TAP sang chế độ không chặn: {0}"
   ],
   "could not pass TAP descriptor": [
     "Não foi possível transferir o descritor TAP",
@@ -2778,6 +2793,11 @@
     "O mecanismo da VPN parou inesperadamente",
     "Движок VPN неожиданно завершился",
     "Bộ máy VPN đã dừng đột ngột"
+  ],
+  "VPN engine stopped after an internal error; see the startup log": [
+    "O mecanismo da VPN parou após um erro interno; consulte o log de inicialização",
+    "Движок VPN остановлен из-за внутренней ошибки; см. журнал запуска",
+    "Bộ máy VPN đã dừng do lỗi nội bộ; xem nhật ký khởi động"
   ],
   "empty control request": [
     "Solicitação de controle vazia",

@@ -147,8 +147,9 @@ pub fn network_verifier(
     let x = BigUint::from_bytes_be(&crypto::hash(
         &[salt.to_vec(), crypto::hash(&input)].concat(),
     ));
-    let n = BigUint::parse_bytes(crypto::PRIME.as_bytes(), 16).expect("compiled SH prime");
-    let verifier = BigUint::from(5u32).modpow(&x, &n).to_bytes_be();
+    let verifier = BigUint::from(5u32)
+        .modpow(&x, &crypto::group_prime()?.1)
+        .to_bytes_be();
     Ok([32u32.to_le_bytes().as_slice(), salt.as_slice(), &verifier].concat())
 }
 fn management(action: u32, id: u64, context: u32, fields: Vec<u8>) -> Result<Vec<u8>> {
@@ -267,7 +268,7 @@ impl NetworkOperation {
                 (Purpose::Join(name), bytes)
             }
             NetworkRequest::Create { name, password } => {
-                let salt: [u8; 32] = crypto::random(32).try_into().expect("salt size");
+                let salt: [u8; 32] = crypto::random_array();
                 let verifier = Zeroizing::new(network_verifier(&name, &password, &salt)?);
                 let bytes = management(
                     1,
@@ -448,13 +449,19 @@ impl NetworkOperation {
                         .values()
                         .find(|n| &n.name == name)
                         .cloned();
-                    ensure!(self.joined.is_some(), "join response network name mismatch");
+                    let Some(n) = self.joined.as_ref() else {
+                        anyhow::bail!("join response network name mismatch");
+                    };
                     membership.snapshot(&tlv(0x1316, root))?;
-                    let n = self.joined.as_ref().expect("validated network");
                     if membership.role(&n.network_id, membership.own_rid) == Some(0) {
-                        let mut progress = Progress::done(format!("Requested membership in {name}; waiting for administrator approval"), false);
-                        progress.complete.as_mut().unwrap().pending_approval = true;
-                        return Ok(progress);
+                        return Ok(Progress {
+                            send: None,
+                            complete: Some(OperationResult {
+                                message: format!("Requested membership in {name}; waiting for administrator approval"),
+                                error: false,
+                                pending_approval: true,
+                            }),
+                        });
                     }
                 }
                 Purpose::Create(name) => {
