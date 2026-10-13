@@ -102,11 +102,20 @@ impl Manifest {
         Ok(manifest)
     }
     pub fn matches(&self, directory: &Path) -> Result<bool> {
+        Ok(self.first_mismatch(directory)?.is_none())
+    }
+    /// First installed path that is missing or whose SHA-256 differs, if any.
+    /// Used by the Windows setup worker to name the divergent file instead of
+    /// reporting a bare integrity failure (e.g. after Ignore was clicked on a
+    /// locked-file write error, which leaves the old bytes behind).
+    pub fn first_mismatch(&self, directory: &Path) -> Result<Option<String>> {
         for record in &self.files {
             let path = directory.join(record.path.replace('\\', "/"));
             let mut file = match File::open(&path) {
                 Ok(file) => file,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Some(record.path.clone()))
+                }
                 Err(e) => return Err(e).context("Cannot verify installed application files"),
             };
             let mut hash = Sha256::new();
@@ -119,10 +128,10 @@ impl Manifest {
                 hash.update(&buffer[..len]);
             }
             if !hex::encode(hash.finalize()).eq_ignore_ascii_case(&record.sha256) {
-                return Ok(false);
+                return Ok(Some(record.path.clone()));
             }
         }
-        Ok(true)
+        Ok(None)
     }
 }
 
@@ -296,10 +305,19 @@ mod tests {
             }],
         };
         assert!(!manifest.matches(&dir).unwrap());
+        assert_eq!(
+            manifest.first_mismatch(&dir).unwrap().as_deref(),
+            Some("synthetic.exe")
+        );
         std::fs::write(dir.join("synthetic.exe"), b"synthetic").unwrap();
         assert!(manifest.matches(&dir).unwrap());
+        assert!(manifest.first_mismatch(&dir).unwrap().is_none());
         std::fs::write(dir.join("synthetic.exe"), b"tampered").unwrap();
         assert!(!manifest.matches(&dir).unwrap());
+        assert_eq!(
+            manifest.first_mismatch(&dir).unwrap().as_deref(),
+            Some("synthetic.exe")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
     #[test]

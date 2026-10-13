@@ -123,6 +123,32 @@ only an adapter created by this setup. Shared TAP driver packages, manually
 adopted adapters, profile files and stored identities are retained. Unknown files
 added to the application directory are retained as well.
 
+### Upgrading, repairing and locked files
+
+Before repair, upgrade or uninstall: disconnect and close OpenRad Desktop, then
+stop the background service from the installed folder (default
+`C:\Program Files\OpenRad`):
+
+```powershell
+.\openrad.exe stop
+```
+
+Then run the setup EXE and approve the UAC administrator prompt. Setup also
+attempts this shutdown itself and asks with Retry/Cancel while the desktop
+window or an `openrad.exe` background process is still present; choose Retry
+after stopping, or Cancel to quit setup.
+
+If setup reports `Error opening file for writing` for
+`C:\Program Files\OpenRad\openrad.exe` (Abort/Retry/Ignore), the old executable
+is still locked: choose **Retry** after running `openrad stop` and closing the
+desktop, or **Abort** and re-run setup — never **Ignore**. A skipped file keeps
+the previous bytes on disk, so the setup worker then refuses with
+`An installed file failed its integrity check: <path>`. That message names the
+divergent file; it means the copy was incomplete (often a prior Ignore on a
+locked file), a partial download, or an antivirus quarantine — not a TAP/driver
+problem. Re-run setup after stopping OpenRad; if it persists, re-download the
+installer/ZIP and verify `SHA256SUMS`.
+
 ## Switching from official Radmin VPN
 
 Both clients use addresses in `26.0.0.0/8`. Starting with 0.9.5, a desktop or CLI
@@ -473,6 +499,10 @@ tests. Linux cross-compilation of those tests verifies compilation/linking only.
 
 - Windows support is experimental and has been tested only on Windows 10 in the tester's setup. Other Windows configurations still need validation. The setup and application executables are unsigned;
   Windows may display an unknown-publisher/SmartScreen warning.
+- The Python reference client (`clients/python/`) differs in two ways: it has
+  no direct UDP/ENet peer transport (encrypted TCP channels only), and
+  CPython `bytes` are immutable, so it drops password/key references as soon
+  as possible instead of wiping memory. See its README's limitations.
 - This artifact is x64 only. Windows ARM64, 32-bit Windows, Windows 7/8 and macOS
   data planes are outside this deliverable. IPv4 Ethernet/ARP, a 1500-byte MTU,
   broadcast and multicast are supported by the engine; IPv6 forwarding and VLAN

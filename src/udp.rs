@@ -1,6 +1,6 @@
 //! UDP rendezvous and reliable datagram channel.
 //! Socket reachability is never authentication; the caller still runs peer SH.
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque},
@@ -12,12 +12,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn u16be(b: &[u8], at: usize) -> u16 {
-    u16::from_be_bytes([b[at], b[at + 1]])
+fn u16be(b: &[u8], at: usize) -> Result<u16> {
+    let end = at.checked_add(2).context("datagram offset overflow")?;
+    b.get(at..end)
+        .and_then(|s| <&[u8; 2]>::try_from(s).ok())
+        .map(|s| u16::from_be_bytes(*s))
+        .context("truncated datagram u16")
 }
 
-fn u32be(b: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+fn u32be(b: &[u8], at: usize) -> Result<u32> {
+    let end = at.checked_add(4).context("datagram offset overflow")?;
+    b.get(at..end)
+        .and_then(|s| <&[u8; 4]>::try_from(s).ok())
+        .map(|s| u32::from_be_bytes(*s))
+        .context("truncated datagram u32")
 }
 pub fn mapped(a: SocketAddr) -> SocketAddr {
     match a {
@@ -45,28 +53,28 @@ pub fn punch(nonce: u16, remote_port: u16, local_port: u16, kind: u8) -> [u8; 7]
 }
 pub fn valid_punch(b: &[u8], nonce: u16) -> bool {
     b.len() == 7
-        && u16be(b, 0) == nonce
-        && u16be(b, 2) != 0
-        && u16be(b, 4) != 0
-        && matches!(b[6], b'P' | b'A' | b'C')
+        && u16be(b, 0).is_ok_and(|v| v == nonce)
+        && u16be(b, 2).is_ok_and(|v| v != 0)
+        && u16be(b, 4).is_ok_and(|v| v != 0)
+        && matches!(b.get(6), Some(b'P' | b'A' | b'C'))
 }
 
 /// Parse a correlated UDP endpoint discovery response.
 pub fn mapped_response(data: &[u8], transaction: &[u8; 16]) -> Result<SocketAddr> {
     ensure!(
-        data.len() >= 20 && u16be(data, 0) == 0x0101 && data[4..20] == *transaction,
+        data.len() >= 20 && u16be(data, 0)? == 0x0101 && data[4..20] == *transaction,
         "UES response correlation/type"
     );
     ensure!(
-        u16be(data, 2) as usize == data.len() - 20,
+        u16be(data, 2)? as usize == data.len() - 20,
         "UES response length"
     );
     let mut at = 20;
     let mut mapped = None;
     while at < data.len() {
         ensure!(data.len() - at >= 4, "truncated UES attribute");
-        let kind = u16be(data, at);
-        let len = u16be(data, at + 2) as usize;
+        let kind = u16be(data, at)?;
+        let len = u16be(data, at + 2)? as usize;
         at += 4;
         ensure!(len <= data.len() - at, "truncated UES value");
         if kind == 1 {
@@ -76,7 +84,7 @@ pub fn mapped_response(data: &[u8], transaction: &[u8; 16]) -> Result<SocketAddr
             );
             let ip =
                 std::net::Ipv4Addr::new(data[at + 4], data[at + 5], data[at + 6], data[at + 7]);
-            let port = u16be(data, at + 2);
+            let port = u16be(data, at + 2)?;
             ensure!(
                 port != 0 && !ip.is_unspecified() && !ip.is_multicast() && !ip.is_broadcast(),
                 "invalid UES mapping"
@@ -670,10 +678,11 @@ impl Enet {
     }
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
         ensure!(self.pending.len() < 256, "UDP send window exhausted");
+        ensure!(command.len() > 2, "truncated ENET command");
         // A refused datagram stays pending and is retransmitted shortly; only a
         // real socket error fails the channel.
         let sent = self.transmit(&command)?;
-        let key = (command[1], u16be(&command, 2));
+        let key = (command[1], u16be(&command, 2)?);
         let now = Instant::now();
         let last = if sent { now } else { refused_last(now) };
         if key.0 == 0 && self.oldest_pending.is_none() {
@@ -903,14 +912,14 @@ impl Enet {
         if b.len() < 8 {
             return Ok(());
         }
-        if u32be(b, 0) != crate::session::enet_checksum(b) {
+        if u32be(b, 0)? != crate::session::enet_checksum(b) {
             return Ok(());
         }
-        let id = u16be(b, 4);
+        let id = u16be(b, 4)?;
         if id & 0x7fff != 0 && !(self.incoming_nonce.is_some() && id & 0x7fff == 0x7fff) {
             return Ok(());
         }
-        let time = if id & 0x8000 != 0 { u16be(b, 6) } else { 0 };
+        let time = if id & 0x8000 != 0 { u16be(b, 6)? } else { 0 };
         let mut at = if id & 0x8000 != 0 { 8 } else { 6 };
         const SIZES: [usize; 12] = [0, 8, 40, 36, 8, 4, 6, 8, 24, 8, 12, 16];
         for _ in 0..32 {
@@ -924,11 +933,11 @@ impl Enet {
             ensure!(b.len() - at >= size, "truncated ENET command body");
             let c = &b[at..at + size];
             let channel = c[1];
-            let seq = u16be(c, 2);
+            let seq = u16be(c, 2)?;
             at += size;
             let len = match kind {
-                6 => u16be(c, 4) as usize,
-                7..=9 => u16be(c, 6) as usize,
+                6 => u16be(c, 4)? as usize,
+                7..=9 => u16be(c, 6)? as usize,
                 _ => 0,
             };
             ensure!(len <= b.len() - at, "truncated ENET data");
@@ -941,16 +950,16 @@ impl Enet {
                         && channel == 255
                         && seq == 1
                         && c[0] == 0x82
-                        && u16be(c, 4) < 0x7fff
-                        && u32be(c, 12) == 1
-                        && u32be(c, 24) == 5000
-                        && u32be(c, 28) == 2
-                        && u32be(c, 32) == 2,
+                        && u16be(c, 4)? < 0x7fff
+                        && u32be(c, 12)? == 1
+                        && u32be(c, 24)? == 5000
+                        && u32be(c, 28)? == 2
+                        && u32be(c, 32)? == 2,
                     "ENET incoming CONNECT mismatch"
                 );
                 if self.remote_id == 0x7fff {
-                    self.remote_id = u16be(c, 4);
-                    self.mtu = (u16be(c, 6) as usize).clamp(576, self.mtu);
+                    self.remote_id = u16be(c, 4)?;
+                    self.mtu = (u16be(c, 6)? as usize).clamp(576, self.mtu);
                     self.cookie.copy_from_slice(&c[36..40]);
                     let mut verify = vec![0x83, 255, 0, 1];
                     verify.extend(0u16.to_be_bytes());
@@ -961,7 +970,7 @@ impl Enet {
                     self.queue(verify)?;
                 } else {
                     ensure!(
-                        self.remote_id == u16be(c, 4) && self.cookie == c[36..40],
+                        self.remote_id == u16be(c, 4)? && self.cookie == c[36..40],
                         "ENET changed CONNECT"
                     );
                 }
@@ -974,15 +983,15 @@ impl Enet {
                             && channel == 255
                             && seq == 1
                             && c[0] == 0x83
-                            && u32be(c, 12) == 1
-                            && u32be(c, 24) == 5000
-                            && u32be(c, 28) == 2
-                            && u32be(c, 32) == 2,
+                            && u32be(c, 12)? == 1
+                            && u32be(c, 24)? == 5000
+                            && u32be(c, 28)? == 2
+                            && u32be(c, 32)? == 2,
                         "ENET verification mismatch"
                     );
-                    self.remote_id = u16be(c, 4);
+                    self.remote_id = u16be(c, 4)?;
                     ensure!(self.remote_id < 0x7fff, "ENET peer id");
-                    self.mtu = (u16be(c, 6) as usize).clamp(576, self.mtu);
+                    self.mtu = (u16be(c, 6)? as usize).clamp(576, self.mtu);
                     self.remove_pending((255, 1));
                     self.connected = true;
                 }
@@ -991,10 +1000,10 @@ impl Enet {
             // so the sender retransmits it, instead of failing the channel.
             let accepted = match kind {
                 1 => {
-                    let acknowledged = self.remove_pending((channel, u16be(c, 4)));
+                    let acknowledged = self.remove_pending((channel, u16be(c, 4)?));
                     if self.incoming_nonce.is_some()
                         && channel == 255
-                        && u16be(c, 4) == 1
+                        && u16be(c, 4)? == 1
                         && acknowledged.is_some()
                     {
                         self.connected = true;
@@ -1063,11 +1072,11 @@ impl Enet {
             && (ahead == 1 || (self.ordered.len() < 256 && self.ready.len() < 256))
     }
     fn fragment(&mut self, c: &[u8], payload: &[u8]) -> Result<bool> {
-        let start = u16be(c, 4);
-        let count = u32be(c, 8);
-        let index = u32be(c, 12);
-        let total = u32be(c, 16) as usize;
-        let offset = u32be(c, 20) as usize;
+        let start = u16be(c, 4)?;
+        let count = u32be(c, 8)?;
+        let index = u32be(c, 12)?;
+        let total = u32be(c, 16)? as usize;
+        let offset = u32be(c, 20)? as usize;
         let ahead = start.wrapping_sub(self.incoming);
         if ahead == 0 || ahead > 0x8000 || self.ordered.contains_key(&start) {
             return Ok(true);
@@ -1081,7 +1090,7 @@ impl Enet {
             "UDP fragment bounds"
         );
         ensure!(
-            u16be(c, 2) == start.wrapping_add(index as u16),
+            u16be(c, 2)? == start.wrapping_add(index as u16),
             "UDP fragment sequence"
         );
         let full = !self.fragments.contains_key(&start) && self.fragments.len() >= 16;
@@ -1315,8 +1324,11 @@ mod tests {
     fn received_command(remote: &UdpSocket) -> Vec<u8> {
         let mut wire = [0; 4096];
         let len = remote.recv(&mut wire).unwrap();
-        assert_eq!(u16be(&wire, 4), 0x8000);
-        assert_eq!(u32be(&wire, 0), crate::session::enet_checksum(&wire[..len]));
+        assert_eq!(u16be(&wire, 4).unwrap(), 0x8000);
+        assert_eq!(
+            u32be(&wire, 0).unwrap(),
+            crate::session::enet_checksum(&wire[..len])
+        );
         wire[8..len].to_vec()
     }
     fn refresh_retry_deadline(enet: &mut Enet) {
@@ -1809,7 +1821,7 @@ mod tests {
             .unwrap();
         assert_eq!(remote.recv(&mut received).unwrap(), 16);
         assert_eq!(received[8], 1);
-        assert_eq!(u16be(&received, 12), RECEIVE_WINDOW + 1);
+        assert_eq!(u16be(&received, 12).unwrap(), RECEIVE_WINDOW + 1);
         assert_eq!(e.ready.pop_front().unwrap(), b"later");
     }
 

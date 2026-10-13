@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenRad
+Comment=OpenRad native desktop VPN client
+Exec=openrad-desktop
+Icon=openrad
+Terminal=false
+Categories=Network;
+StartupWMClass=OpenRad

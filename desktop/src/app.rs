@@ -3500,12 +3500,33 @@ fn dot(ui: &mut egui::Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 3., color);
 }
 fn logo(ui: &mut egui::Ui, size: f32) {
+    // Same mark as assets/logo.svg (canonical) and the Android launcher
+    // foreground: mint roof over a blue bar on a 108x108 grid.
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
-    let c = rect.center();
-    for offset in [-7., 7.] {
-        ui.painter()
-            .circle_stroke(c + Vec2::new(offset, 0.), 8., Stroke::new(2.8, MINT));
-    }
+    let map = |x: f32, y: f32| {
+        egui::pos2(
+            rect.left() + x / 108. * rect.width(),
+            rect.top() + y / 108. * rect.height(),
+        )
+    };
+    let roof = vec![
+        map(54., 22.),
+        map(82., 70.),
+        map(68., 70.),
+        map(54., 46.),
+        map(40., 70.),
+        map(26., 70.),
+    ];
+    ui.painter()
+        .add(egui::Shape::convex_polygon(roof, MINT, Stroke::NONE));
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            map(34., 74.),
+            Vec2::new(40. / 108. * rect.width(), 6. / 108. * rect.height()),
+        ),
+        0.,
+        BLUE,
+    );
 }
 fn metric(
     ui: &mut egui::Ui,

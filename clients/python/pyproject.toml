@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openrad-python"
+version = "0.2.0"
+description = "Linux Radmin client with asyncio memory channels and a localhost UDP API"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+license = {file = "LICENSE"}
+classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3"]
+
+[project.optional-dependencies]
+fast = ["pycryptodome>=3.15"]
+
+[project.scripts]
+openrad = "openrad:main"
+
+[tool.setuptools]
+py-modules = ["openrad", "radvpn", "radproto"]
+
+[tool.setuptools.data-files]
+"share/openrad-python/fixtures" = ["fixtures/reference.json", "fixtures/network-verifier.json"]

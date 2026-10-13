@@ -1,0 +1,33 @@
+# Gradle / Kotlin
+.gradle/
+.kotlin/
+build/
+*/build/
+local.properties
+
+# Artefatos e assinatura (nunca commitar chaves)
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
+keystore.properties
+
+# IDE / SO
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# SDK/emulador locais
+sdk/
+*.avd/
+
+# Dados locais: identidades, capturas, relatórios (ver AGENTS.md › Segurança)
+profiles/
+captures/
+reports/
+*.log
+debug-endpoint.json
+emulator-endpoint.json

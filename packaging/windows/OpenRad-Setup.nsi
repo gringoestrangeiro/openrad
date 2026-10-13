@@ -17,6 +17,12 @@ VIAddVersionKey "ProductName" "OpenRad"
 VIAddVersionKey "FileDescription" "OpenRad offline setup and launcher"
 VIAddVersionKey "FileVersion" "${OPENRAD_VERSION}"
 VIAddVersionKey "LegalCopyright" "OpenRad contributors; bundled components retain their licenses"
+; Installer icon. The offline packager (scripts/package-windows-installer.py)
+; drops assets/logo.ico into the payload; without it the default icon is kept.
+; (Classic UI, no MUI: `Icon` is the effective directive; MUI_ICON would be inert.)
+!if /FileExists "${PAYLOAD_DIR}/logo.ico"
+  Icon "${PAYLOAD_DIR}/logo.ico"
+!endif
 
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
@@ -61,6 +67,55 @@ Function LaunchDesktop
             SetErrorLevel 1
         ${EndIf}
     ${EndIf}
+FunctionEnd
+
+Function StopOpenRadForInstall
+    ; Best-effort shutdown of a previous install so File /r does not hit a
+    ; locked openrad.exe ("Error opening file for writing"). Every failure is
+    ; ignored: a fresh install has no $INSTDIR yet, and taskkill may be absent.
+    IfFileExists "$INSTDIR\openrad.exe" 0 +2
+        ExecWait '"$INSTDIR\openrad.exe" stop'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad.exe /T'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-desktop.exe /T'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-setup-helper.exe /T'
+    ClearErrors
+    Sleep 500
+FunctionEnd
+
+Function ConfirmOpenRadClosed
+    ; Prompt with Retry/Cancel while the desktop window or a CLI background
+    ; process is still present, instead of failing mid-copy inside File /r.
+    Call StopOpenRadForInstall
+  openrad_check:
+    FindWindow $0 "" "OpenRad"
+    ${If} $0 != 0
+        Goto openrad_busy
+    ${EndIf}
+    ClearErrors
+    ExecWait '$\"$SYSDIR\cmd.exe$\" /C tasklist /FI $\"IMAGENAME eq openrad.exe$\" | $\"$SYSDIR\findstr.exe$\" /I /C:$\"openrad.exe$\"' $1
+    ${If} ${Errors}
+        ; tasklist/findstr unavailable: fall through to the copy stage, where a
+        ; locked file still aborts with guidance instead of a silent skip.
+        ; Never treat a probe failure as "busy".
+        ClearErrors
+        Return
+    ${EndIf}
+    ${If} $1 == 0
+        Goto openrad_busy
+    ${EndIf}
+    Return
+  openrad_busy:
+    IfSilent openrad_cancel
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "OpenRad is still running. Close OpenRad Desktop and stop the background service before installing.$\r$\n$\r$\nIn the installed folder run: openrad stop$\r$\nThen choose Retry. Choose Cancel to quit setup.$\r$\n$\r$\nDo NOT choose Ignore on any file-write error: a skipped file fails the integrity check after copying and forces a reinstall." IDRETRY openrad_retry IDCANCEL openrad_cancel
+  openrad_retry:
+    Call StopOpenRadForInstall
+    Goto openrad_check
+  openrad_cancel:
+    SetErrorLevel 1
+    Quit
 FunctionEnd
 
 Function .onInit
@@ -165,15 +220,29 @@ Function .onInit
         ${EndIf}
     ${EndIf}
     installation_required:
-    FindWindow $0 "" "OpenRad"
-    ${If} $0 != 0
-        MessageBox MB_OK|MB_ICONEXCLAMATION "Close OpenRad Desktop before installing an update or repairing setup."
-        SetErrorLevel 1
-        Quit
-    ${EndIf}
+    Call ConfirmOpenRadClosed
 FunctionEnd
 
 Section "OpenRad" Main
+    ; Re-stop right before copying: .onInit already prompted, but a restart in
+    ; between would otherwise surface as NSIS "Error opening file for writing".
+    ; Delete /REBOOTOK schedules a locked executable for removal on reboot and
+    ; sets the reboot flag; a set flag aborts here with guidance instead of
+    ; letting Ignore leave a half-updated install that fails the worker
+    ; integrity check afterwards.
+    DetailPrint "Stopping previous OpenRad processes..."
+    Call StopOpenRadForInstall
+    ClearErrors
+    Delete /REBOOTOK "$INSTDIR\openrad.exe"
+    ClearErrors
+    Delete /REBOOTOK "$INSTDIR\openrad-desktop.exe"
+    ClearErrors
+    Delete /REBOOTOK "$INSTDIR\openrad-setup-helper.exe"
+    ClearErrors
+    IfRebootFlag 0 locked_reboot_done
+        MessageBox MB_OK|MB_ICONINFORMATION "A previous OpenRad file is still locked by Windows. Restart Windows and run setup again to finish the update. Do not click Ignore on file-write errors."
+        Abort
+    locked_reboot_done:
     SetOutPath "$INSTDIR"
     SetOverwrite on
     File /r "${PAYLOAD_DIR}/*"
@@ -229,7 +298,24 @@ Function un.onInit
     ${EndIf}
 FunctionEnd
 
+Function un.StopOpenRadForRemove
+    ; Uninstaller counterpart of StopOpenRadForInstall: best-effort, ignored
+    ; failures, so the exact-file deletion list below does not hit locked
+    ; executables.
+    IfFileExists "$INSTDIR\openrad.exe" 0 +2
+        ExecWait '"$INSTDIR\openrad.exe" stop'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad.exe /T'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-desktop.exe /T'
+    ClearErrors
+    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-setup-helper.exe /T'
+    ClearErrors
+    Sleep 500
+FunctionEnd
+
 Section "Uninstall"
+    Call un.StopOpenRadForRemove
     ClearErrors
     ExecWait '"$INSTDIR\openrad-setup-helper.exe" --error-file "$TEMP\openrad-uninstall-error.txt" remove-adapter --install-dir "$INSTDIR"' $0
     ${If} ${Errors}

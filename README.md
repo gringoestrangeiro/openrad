@@ -9,6 +9,36 @@ Famatech. Linux is the established platform. Windows x64 support is experimental
 and has so far been tested on Windows 10. macOS support is planned, but
 development has not started.
 
+## Clients
+
+This repository is a monorepo with three clients sharing one wire format:
+
+| Client | Path | Status | Version |
+| --- | --- | --- | --- |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 1.5.0 |
+| Android | [`clients/android/`](clients/android/README.md) | alpha | — |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 0.2.0 |
+
+The Rust client is the source of truth for the wire format, the
+`tests/fixtures/` vectors, and `locales/messages.json`. The Android and
+Python clients mirror those files; `python3 scripts/check-sync.py` fails
+when the mirrors diverge.
+
+Quick build per client (run inside each directory):
+
+```sh
+# Rust (from repo root, requires Rust 1.95+)
+cargo build --workspace --release --locked
+
+# Android (from clients/android/, requires JDK 17)
+./scripts/setup-android-sdk.sh  # first time only
+./scripts/build.sh              # produces app/build/outputs/apk/debug/app-debug.apk
+
+# Python (from clients/python/, requires Python 3.10+)
+python3 -m venv .venv && .venv/bin/python -m pip install .
+.venv/bin/python run_tests.py
+```
+
 ## Features
 
 - Desktop and headless CLI clients backed by the same VPN engine.

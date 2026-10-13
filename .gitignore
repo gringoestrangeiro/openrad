@@ -61,3 +61,16 @@ Thumbs.db
 *~
 *.swp
 *.swo
+
+# Android client (clients/android/)
+clients/android/build/
+clients/android/.gradle/
+clients/android/app/build/
+clients/android/local.properties
+*.apk
+*.jks
+
+# Python client (clients/python/)
+clients/python/__pycache__/
+clients/python/.venv/
+*.pyc

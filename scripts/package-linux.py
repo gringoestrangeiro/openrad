@@ -71,6 +71,17 @@ def main():
             target = output / source
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / source, target)
+        # Freedesktop icon + launcher (canonical mark in assets/logo.svg).
+        # Install with: cp openrad.desktop ~/.local/share/applications/
+        # and cp -r icons/* ~/.local/share/icons/ (or the /usr/share/ equivalents).
+        shutil.copy2(ROOT / 'packaging/openrad.desktop', output / 'openrad.desktop')
+        for size in [16, 32, 48, 256]:
+            target = output / f'icons/hicolor/{size}x{size}/apps/openrad.png'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / f'assets/logo-{size}.png', target)
+        scalable = output / 'icons/hicolor/scalable/apps/openrad.svg'
+        scalable.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / 'assets/logo.svg', scalable)
         _support.copy_release_history(output)
         license_notices(metadata, output, platform='Linux')
         rust_notice = args.rust_notice

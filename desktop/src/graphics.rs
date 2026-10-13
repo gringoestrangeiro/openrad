@@ -125,12 +125,23 @@ fn wgpu_setup(software: bool) -> egui_wgpu::WgpuSetupCreateNew {
 #[path = "graphics/software_test.rs"]
 pub(crate) mod software_test;
 
+/// Decode the canonical window icon (assets/logo.svg rendered to PNG).
+/// Returns `None` (no icon) instead of failing startup when the asset is
+/// missing or undecodable; eframe already vendors the PNG decoder.
+fn app_icon() -> Option<eframe::egui::IconData> {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../assets/logo-256.png")).ok()
+}
+
 fn native_options(attempt: Attempt) -> eframe::NativeOptions {
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_inner_size([1120., 800.])
+        .with_min_inner_size([780., 540.])
+        .with_app_id("org.openrad.desktop");
+    if let Some(icon) = app_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let mut native = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1120., 800.])
-            .with_min_inner_size([780., 540.])
-            .with_app_id("org.openrad.desktop"),
+        viewport,
         run_and_return: true,
         renderer: eframe::Renderer::Glow,
         ..Default::default()

@@ -1,0 +1,31 @@
+name: sync-check
+
+on:
+  push:
+    paths:
+      - 'tests/fixtures/**'
+      - 'locales/**'
+      - 'clients/android/app/src/test/resources/fixtures/**'
+      - 'clients/android/app/src/main/res/values*/**'
+      - 'clients/python/fixtures/**'
+      - 'scripts/check-sync.py'
+      - '.github/workflows/sync-check.yml'
+  pull_request:
+    paths:
+      - 'tests/fixtures/**'
+      - 'locales/**'
+      - 'clients/android/app/src/test/resources/fixtures/**'
+      - 'clients/android/app/src/main/res/values*/**'
+      - 'clients/python/fixtures/**'
+      - 'scripts/check-sync.py'
+      - '.github/workflows/sync-check.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 scripts/check-sync.py

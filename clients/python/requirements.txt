@@ -1,0 +1,2 @@
+# Opcional: acelera o AES; o OpenRAD funciona também sem esta biblioteca.
+pycryptodome>=3.15

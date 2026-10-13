@@ -460,9 +460,11 @@ pub fn prepare_radmin() -> Result<i32> {
 
 pub fn configure(directory: &Path) -> Result<i32> {
     let manifest = Manifest::read(&directory.join("INSTALL-MANIFEST.json"))?;
+    let mismatch = manifest.first_mismatch(directory)?;
     ensure!(
-        manifest.matches(directory)?,
-        "An installed file failed its integrity check. Run setup again"
+        mismatch.is_none(),
+        "An installed file failed its integrity check{}. Do not click Ignore on file-write errors during setup; run `openrad stop`, close OpenRad Desktop, re-run setup as administrator, and if it still fails re-download the installer and verify SHA256SUMS",
+        mismatch.map(|path| format!(": {path}")).unwrap_or_default()
     );
     // Also cover direct worker invocation and a Radmin restart while the
     // installer was copying files. Never create/repair TAP before this succeeds.

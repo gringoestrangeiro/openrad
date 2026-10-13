@@ -1,6 +1,30 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Monorepo map (read this first)
+
+Three clients share one wire format. Work in the client's own directory and
+read its own guide:
+
+- **Rust (stable, canonical, v1.5.0):** `src/`, `desktop/`, `tests/`,
+  `locales/`, `docs/`, `scripts/`, `packaging/` — rules below in this file.
+- **Android (alpha):** `clients/android/` — read
+  [`clients/android/AGENTS.md`](clients/android/AGENTS.md) before touching it.
+- **Python (research, 0.2.0):** `clients/python/` — read
+  [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
+
+| Area | Command (run in that directory) |
+| --- | --- |
+| Repo root (Rust) | `cargo fmt --all -- --check`, `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| `clients/android/` | `./scripts/build.sh`, `./gradlew :app:testDebugUnitTest` |
+| `clients/python/` | `python3 run_tests.py` |
+| Repo root (sync) | `python3 scripts/check-sync.py` |
+
+Sync rule: `tests/fixtures/*.json` and `locales/messages.json` are owned by
+the Rust client. Any wire-format, fixture, or locale change must update the
+`clients/android/` and `clients/python/` mirrors in the same change and keep
+`scripts/check-sync.py` green (CI enforces it via `sync-check.yml`).
+
+## Project Structure & Module Organization (Rust)
 
 OpenRad is a Rust VPN client workspace for Linux and experimental Windows x64:
 
