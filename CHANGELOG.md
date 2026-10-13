@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.0 — 2026-10-13
+
+OpenRad becomes a monorepo: the Android Kotlin client and the Python SDK join
+the Rust desktop and CLI on one shared wire format. See the
+[release notes](docs/releases/2.0.0.md) and
+[file-by-file inventory](docs/releases/2.0.0-changes.md). Windows remains experimental.
+
+- Import `clients/android/` (Kotlin port, TCP plus WiFi-only UDP, packet path about 1.5x faster with byte-identical wire output) and `clients/python/` (stdlib-only SDK, pip-installable from git, 14 tests). The Rust `tests/fixtures/` vectors and `locales/messages.json` stay canonical; `python3 scripts/check-sync.py` and CI fail when the client mirrors diverge.
+- Stop the old Windows service before the installer copies files, so a locked `openrad.exe` no longer forces an integrity-check failure; the setup manifest now names the mismatching file. Truncated UDP datagrams return errors instead of panicking, and the Android `VpnService` closes TUN off the main thread.
+- Normalize branding on the canonical `assets/logo.svg` (PNG/ICO derivatives, redrawn desktop logo, eframe window icon, installer and desktop-file staging).
+- Validate with real live-network playtests through the Python SDK (public-network joins, private-network auth, force-relay channels, 54+20 UDP round-trips with exact bytes), alongside the existing synthetic suites. Native Windows TAP/UAC/interoperability and live throughput measurements remain outstanding.
+
 ## 1.5.0 — 2026-10-12
 
 Fresh Linux and Windows builds include every change since v1.4.0. See the

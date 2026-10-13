@@ -170,7 +170,7 @@
     <string name="identity_none">Ainda sem identidade — ela é criada na primeira conexão.</string>
     <string name="settings_rename_note">Mudar o nome reconecta com a mesma identidade.</string>
     <string name="limitations_title">Limitações no Android</string>
-    <string name="limitations_body">O Android oferece um túnel IP (L3) em vez de Ethernet, então o OpenRad traduz o IPv4 para os peers em software. A descoberta de LAN (broadcast/multicast, ex.: Minecraft) é transportada com \"Enviar broadcasts de saída\" ligado; IPv6 e protocolos não IP não são. TCP direto e relay são suportados; UDP direto ainda não foi implementado.</string>
+    <string name="limitations_body">O Android oferece um túnel IP (L3) em vez de Ethernet, então o OpenRad traduz o IPv4 para os peers em software. A descoberta de LAN (broadcast/multicast, ex.: Minecraft) é transportada com \"Enviar broadcasts de saída\" ligado; IPv6 e protocolos não IP não são. TCP direto, UDP direto no Wi-Fi e relay são suportados; em dados móveis usa-se apenas relay.</string>
     <string name="name_invalid">O nome da rede deve ter 1–255 caracteres, sem caracteres de controle.</string>
     <string name="password_invalid">A senha deve ter 6–256 caracteres, sem caracteres de controle.</string>
     <string name="settings_outgoing_broadcasts_hint">Enquanto conectado, multicast (224.0.0.0/4) e broadcasts 255.255.255.255 passam pelo OpenRad, para a descoberta de LAN (ex.: Minecraft) chegar aos peers. A descoberta no Wi-Fi local (transmissão de tela, jogos no mesmo Wi-Fi) fica pausada nesse período.</string>

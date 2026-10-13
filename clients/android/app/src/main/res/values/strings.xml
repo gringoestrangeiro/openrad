@@ -178,7 +178,7 @@
     <string name="identity_none">No identity yet — it is created on the first connection.</string>
     <string name="settings_rename_note">Changing the name reconnects with the same identity.</string>
     <string name="limitations_title">Android limitations</string>
-    <string name="limitations_body">Android offers an IP (L3) tunnel instead of Ethernet, so OpenRad translates IPv4 to peers in software. LAN discovery (broadcast/multicast, e.g. Minecraft) is carried when \"Send outgoing broadcasts\" is on; IPv6 and non-IP protocols are not. Direct TCP and relay are supported; direct UDP is not implemented yet.</string>
+    <string name="limitations_body">Android offers an IP (L3) tunnel instead of Ethernet, so OpenRad translates IPv4 to peers in software. LAN discovery (broadcast/multicast, e.g. Minecraft) is carried when \"Send outgoing broadcasts\" is on; IPv6 and non-IP protocols are not. Direct TCP, direct UDP on WiFi, and relay are supported; on mobile data relay-only is used.</string>
     <string name="name_invalid">The network name must have 1–255 characters, without control characters.</string>
     <string name="password_invalid">The password must have 6–256 characters, without control characters.</string>
     <string name="settings_outgoing_broadcasts_hint">While connected, multicast (224.0.0.0/4) and 255.255.255.255 broadcasts go through OpenRad, so LAN discovery such as Minecraft reaches your peers. Local Wi-Fi discovery (casting, games on the same Wi-Fi) pauses meanwhile.</string>

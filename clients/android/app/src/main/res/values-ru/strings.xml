@@ -170,7 +170,7 @@
     <string name="identity_none">Идентичности пока нет — она создаётся при первом подключении.</string>
     <string name="settings_rename_note">Смена имени переподключает с той же идентичностью.</string>
     <string name="limitations_title">Ограничения Android</string>
-    <string name="limitations_body">Android предоставляет IP-туннель (L3) вместо Ethernet, поэтому OpenRad программно транслирует IPv4 для пиров. Обнаружение по LAN (broadcast/multicast, например Minecraft) передаётся, когда включена отправка исходящих широковещательных пакетов; IPv6 и не-IP протоколы не передаются. Поддерживаются прямой TCP и ретранслятор; прямой UDP пока не реализован.</string>
+    <string name="limitations_body">Android предоставляет IP-туннель (L3) вместо Ethernet, поэтому OpenRad программно транслирует IPv4 для пиров. Обнаружение по LAN (broadcast/multicast, например Minecraft) передаётся, когда включена отправка исходящих широковещательных пакетов; IPv6 и не-IP протоколы не передаются. Поддерживаются прямой TCP, прямой UDP по Wi-Fi и ретранслятор; в мобильных сетях используется только ретранслятор.</string>
     <string name="name_invalid">Имя сети должно содержать 1–255 символов без управляющих символов.</string>
     <string name="password_invalid">Пароль должен содержать 6–256 символов без управляющих символов.</string>
     <string name="settings_outgoing_broadcasts_hint">Пока подключено, multicast (224.0.0.0/4) и широковещание 255.255.255.255 идут через OpenRad, поэтому обнаружение по LAN (например, Minecraft) доходит до пиров. Обнаружение в локальной сети Wi-Fi (трансляция экрана, игры в той же Wi-Fi) в это время приостанавливается.</string>

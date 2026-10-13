@@ -170,7 +170,7 @@
     <string name="identity_none">Chưa có danh tính — sẽ được tạo ở lần kết nối đầu tiên.</string>
     <string name="settings_rename_note">Đổi tên sẽ kết nối lại với cùng danh tính.</string>
     <string name="limitations_title">Giới hạn trên Android</string>
-    <string name="limitations_body">Android cung cấp đường hầm IP (L3) thay vì Ethernet, nên OpenRad dịch IPv4 tới peer bằng phần mềm. Tìm LAN (broadcast/multicast, ví dụ Minecraft) được truyền khi bật \"Gửi broadcast đi\"; IPv6 và giao thức không phải IP thì không. Hỗ trợ TCP trực tiếp và relay; UDP trực tiếp chưa được triển khai.</string>
+    <string name="limitations_body">Android cung cấp đường hầm IP (L3) thay vì Ethernet, nên OpenRad dịch IPv4 tới peer bằng phần mềm. Tìm LAN (broadcast/multicast, ví dụ Minecraft) được truyền khi bật \"Gửi broadcast đi\"; IPv6 và giao thức không phải IP thì không. Hỗ trợ TCP trực tiếp, UDP trực tiếp trên Wi-Fi và relay; trên dữ liệu di động chỉ dùng relay.</string>
     <string name="name_invalid">Tên mạng phải có 1–255 ký tự, không chứa ký tự điều khiển.</string>
     <string name="password_invalid">Mật khẩu phải có 6–256 ký tự, không chứa ký tự điều khiển.</string>
     <string name="settings_outgoing_broadcasts_hint">Khi đang kết nối, multicast (224.0.0.0/4) và broadcast 255.255.255.255 đi qua OpenRad để tính năng tìm LAN (ví dụ Minecraft) đến được các peer. Việc tìm thiết bị trong Wi-Fi cục bộ (truyền màn hình, chơi cùng Wi-Fi) tạm dừng trong thời gian đó.</string>
