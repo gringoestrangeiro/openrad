@@ -1,16 +1,18 @@
 # Changelog
 
-## 2.0.0 — 2026-10-13
+## 2.0.0 — 2026-10-14
 
 OpenRad becomes a monorepo: the Android Kotlin client and the Python SDK join
 the Rust desktop and CLI on one shared wire format. See the
 [release notes](docs/releases/2.0.0.md) and
 [file-by-file inventory](docs/releases/2.0.0-changes.md). Windows remains experimental.
 
-- Import `clients/android/` (Kotlin port, TCP plus WiFi-only UDP, packet path about 1.5x faster with byte-identical wire output) and `clients/python/` (stdlib-only SDK, pip-installable from git, 14 tests). The Rust `tests/fixtures/` vectors and `locales/messages.json` stay canonical; `python3 scripts/check-sync.py` and CI fail when the client mirrors diverge.
-- Stop the old Windows service before the installer copies files, so a locked `openrad.exe` no longer forces an integrity-check failure; the setup manifest now names the mismatching file. Truncated UDP datagrams return errors instead of panicking, and the Android `VpnService` closes TUN off the main thread.
-- Normalize branding on the canonical `assets/logo.svg` (PNG/ICO derivatives, redrawn desktop logo, eframe window icon, installer and desktop-file staging).
-- Validate with real live-network playtests through the Python SDK (public-network joins, private-network auth, force-relay channels, 54+20 UDP round-trips with exact bytes), alongside the existing synthetic suites. Native Windows TAP/UAC/interoperability and live throughput measurements remain outstanding.
+- Import `clients/android/` (Kotlin port, beta, TCP plus Wi-Fi-only UDP, packet path about 1.5x faster with byte-identical wire output) and `clients/python/` (stdlib-only SDK, pip-installable from git). The Rust `tests/fixtures/` vectors and `locales/messages.json` stay canonical; `python3 scripts/check-sync.py` and CI fail when the client mirrors diverge. The release ships a signed Android APK (`com.openrad.mobile`).
+- The Windows installer asks before touching a running OpenRad, stops it gracefully with its own bundled `openrad stop` (never an executable already in the install folder), closes the desktop window, and offers Retry/Cancel while an installed file is still in use; it never force-terminates processes. The setup worker names the mismatching file on integrity failures.
+- UDP parsers return errors on truncated or overflowing datagrams, and ENET commands shorter than their 4-byte header are rejected before transmission. All new errors are translated.
+- Android: the TUN reader no longer leaks a thread on every interface rebuild, and a node rename restarts the engine inside the VPN service so the service cannot stop itself underneath the new session. `VpnService` closes the TUN off the main thread.
+- Normalize branding on the canonical `assets/logo.svg` (PNG/ICO derivatives, redrawn desktop logo, window/executable/installer icons). Linux archives add `org.openrad.desktop.desktop`, matching the window app_id, and `install-desktop-entry.sh` for a per-user menu entry with an absolute launcher path.
+- Validation: the Linux workspace suites, Linux/Windows Clippy, Windows test compilation, Android unit tests, Python suites and a Wine installer-flow regression pass. Native Windows TAP/UAC/interoperability and live throughput remain unmeasured.
 
 ## 1.5.0 — 2026-10-12
 

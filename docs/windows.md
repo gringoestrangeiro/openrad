@@ -598,6 +598,11 @@ on Linux:
 
 ```sh
 rustup target add x86_64-pc-windows-gnu
+# Release executables: strip symbols and remap local build paths so panic
+# locations and import-library symbols never embed the builder's home or
+# checkout directory.
+CARGO_PROFILE_RELEASE_STRIP=symbols \
+CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$HOME/.rustup=/rustup --remap-path-prefix=$PWD=/openrad" \
 cargo build --workspace --release --target x86_64-pc-windows-gnu --locked
 cargo test --workspace --target x86_64-pc-windows-gnu --no-run --locked
 cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu --locked -- -D warnings

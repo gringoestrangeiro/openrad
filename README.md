@@ -74,7 +74,8 @@ for protocol and transport details.
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
 Version **2.0.0** includes freshly built Linux x86-64 and Windows x64 packages,
-an offline Windows installer, build metadata, dependency notices, and checksums.
+an offline Windows installer, a signed Android APK (beta), build metadata,
+dependency notices, and checksums.
 Enable **Settings → Peer IP** to show per-peer direct or relay transport addresses
 while connected. The packet path uses sliced checksums, pipelined CBC receive and
 8 KiB read-ahead; a full UDP send buffer retries as congestion instead of failing
@@ -87,6 +88,8 @@ validation, and platform limitations, and the
 - **Windows:** Run `OpenRad-Setup.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
+- **Android (beta):** Install `openrad-2.0.0-android.apk` (Android 8.0 or newer).
+  See the [Android client guide](clients/android/README.md).
 
 ## Quick start
 
