@@ -678,11 +678,13 @@ impl Enet {
     }
     fn queue(&mut self, command: Vec<u8>) -> Result<()> {
         ensure!(self.pending.len() < 256, "UDP send window exhausted");
-        ensure!(command.len() > 2, "truncated ENET command");
+        // Header (command, channel, reliable sequence): parse it before anything
+        // reaches the wire, so a malformed command is never sent untracked.
+        ensure!(command.len() >= 4, "truncated ENET command");
+        let key = (command[1], u16be(&command, 2)?);
         // A refused datagram stays pending and is retransmitted shortly; only a
         // real socket error fails the channel.
         let sent = self.transmit(&command)?;
-        let key = (command[1], u16be(&command, 2)?);
         let now = Instant::now();
         let last = if sent { now } else { refused_last(now) };
         if key.0 == 0 && self.oldest_pending.is_none() {
@@ -1868,6 +1870,16 @@ mod tests {
         e.ingest(&packet(&[1, 255, 0, 0, 0, 1, 0, 42])).unwrap();
         assert!(e.pending.is_empty());
         assert!(e.next_retry.is_none());
+    }
+
+    #[test]
+    fn truncated_command_is_rejected_before_it_reaches_the_wire() {
+        let (mut e, remote) = pair();
+        assert!(e.queue(vec![0x85, 255, 0]).is_err());
+        assert!(e.pending.is_empty());
+        remote.set_nonblocking(true).unwrap();
+        let error = remote.recv(&mut [0; 64]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]

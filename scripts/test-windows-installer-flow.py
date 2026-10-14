@@ -91,8 +91,20 @@ def main():
     run(['--repair', '--no-launch'], 'OpenRadFixture', 2, 1, 'repair with --no-launch')
     run([], 'OpenRadFresh', 1, 1, 'custom folder overrides previous install location')
     run([], 'OpenRadFresh', 1, 2, 'repeat uses recorded install location', custom=False)
-    (test / 'wine-prefix/drive_c/OpenRadFresh/Uninstall-OpenRad.exe').unlink()
-    run(['--no-launch'], 'OpenRadFresh', 2, 2, 'missing uninstaller repairs registration', custom=False)
+    drive = test / 'wine-prefix/drive_c'
+    held = subprocess.Popen([args.wine, str(drive / 'OpenRadFresh/openrad.exe'), 'hold'],
+                            env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+    if held.poll() is not None:
+        raise AssertionError('Held openrad.exe fixture exited before setup ran')
+    run(['--repair', '--no-launch'], 'OpenRadFresh', 2, 2,
+        'unattended repair stops a running install via the bundled binary', custom=False)
+    held.wait(timeout=30)
+    stopper = (drive / 'stop-executable.txt').read_text()
+    if 'openradfresh' in stopper.lower() or 'openrad-stop.exe' not in stopper.lower():
+        raise AssertionError(f'Setup ran an installed executable to stop OpenRad: {stopper}')
+    (drive / 'OpenRadFresh/Uninstall-OpenRad.exe').unlink()
+    run(['--no-launch'], 'OpenRadFresh', 3, 2, 'missing uninstaller repairs registration', custom=False)
     denied = test / 'wine-prefix/drive_c/radmin-prepare-denied.txt'
     denied.write_text('synthetic denial')
     blocked = subprocess.run([args.wine, str(setup), '/S', '--no-launch', '/D=C:\\OpenRadBlocked'], env=environment, timeout=30, capture_output=True, text=True)

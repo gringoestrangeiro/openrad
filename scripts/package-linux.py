@@ -71,10 +71,11 @@ def main():
             target = output / source
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / source, target)
-        # Freedesktop icon + launcher (canonical mark in assets/logo.svg).
-        # Install with: cp openrad.desktop ~/.local/share/applications/
-        # and cp -r icons/* ~/.local/share/icons/ (or the /usr/share/ equivalents).
-        shutil.copy2(ROOT / 'packaging/openrad.desktop', output / 'openrad.desktop')
+        # Freedesktop icon + launcher (canonical mark in assets/logo.svg). The
+        # entry is named after the window app_id; install-desktop-entry.sh
+        # registers it per user with this folder's absolute Exec path.
+        shutil.copy2(ROOT / 'packaging/org.openrad.desktop.desktop', output / 'org.openrad.desktop.desktop')
+        shutil.copy2(ROOT / 'packaging/install-desktop-entry.sh', output / 'install-desktop-entry.sh')
         for size in [16, 32, 48, 256]:
             target = output / f'icons/hicolor/{size}x{size}/apps/openrad.png'
             target.parent.mkdir(parents=True, exist_ok=True)

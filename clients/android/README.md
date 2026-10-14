@@ -38,6 +38,16 @@ Install on a device/emulator:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Release build (signed only when you supply a key kept outside the repo):
+
+```sh
+./gradlew :app:assembleRelease -Popenrad.signingProperties=/path/to/signing.properties
+# app/build/outputs/apk/release/app-release.apk (package com.openrad.mobile)
+```
+
+The properties file holds `storeFile`, `storePassword`, `keyAlias` and
+`keyPassword`. Without it the release APK is unsigned.
+
 ## Manual test (real device)
 
 1. Open OpenRad and tap **Connect**. Android asks for VPN consent (once). On the first connection the app **registers this device** with the service and stores the identity encrypted (Keystore); later connections reuse the same identity.

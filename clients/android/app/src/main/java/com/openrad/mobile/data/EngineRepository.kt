@@ -258,8 +258,8 @@ class EngineRepository(
         if (previous.nodeName != normalized.nodeName && engine() != null) {
             // Same as the daemon's Rename: keep the identity, reconnect with the new name.
             push(app.getString(R.string.rename_reconnecting))
-            withContext(Dispatchers.IO) { EngineHost.stop() }
-            connect()
+            // The service restarts the engine itself, so its watcher cannot tear down the new one.
+            OpenRadVpnService.send(app, OpenRadVpnService.ACTION_RECONNECT)
         }
     }
 

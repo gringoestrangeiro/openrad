@@ -14,6 +14,18 @@ sudo apt install build-essential pkg-config libx11-dev libxkbcommon-dev libwayla
 
 Equivalent distribution packages are fine. X11 or Wayland, a usable OpenGL driver, and a desktop D-Bus session are required for the GUI. GNOME Keyring or a compatible unlocked Secret Service provider must be running. The headless CLI does not need a display. A CLI-initialized private file profile works without a credential-store service; using an existing desktop identity requires its unlocked Secret Service store. The desktop uses the system `curl` HTTPS client for background release checks.
 
+## Application menu entry
+
+From an extracted release archive, add OpenRad to your application menu with:
+
+```sh
+./install-desktop-entry.sh
+```
+
+It installs `org.openrad.desktop.desktop` and the icons under
+`~/.local/share` for the current user only, pointing at this folder's
+`openrad-desktop` by absolute path. Run it again after moving the folder.
+
 ## TAP permissions
 
 Confirm that `/dev/net/tun` is available. If the kernel module is not loaded, the system administrator can load it with `sudo modprobe tun`.

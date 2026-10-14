@@ -6,4 +6,4 @@ Exec=openrad-desktop
 Icon=openrad
 Terminal=false
 Categories=Network;
-StartupWMClass=OpenRad
+StartupWMClass=org.openrad.desktop

@@ -33,6 +33,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramSocket
@@ -53,8 +55,14 @@ class OpenRadVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var tunVip: Int? = null
     private var reader: Thread? = null
-    private val readerStop = AtomicBoolean(false)
+    // One flag per reader generation: re-establishing must never clear the
+    // stop request of a reader that is still winding down.
+    private var readerStop: AtomicBoolean? = null
     private val tunLock = Any()
+    // Serializes Disconnect and the rename restart; while a restart is in
+    // progress the watcher must not treat its intermediate STOPPED as the end.
+    private val lifecycle = Mutex()
+    @Volatile private var restarting = false
     private val protector = object : SocketProtector {
         override fun protect(socket: Socket): Boolean = this@OpenRadVpnService.protect(socket)
         override fun protect(socket: DatagramSocket): Boolean = this@OpenRadVpnService.protect(socket)
@@ -69,6 +77,10 @@ class OpenRadVpnService : VpnService() {
             ACTION_RETRY_INTERFACE -> {
                 synchronized(tunLock) { tunVip = null }
                 EngineHost.state.value.takeIf { it.phase == EngineState.Phase.ONLINE }?.vip?.let { establish(it) }
+                return START_STICKY
+            }
+            ACTION_RECONNECT -> {
+                reconnect()
                 return START_STICKY
             }
             ACTION_UPDATE_CONFIG -> {
@@ -96,7 +108,7 @@ class OpenRadVpnService : VpnService() {
                                 notify(getString(R.string.notification_online, Ip.format(vip ?: 0), connected))
                             }
                             EngineState.Phase.STOPPED, EngineState.Phase.ERROR -> {
-                                if (EngineHost.engine?.isRunning != true) {
+                                if (!restarting && EngineHost.engine?.isRunning != true) {
                                     closeTun()
                                     stopSelfCompat()
                                 }
@@ -110,9 +122,34 @@ class OpenRadVpnService : VpnService() {
 
     private fun disconnect() {
         scope.launch {
-            EngineHost.stop()
-            closeTun()
-            stopSelfCompat()
+            lifecycle.withLock {
+                EngineHost.stop()
+                closeTun()
+                stopSelfCompat()
+            }
+        }
+    }
+
+    /**
+     * Rename: same identity, new engine (like the daemon's Rename). Runs inside
+     * the service so the watcher cannot stop it between the old engine's
+     * STOPPED and the new engine's start.
+     */
+    private fun reconnect() {
+        if (EngineHost.engine?.isRunning != true) return
+        restarting = true
+        startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
+        scope.launch {
+            try {
+                lifecycle.withLock {
+                    EngineHost.stop()
+                    // The new engine starts detached; ONLINE re-establishes the TUN for it.
+                    closeTun()
+                    connect()
+                }
+            } finally {
+                restarting = false
+            }
         }
     }
 
@@ -158,15 +195,16 @@ class OpenRadVpnService : VpnService() {
             }
         }
         EngineHost.setInterface(true, null)
-        readerStop.set(false)
-        reader = Thread({ readLoop(pfd) }, "openrad-tun").apply {
+        val stop = AtomicBoolean(false)
+        readerStop = stop
+        reader = Thread({ readLoop(pfd, stop) }, "openrad-tun").apply {
             isDaemon = true
             start()
         }
     }
 
     /** Reads IPv4 packets with poll(2) so closing the interface stops the thread promptly. */
-    private fun readLoop(pfd: ParcelFileDescriptor) {
+    private fun readLoop(pfd: ParcelFileDescriptor, stop: AtomicBoolean) {
         val fd = pfd.fileDescriptor
         val input = FileInputStream(fd)
         val buffer = ByteArray(Tunnel.MTU + 64)
@@ -174,7 +212,7 @@ class OpenRadVpnService : VpnService() {
             this.fd = fd
             events = OsConstants.POLLIN.toShort()
         }
-        while (!readerStop.get()) {
+        while (!stop.get()) {
             try {
                 poll.revents = 0
                 if (Os.poll(arrayOf(poll), 500) <= 0) continue
@@ -185,7 +223,7 @@ class OpenRadVpnService : VpnService() {
                 if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR) continue
                 break
             } catch (_: java.io.IOException) {
-                if (readerStop.get()) break
+                if (stop.get()) break
             } catch (_: Exception) {
                 break
             }
@@ -200,7 +238,8 @@ class OpenRadVpnService : VpnService() {
     }
 
     private fun closeTunLocked(): Thread? {
-        readerStop.set(true)
+        readerStop?.set(true)
+        readerStop = null
         EngineHost.packetSink = null
         EngineHost.setInterface(false, null)
         runCatching { tun?.close() }
@@ -269,6 +308,7 @@ class OpenRadVpnService : VpnService() {
         const val ACTION_DISCONNECT = "com.openrad.mobile.DISCONNECT"
         const val ACTION_RETRY_INTERFACE = "com.openrad.mobile.RETRY_INTERFACE"
         const val ACTION_UPDATE_CONFIG = "com.openrad.mobile.UPDATE_CONFIG"
+        const val ACTION_RECONNECT = "com.openrad.mobile.RECONNECT"
 
         fun engineConfig(s: AppSettings) = EngineConfig(
             nodeName = s.nodeName,

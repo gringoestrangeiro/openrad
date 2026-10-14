@@ -34,6 +34,7 @@ Var Params
 Var Worker
 Var ErrorFile
 Var SetupMutex
+Var StopApproved
 
 Page instfiles
 UninstPage uninstConfirm
@@ -69,53 +70,89 @@ Function LaunchDesktop
     ${EndIf}
 FunctionEnd
 
-Function StopOpenRadForInstall
-    ; Best-effort shutdown of a previous install so File /r does not hit a
-    ; locked openrad.exe ("Error opening file for writing"). Every failure is
-    ; ignored: a fresh install has no $INSTDIR yet, and taskkill may be absent.
-    IfFileExists "$INSTDIR\openrad.exe" 0 +2
-        ExecWait '"$INSTDIR\openrad.exe" stop'
+!define WM_CLOSE 0x0010
+
+!macro OpenRadProbeLocked NAME
+    ; A running image cannot be opened for writing, so this reports only the
+    ; processes that would block this copy: other users' services or portable
+    ; copies outside $INSTDIR are not affected.
+    ${If} $R0 == 0
+    ${AndIf} ${FileExists} "$INSTDIR\${NAME}"
+        ClearErrors
+        FileOpen $1 "$INSTDIR\${NAME}" a
+        ${If} ${Errors}
+            StrCpy $R0 1
+        ${Else}
+            FileClose $1
+        ${EndIf}
+    ${EndIf}
+!macroend
+
+Function ProbeOpenRadRunning
+    ; $R0 = 1 while the desktop window exists or an installed executable is in
+    ; use; 0 otherwise. Nothing is stopped here.
+    StrCpy $R0 0
+    FindWindow $0 "" "OpenRad"
+    ${If} $0 != 0
+        StrCpy $R0 1
+        Return
+    ${EndIf}
+    !insertmacro OpenRadProbeLocked "openrad.exe"
+    !insertmacro OpenRadProbeLocked "openrad-desktop.exe"
+    !insertmacro OpenRadProbeLocked "openrad-setup-helper.exe"
     ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad.exe /T'
+FunctionEnd
+
+Function StopOpenRadGracefully
+    ; Only after the user approved it (or /S requested an unattended update).
+    ; Runs the payload's own openrad.exe from $PLUGINSDIR: an existing
+    ; $INSTDIR\openrad.exe may sit in a /D= or recorded folder that a standard
+    ; user can write, and this setup is elevated. `openrad stop` is the
+    ; documented Stop, so the service removes its TAP routes itself; no process
+    ; is force-terminated.
+    ${IfNot} ${FileExists} "$PLUGINSDIR\openrad-stop.exe"
+        SetOutPath "$PLUGINSDIR"
+        File /oname=openrad-stop.exe "${PAYLOAD_DIR}/openrad.exe"
+    ${EndIf}
     ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-desktop.exe /T'
+    ExecWait '"$PLUGINSDIR\openrad-stop.exe" stop'
     ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-setup-helper.exe /T'
-    ClearErrors
-    Sleep 500
+    ; The desktop handles WM_CLOSE like its own close button and exits once
+    ; its backend is down.
+    FindWindow $0 "" "OpenRad"
+    ${If} $0 != 0
+        SendMessage $0 ${WM_CLOSE} 0 0 /TIMEOUT=5000
+    ${EndIf}
+    Sleep 1000
 FunctionEnd
 
 Function ConfirmOpenRadClosed
-    ; Prompt with Retry/Cancel while the desktop window or a CLI background
-    ; process is still present, instead of failing mid-copy inside File /r.
-    Call StopOpenRadForInstall
-  openrad_check:
-    FindWindow $0 "" "OpenRad"
-    ${If} $0 != 0
-        Goto openrad_busy
-    ${EndIf}
-    ClearErrors
-    ExecWait '$\"$SYSDIR\cmd.exe$\" /C tasklist /FI $\"IMAGENAME eq openrad.exe$\" | $\"$SYSDIR\findstr.exe$\" /I /C:$\"openrad.exe$\"' $1
-    ${If} ${Errors}
-        ; tasklist/findstr unavailable: fall through to the copy stage, where a
-        ; locked file still aborts with guidance instead of a silent skip.
-        ; Never treat a probe failure as "busy".
-        ClearErrors
+    ; Ask before disconnecting anything, then offer Retry/Cancel while the
+    ; desktop or an installed executable is still in use, instead of failing
+    ; mid-copy inside File /r.
+    Call ProbeOpenRadRunning
+    ${If} $R0 == 0
         Return
     ${EndIf}
-    ${If} $1 == 0
-        Goto openrad_busy
+    IfSilent openrad_stop
+    MessageBox MB_OKCANCEL|MB_ICONQUESTION "OpenRad is running. To continue, setup will disconnect the VPN, stop the OpenRad service and close OpenRad Desktop.$\r$\n$\r$\nChoose OK to stop OpenRad and continue, or Cancel to quit setup." IDOK openrad_stop
+    Goto openrad_cancel
+  openrad_stop:
+    StrCpy $StopApproved 1
+    Call StopOpenRadGracefully
+  openrad_check:
+    Call ProbeOpenRadRunning
+    ${If} $R0 == 0
+        Return
     ${EndIf}
-    Return
-  openrad_busy:
     IfSilent openrad_cancel
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "OpenRad is still running. Close OpenRad Desktop and stop the background service before installing.$\r$\n$\r$\nIn the installed folder run: openrad stop$\r$\nThen choose Retry. Choose Cancel to quit setup.$\r$\n$\r$\nDo NOT choose Ignore on any file-write error: a skipped file fails the integrity check after copying and forces a reinstall." IDRETRY openrad_retry IDCANCEL openrad_cancel
-  openrad_retry:
-    Call StopOpenRadForInstall
-    Goto openrad_check
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "OpenRad is still running. Close OpenRad Desktop and stop the background service before installing (another Windows user may be running it).$\r$\n$\r$\nIn the installed folder run: openrad stop$\r$\nThen choose Retry. Choose Cancel to quit setup.$\r$\n$\r$\nDo NOT choose Ignore on any file-write error: a skipped file fails the integrity check after copying and forces a reinstall." IDRETRY openrad_retry
   openrad_cancel:
     SetErrorLevel 1
     Quit
+  openrad_retry:
+    Call StopOpenRadGracefully
+    Goto openrad_check
 FunctionEnd
 
 Function .onInit
@@ -138,6 +175,7 @@ Function .onInit
         Quit
     ${EndIf}
     StrCpy $NoLaunch 0
+    StrCpy $StopApproved 0
     ${GetParameters} $Params
     ClearErrors
     ${GetOptions} $Params "--no-launch" $0
@@ -224,14 +262,25 @@ Function .onInit
 FunctionEnd
 
 Section "OpenRad" Main
-    ; Re-stop right before copying: .onInit already prompted, but a restart in
-    ; between would otherwise surface as NSIS "Error opening file for writing".
+    ; Re-check right before copying: a restart after .onInit would otherwise
+    ; surface as NSIS "Error opening file for writing". Stop again only when
+    ; the user already approved it there.
     ; Delete /REBOOTOK schedules a locked executable for removal on reboot and
     ; sets the reboot flag; a set flag aborts here with guidance instead of
     ; letting Ignore leave a half-updated install that fails the worker
     ; integrity check afterwards.
-    DetailPrint "Stopping previous OpenRad processes..."
-    Call StopOpenRadForInstall
+    Call ProbeOpenRadRunning
+    ${If} $R0 == 1
+    ${AndIf} $StopApproved == 1
+        DetailPrint "Stopping OpenRad..."
+        Call StopOpenRadGracefully
+        Call ProbeOpenRadRunning
+    ${EndIf}
+    ${If} $R0 == 1
+        MessageBox MB_OK|MB_ICONSTOP "OpenRad started again during setup. Disconnect and close OpenRad, then run setup again." /SD IDOK
+        SetErrorLevel 1
+        Abort
+    ${EndIf}
     ClearErrors
     Delete /REBOOTOK "$INSTDIR\openrad.exe"
     ClearErrors
@@ -299,19 +348,12 @@ Function un.onInit
 FunctionEnd
 
 Function un.StopOpenRadForRemove
-    ; Uninstaller counterpart of StopOpenRadForInstall: best-effort, ignored
-    ; failures, so the exact-file deletion list below does not hit locked
-    ; executables.
+    ; Graceful `openrad stop` only, after the uninstall confirmation page; no
+    ; process is force-terminated. Running $INSTDIR\openrad.exe adds no trust:
+    ; this uninstaller and the setup helper below come from the same folder.
     IfFileExists "$INSTDIR\openrad.exe" 0 +2
         ExecWait '"$INSTDIR\openrad.exe" stop'
     ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad.exe /T'
-    ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-desktop.exe /T'
-    ClearErrors
-    ExecWait '"$SYSDIR\taskkill.exe" /F /IM openrad-setup-helper.exe /T'
-    ClearErrors
-    Sleep 500
 FunctionEnd
 
 Section "Uninstall"

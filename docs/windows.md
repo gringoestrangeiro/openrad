@@ -133,10 +133,15 @@ stop the background service from the installed folder (default
 .\openrad.exe stop
 ```
 
-Then run the setup EXE and approve the UAC administrator prompt. Setup also
-attempts this shutdown itself and asks with Retry/Cancel while the desktop
-window or an `openrad.exe` background process is still present; choose Retry
-after stopping, or Cancel to quit setup.
+Then run the setup EXE and approve the UAC administrator prompt. If the desktop
+window is open or an installed OpenRad executable is still in use, setup first
+asks before doing anything: OK disconnects the VPN with its own bundled
+`openrad stop` (never the copy already in the install folder) and closes the
+desktop window; Cancel quits setup. Setup never force-terminates OpenRad. If an
+executable is still in use afterwards, for example by another Windows user's
+service, setup asks with Retry/Cancel. An unattended `/S` run performs the same
+graceful stop without asking and exits with code 1 if OpenRad is still in use.
+The uninstaller runs the installed `openrad stop` after its confirmation page.
 
 If setup reports `Error opening file for writing` for
 `C:\Program Files\OpenRad\openrad.exe` (Abort/Retry/Ignore), the old executable

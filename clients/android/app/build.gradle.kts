@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -21,8 +23,29 @@ android {
         }
     }
 
+    // Release signing stays outside the repo: pass a properties file
+    // (storeFile, storePassword, keyAlias, keyPassword) with
+    // -Popenrad.signingProperties=PATH or OPENRAD_SIGNING_PROPERTIES=PATH.
+    // Without it, assembleRelease produces an unsigned APK.
+    val signingFile = ((findProperty("openrad.signingProperties") as String?)
+        ?: System.getenv("OPENRAD_SIGNING_PROPERTIES"))?.let(::File)
+    val releaseSigning = signingFile?.takeIf { it.isFile }?.let { file ->
+        Properties().apply { file.inputStream().use(::load) }
+    }
+    signingConfigs {
+        if (releaseSigning != null) {
+            create("release") {
+                storeFile = File(releaseSigning.getProperty("storeFile"))
+                storePassword = releaseSigning.getProperty("storePassword")
+                keyAlias = releaseSigning.getProperty("keyAlias")
+                keyPassword = releaseSigning.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

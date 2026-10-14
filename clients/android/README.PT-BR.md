@@ -38,6 +38,16 @@ Instalar no aparelho/emulador:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Build de release (assinado só quando você fornece uma chave mantida fora do repositório):
+
+```sh
+./gradlew :app:assembleRelease -Popenrad.signingProperties=/caminho/para/signing.properties
+# app/build/outputs/apk/release/app-release.apk (pacote com.openrad.mobile)
+```
+
+O arquivo de propriedades contém `storeFile`, `storePassword`, `keyAlias` e
+`keyPassword`. Sem ele, o APK de release não é assinado.
+
 ## Teste manual (aparelho real)
 
 1. Abra o OpenRad e toque **Conectar**. O Android pede o consentimento de VPN (uma vez). Na primeira conexão o app **registra este aparelho** no serviço e guarda a identidade criptografada (Keystore); as próximas conexões reutilizam a mesma identidade.

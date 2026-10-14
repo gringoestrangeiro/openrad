@@ -28,6 +28,23 @@ int wmain(int argc, wchar_t **argv) {
         return counter(executable, L"desktop-count.txt");
     }
     for (int i = 1; i < argc; ++i) {
+        if (!wcscmp(argv[i], L"hold")) {
+            /* Stands in for a running installed openrad.exe until "stop". */
+            for (int tick = 0; tick < 300; ++tick) {
+                if (GetFileAttributesW(L"C:\\hold-released.txt") != INVALID_FILE_ATTRIBUTES) return 0;
+                Sleep(100);
+            }
+            return 1;
+        }
+        if (!wcscmp(argv[i], L"stop")) {
+            FILE *file = _wfopen(L"C:\\stop-executable.txt", L"w");
+            if (!file) return 1;
+            fwprintf(file, L"%ls", executable);
+            fclose(file);
+            file = _wfopen(L"C:\\hold-released.txt", L"w");
+            if (file) fclose(file);
+            return 0;
+        }
         if (!wcscmp(argv[i], L"prepare-radmin")) {
             int result = counter(L"C:", L"radmin-prepare-count.txt");
             if (result) return result;

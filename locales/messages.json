@@ -2169,6 +2169,21 @@
     "Время ожидания при перегрузке отправки UDP истекло",
     "Tắc nghẽn gửi UDP hết thời gian chờ"
   ],
+  "datagram offset overflow": [
+    "Estouro de deslocamento no datagrama",
+    "Переполнение смещения в датаграмме",
+    "Tràn độ lệch trong datagram"
+  ],
+  "truncated datagram u16": [
+    "Datagrama truncado (u16)",
+    "Обрезанная датаграмма (u16)",
+    "Datagram bị cắt ngắn (u16)"
+  ],
+  "truncated datagram u32": [
+    "Datagrama truncado (u32)",
+    "Обрезанная датаграмма (u32)",
+    "Datagram bị cắt ngắn (u32)"
+  ],
   "truncated ENET command": [
     "Comando ENET truncado",
     "Обрезанная команда ENET",
