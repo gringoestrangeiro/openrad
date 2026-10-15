@@ -57,8 +57,10 @@ fn adapter_rank(device: wgpu::DeviceType, software: bool) -> Option<u8> {
         return (device == wgpu::DeviceType::Cpu).then_some(0);
     }
     match device {
-        wgpu::DeviceType::DiscreteGpu => Some(0),
-        wgpu::DeviceType::IntegratedGpu => Some(1),
+        // This utility UI is not graphics-intensive. Prefer the integrated
+        // adapter to avoid waking a discrete GPU just to draw the VPN window.
+        wgpu::DeviceType::IntegratedGpu => Some(0),
+        wgpu::DeviceType::DiscreteGpu => Some(1),
         wgpu::DeviceType::VirtualGpu => Some(2),
         wgpu::DeviceType::Other => Some(3),
         wgpu::DeviceType::Cpu => None,
@@ -222,6 +224,17 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hardware_prefers_integrated_adapter_and_never_selects_cpu() {
+        assert_eq!(
+            adapter_rank(wgpu::DeviceType::IntegratedGpu, false),
+            Some(0)
+        );
+        assert_eq!(adapter_rank(wgpu::DeviceType::DiscreteGpu, false), Some(1));
+        assert_eq!(adapter_rank(wgpu::DeviceType::Cpu, false), None);
+        assert_eq!(adapter_rank(wgpu::DeviceType::Cpu, true), Some(0));
+    }
 
     #[test]
     fn missing_opengl_and_hardware_automatically_use_software() {

@@ -782,7 +782,9 @@ impl App {
         }
     }
     fn consume(&mut self, ctx: &egui::Context) {
-        for notice in self.backend.notices.try_iter().collect::<Vec<_>>() {
+        // Notices::try_iter already returns an owned, drained iterator.
+        // Avoid allocating another Vec for every UI refresh.
+        for notice in self.backend.notices.try_iter() {
             match notice {
                 Notice::Phase(phase, message) => {
                     self.busy = false;

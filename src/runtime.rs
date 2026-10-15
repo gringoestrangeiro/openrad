@@ -231,6 +231,10 @@ pub(crate) fn contain_panic<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
 pub const PING_TIMEOUT: Duration = Duration::from_millis(3000);
 pub const PING_TIMEOUT_MESSAGE: &str = "Peer not responding — they may be using a strict firewall.";
 pub const NETWORK_JOIN_DELAY: Duration = Duration::from_millis(50);
+// Snapshot publication is separate from packet processing and keepalives.
+// Lowering the publication rate avoids copying large rosters four times a
+// second when the UI only needs periodic status and traffic counters.
+pub const SNAPSHOT_REPORT_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_JOINS: usize = 128;
 
 #[derive(Clone, Copy)]
@@ -2095,7 +2099,7 @@ pub fn run(
                 }
                 snapshot.elapsed_secs = started.elapsed().as_secs();
                 report(Update::State(snapshot.clone()));
-                next_report = Instant::now() + Duration::from_millis(250);
+                next_report = Instant::now() + SNAPSHOT_REPORT_INTERVAL;
             }
             let wait = if command_received {
                 Duration::ZERO

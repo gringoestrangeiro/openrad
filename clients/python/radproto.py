@@ -1172,13 +1172,19 @@ def checksum(data):
     data = bytes(data)  # Padding must not mutate a caller's bytearray packet.
     if len(data) % 2:
         data += b"\0"
-    total = sum(struct.unpack(f">{len(data)//2}H", data))
+    # Cast without unpacking a tuple of Python integers for each 16-bit word.
+    # memoryview uses host byte order, so swap the folded sum on little-endian hosts.
+    total = sum(memoryview(data).cast("H"))
     while total >> 16:
         total = (total & 0xffff) + (total >> 16)
+    if sys.byteorder == "little":
+        total = ((total & 0xff) << 8) | (total >> 8)
     return (~total) & 0xffff
 
 
 def arp_frame(source_mac, source_ip, target_mac, target_ip, *, reply=False):
+    if len(source_mac) != 6 or len(target_mac) != 6:
+        raise ValueError('Ethernet addresses must be six bytes')
     dst = target_mac if reply else b"\xff" * 6
     return (dst + source_mac + b"\x08\x06"
             + struct.pack(">HHBBH", 1, 0x0800, 6, 4, 2 if reply else 1)
@@ -1187,6 +1193,12 @@ def arp_frame(source_mac, source_ip, target_mac, target_ip, *, reply=False):
 
 
 def ipv4_frame(source_mac, target_mac, source_ip, target_ip, payload, protocol=1):
+    if len(source_mac) != 6 or len(target_mac) != 6:
+        raise ValueError('Ethernet addresses must be six bytes')
+    if len(payload) > 65535 - 20:
+        raise ValueError('IPv4 payload exceeds the 16-bit total length')
+    if type(protocol) is not int or not 0 <= protocol <= 255:
+        raise ValueError('IPv4 protocol must be an 8-bit integer')
     header = struct.pack(">BBHHHBBH4s4s", 0x45, 0, 20+len(payload), 0, 0, 64,
                          protocol, 0, IPv4Address(source_ip).packed, IPv4Address(target_ip).packed)
     header = header[:10] + struct.pack(">H", checksum(header)) + header[12:]
@@ -1568,7 +1580,9 @@ def group_mac(ip):
 
 
 def udp_ipv4(source, target, source_port, target_port, data):
-    if not 1 <= source_port <= 65535 or not 1 <= target_port <= 65535 or len(data) > 1472:
+    if (type(source_port) is not int or type(target_port) is not int
+            or not 1 <= source_port <= 65535 or not 1 <= target_port <= 65535
+            or len(data) > 1472):
         raise ValueError('UDP ports must be 1–65535 and payload at most 1472 bytes')
     udp = struct.pack('>HHHH', source_port, target_port, len(data) + 8, 0) + data
     pseudo = IPv4Address(source).packed + IPv4Address(target).packed + struct.pack('>BBH', 0, 17, len(udp))

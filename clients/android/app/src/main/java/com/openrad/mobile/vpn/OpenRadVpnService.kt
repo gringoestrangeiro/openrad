@@ -212,20 +212,47 @@ class OpenRadVpnService : VpnService() {
             this.fd = fd
             events = OsConstants.POLLIN.toShort()
         }
+        val pollfds = arrayOf(poll)
         while (!stop.get()) {
             try {
                 poll.revents = 0
-                if (Os.poll(arrayOf(poll), 500) <= 0) continue
+                if (Os.poll(pollfds, 500) <= 0) continue
+                when (tunPollAction(
+                    poll.revents.toInt(),
+                    OsConstants.POLLIN,
+                    OsConstants.POLLERR or OsConstants.POLLHUP or OsConstants.POLLNVAL,
+                )) {
+                    TunPollAction.STOP -> break
+                    TunPollAction.WAIT -> continue
+                    TunPollAction.READ -> Unit
+                }
                 val n = input.read(buffer)
-                if (n <= 0) continue
+                // The TUN is non-blocking: Android's FileInputStream returns 0
+                // for EAGAIN after a spurious wakeup. Only -1 (EOF) is terminal.
+                if (n < 0) break
+                if (n == 0) continue
                 EngineHost.engine?.sendIp(buffer, n)
             } catch (e: ErrnoException) {
                 if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR) continue
                 break
             } catch (_: java.io.IOException) {
-                if (stop.get()) break
+                // A persistently invalid/closed fd otherwise loops on POLLIN
+                // and burns CPU. The interface can be retried from the UI.
+                break
             } catch (_: Exception) {
                 break
+            }
+        }
+        // Release the input wrapper even when shutdown came from an older
+        // reader generation. Its descriptor is owned by this TUN generation.
+        runCatching { input.close() }
+        // A previous generation must never clear a TUN established by a
+        // reconnect, rename or manual retry after this reader started.
+        synchronized(tunLock) {
+            if (!stop.get() && readerStop === stop && tun === pfd) {
+                Log.w(TAG, "TUN reader failed; interface can be retried")
+                closeTunLocked()
+                EngineHost.setInterface(false, getString(R.string.interface_failed))
             }
         }
     }
