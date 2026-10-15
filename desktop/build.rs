@@ -33,13 +33,7 @@ fn embed(icon: &Path) -> Result<(), String> {
     }
     let out = PathBuf::from(env::var("OUT_DIR").map_err(|e| e.to_string())?);
     let rc = out.join("openrad-logo.rc");
-    // windres accepts forward slashes even on Windows hosts.
-    let rc_contents = format!(
-        "1 ICON \"{}\"\n",
-        icon.to_string_lossy()
-            .trim_start_matches(r"\\?\")
-            .replace("\\", "/")
-    );
+    let rc_contents = format!("1 ICON \"{}\"\n", rc_path(&icon));
     std::fs::write(&rc, rc_contents).map_err(|e| e.to_string())?;
     let object = out.join("openrad-logo.o");
     let candidates = [
@@ -72,4 +66,20 @@ fn embed(icon: &Path) -> Result<(), String> {
         }
     }
     Err(last_error)
+}
+
+/// windres accepts forward slashes on every host, but not the `\\?\` verbatim
+/// prefix that `canonicalize` returns on Windows hosts, nor backslashes, which
+/// a resource script treats as escapes.
+fn rc_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = match text.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    };
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
 }

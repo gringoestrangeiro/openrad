@@ -227,7 +227,10 @@ class OpenRadVpnService : VpnService() {
                     TunPollAction.READ -> Unit
                 }
                 val n = input.read(buffer)
-                if (n <= 0) break // EOF is terminal, not a zero-byte packet to retry.
+                // The TUN is non-blocking: Android's FileInputStream returns 0
+                // for EAGAIN after a spurious wakeup. Only -1 (EOF) is terminal.
+                if (n < 0) break
+                if (n == 0) continue
                 EngineHost.engine?.sendIp(buffer, n)
             } catch (e: ErrnoException) {
                 if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR) continue

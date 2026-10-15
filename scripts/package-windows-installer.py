@@ -69,10 +69,14 @@ def prepare_driver(cache):
             command('git', 'clone', '--depth', '1', '--branch', DRIVER_TAG, 'https://github.com/OpenVPN/tap-windows6.git', str(source))
         if command('git', '-C', str(source), 'rev-parse', 'HEAD') != DRIVER_COMMIT:
             raise RuntimeError("Unexpected TAP-Windows6 corresponding source commit")
-        archived = subprocess.check_output(['git', '-C', str(source), 'archive', '--format=tar', f'--prefix=tap-windows6-{DRIVER_TAG}/', 'HEAD'])
+        # Pin export settings so Linux and Windows hosts produce identical bytes:
+        # Git for Windows defaults to core.eol=crlf, which rewrites text files.
+        archived = subprocess.check_output(['git', '-C', str(source), '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+                                            '-c', 'tar.umask=0002', 'archive', '--format=tar',
+                                            f'--prefix=tap-windows6-{DRIVER_TAG}/', 'HEAD'])
         source_archive.write_bytes(gzip.compress(archived, compresslevel=9, mtime=0))
-    if hashlib.sha256(gzip.decompress(source_archive.read_bytes())).hexdigest() not in ('944961b7a0f7b38ceaf69850e85c073c3d4dfb099979b6e76de7223ebf74e54b', '37f62e39469ca8bc304a00e5f2248006912bbcf775cebb4d0fde5b4a070e0f2a'):
-        raise RuntimeError("Unexpected TAP-Windows6 source archive")
+    if hashlib.sha256(gzip.decompress(source_archive.read_bytes())).hexdigest() != '944961b7a0f7b38ceaf69850e85c073c3d4dfb099979b6e76de7223ebf74e54b':
+        raise RuntimeError("Unexpected TAP-Windows6 source archive; delete the cached archive and retry")
     return driver, source_archive
 
 
