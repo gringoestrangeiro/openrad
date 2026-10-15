@@ -15,9 +15,9 @@ This repository is a monorepo with three clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.0.0 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.0.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.0.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.0.1 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.0.1 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.0.1 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -73,22 +73,22 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **2.0.0** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **2.0.1** includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, a signed Android APK (beta), build metadata,
 dependency notices, and checksums.
 Enable **Settings → Peer IP** to show per-peer direct or relay transport addresses
 while connected. The packet path uses sliced checksums, pipelined CBC receive and
 8 KiB read-ahead; a full UDP send buffer retries as congestion instead of failing
-the channel. Read the [2.0.0 release notes](docs/releases/2.0.0.md) for upgrade behavior,
+the channel. Read the [2.0.1 release notes](docs/releases/2.0.1.md) for upgrade behavior,
 validation, and platform limitations, and the
-[complete change inventory](docs/releases/2.0.0-changes.md) for every changed file.
+[complete change inventory](docs/releases/2.0.1-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
 - **Windows:** Run `OpenRad-Setup.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.0.0-android.apk` (Android 8.0 or newer).
+- **Android (beta):** Install `openrad-2.0.1-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
 
 ## Quick start
@@ -198,7 +198,9 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [2.0.0 release](docs/releases/2.0.0.md) | Packages, upgrading, verification, and limitations |
+| [2.0.1 release](docs/releases/2.0.1.md) | Packages, upgrading, verification, and limitations |
+| [2.0.1 change inventory](docs/releases/2.0.1-changes.md) | File-by-file account of all changes since v2.0.0 |
+| [2.0.0 release](docs/releases/2.0.0.md) | Monorepo with Android and Python clients |
 | [2.0.0 change inventory](docs/releases/2.0.0-changes.md) | File-by-file account of all changes since v1.5.0 |
 
 ## Development

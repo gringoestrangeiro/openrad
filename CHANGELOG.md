@@ -1,12 +1,18 @@
 # Changelog
-## 2.0.1 - Unreleased
 
-- Reduce periodic desktop state polling and redundant notification work.
-- Prefer integrated GPU rendering when available and safe.
-- Harden Android TUN reader cleanup and Python packet validation.
-- Optimize Python checksum and local packet processing.
-- Fix Windows resource paths and NSIS packaging on native Windows builds.
+## 2.0.1 — 2026-10-15
 
+A maintenance release with lighter desktop status updates, Android TUN reader
+hardening, faster Python packet handling and native-Windows packaging fixes.
+See the [release notes](docs/releases/2.0.1.md) and
+[file-by-file inventory](docs/releases/2.0.1-changes.md). Windows remains experimental.
+
+- The engine publishes state snapshots, and the desktop polls the shared service, every 500 ms instead of 250 ms, halving full-roster copies on large networks. Packets, keepalives and RTT probes are unaffected; peer status and traffic counters can take up to about a second to appear. Identical adjacent phase notices are coalesced without reordering phases or operation results, and the UI drains notices without an extra allocation.
+- The wgpu renderer prefers an integrated GPU over a discrete one when both can present to the window, so the VPN window does not wake a discrete GPU. Linux still starts with OpenGL by default.
+- Android: the TUN reader stops on poll errors and EOF instead of spinning, retries spurious zero-byte reads, and marks the interface as failed (retryable from the app) only when it still owns the current TUN, so an older reader can never close a newer interface.
+- Python: the Internet checksum sums 16-bit words through a `memoryview`, local API delivery skips IPv4/UDP parsing when no subscriber needs it, and the packet builders reject malformed MAC lengths, oversized IPv4 payloads, non-integer protocols and ports.
+- Windows packaging: the icon resource path drops the `\\?\` verbatim prefix (keeping UNC shares) for `windres` on Windows hosts, NSIS payload paths use Windows separators, and the TAP-Windows6 corresponding source is exported with pinned line-ending settings so Linux and Windows hosts produce the same audited archive. Packages now include the 1.5.0 and 2.0.0 release notes in their release history.
+- Validation: the Linux workspace suites, Linux/Windows Clippy, Windows test compilation, Android unit tests (including the new TUN poll tests), Python suites and the Wine installer-flow regression pass. Native Windows TAP/UAC/interoperability and on-device Android behavior remain unmeasured.
 
 ## 2.0.0 — 2026-10-14
 
