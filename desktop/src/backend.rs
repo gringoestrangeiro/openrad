@@ -84,13 +84,23 @@ impl Notices {
     pub(crate) fn send(&self, notice: Notice) {
         let replaced = {
             let mut queue = self.lock();
-            if matches!(notice, Notice::Engine(runtime::Update::State(_)))
-                && matches!(
-                    queue.back(),
-                    Some(Notice::Engine(runtime::Update::State(_)))
-                )
-            {
-                Some(std::mem::replace(queue.back_mut().unwrap(), notice))
+            let can_replace = match (&notice, queue.back()) {
+                (
+                    Notice::Engine(runtime::Update::State(_)),
+                    Some(Notice::Engine(runtime::Update::State(_))),
+                ) => true,
+                (Notice::Phase(phase, message), Some(Notice::Phase(old_phase, old_message))) => {
+                    phase == old_phase && message == old_message
+                }
+                _ => false,
+            };
+            if can_replace {
+                // Drop superseded data outside the lock, including large
+                // snapshots. Operation results and phase transitions remain
+                // strictly ordered and are never silently discarded.
+                queue
+                    .back_mut()
+                    .map(|previous| std::mem::replace(previous, notice))
             } else {
                 queue.push_back(notice);
                 None
@@ -431,7 +441,10 @@ fn manager(
             next_status = Instant::now();
         }
         if !reset_failed && Instant::now() >= next_status {
-            next_status = Instant::now() + Duration::from_millis(250);
+            // Full-roster status requests are expensive for large networks;
+            // pace the UI with the engine's published snapshot interval.
+            // Packets and keepalives are not throttled by this status poll.
+            next_status = Instant::now() + runtime::SNAPSHOT_REPORT_INTERVAL;
             match service_status(&dir) {
                 Ok(mut reply) => {
                     service_running = true;
@@ -1077,6 +1090,37 @@ mod tests {
             Some(Notice::Phase(Phase::Disconnected, _))
         ));
         assert_eq!(notices.try_iter().count(), 0);
+    }
+
+    #[test]
+    fn identical_adjacent_phases_are_coalesced_without_losing_transitions() {
+        let notices = Notices::default();
+        notices.send(Notice::Phase(Phase::Connecting, "dialing".into()));
+        notices.send(Notice::Phase(Phase::Connecting, "dialing".into()));
+        notices.send(Notice::Phase(Phase::Connected, "ready".into()));
+        notices.send(Notice::Engine(runtime::Update::Operation {
+            message: "joined".into(),
+            error: false,
+        }));
+        notices.send(Notice::Phase(Phase::Connected, "ready".into()));
+        let received: Vec<_> = notices.try_iter().collect();
+        assert_eq!(received.len(), 4);
+        assert!(matches!(
+            &received[0],
+            Notice::Phase(Phase::Connecting, message) if message == "dialing"
+        ));
+        assert!(matches!(
+            &received[1],
+            Notice::Phase(Phase::Connected, message) if message == "ready"
+        ));
+        assert!(matches!(
+            &received[2],
+            Notice::Engine(runtime::Update::Operation { message, .. }) if message == "joined"
+        ));
+        assert!(matches!(
+            &received[3],
+            Notice::Phase(Phase::Connected, message) if message == "ready"
+        ));
     }
 
     #[test]

@@ -1,4 +1,12 @@
 # Changelog
+## 2.0.1 - Unreleased
+
+- Reduce periodic desktop state polling and redundant notification work.
+- Prefer integrated GPU rendering when available and safe.
+- Harden Android TUN reader cleanup and Python packet validation.
+- Optimize Python checksum and local packet processing.
+- Fix Windows resource paths and NSIS packaging on native Windows builds.
+
 
 ## 2.0.0 — 2026-10-14
 

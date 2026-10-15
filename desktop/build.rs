@@ -34,7 +34,12 @@ fn embed(icon: &Path) -> Result<(), String> {
     let out = PathBuf::from(env::var("OUT_DIR").map_err(|e| e.to_string())?);
     let rc = out.join("openrad-logo.rc");
     // windres accepts forward slashes even on Windows hosts.
-    let rc_contents = format!("1 ICON \"{}\"\n", icon.display());
+    let rc_contents = format!(
+        "1 ICON \"{}\"\n",
+        icon.to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .replace("\\", "/")
+    );
     std::fs::write(&rc, rc_contents).map_err(|e| e.to_string())?;
     let object = out.join("openrad-logo.o");
     let candidates = [

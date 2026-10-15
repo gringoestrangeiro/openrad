@@ -20,8 +20,8 @@ VIAddVersionKey "LegalCopyright" "OpenRad contributors; bundled components retai
 ; Installer icon. The offline packager (scripts/package-windows-installer.py)
 ; drops assets/logo.ico into the payload; without it the default icon is kept.
 ; (Classic UI, no MUI: `Icon` is the effective directive; MUI_ICON would be inert.)
-!if /FileExists "${PAYLOAD_DIR}/logo.ico"
-  Icon "${PAYLOAD_DIR}/logo.ico"
+!if /FileExists "${PAYLOAD_DIR}\logo.ico"
+  Icon "${PAYLOAD_DIR}\logo.ico"
 !endif
 
 !include "LogicLib.nsh"
@@ -112,7 +112,7 @@ Function StopOpenRadGracefully
     ; is force-terminated.
     ${IfNot} ${FileExists} "$PLUGINSDIR\openrad-stop.exe"
         SetOutPath "$PLUGINSDIR"
-        File /oname=openrad-stop.exe "${PAYLOAD_DIR}/openrad.exe"
+        File /oname=openrad-stop.exe "${PAYLOAD_DIR}\openrad.exe"
     ${EndIf}
     ClearErrors
     ExecWait '"$PLUGINSDIR\openrad-stop.exe" stop'
@@ -201,8 +201,8 @@ Function .onInit
     ${EndIf}
     InitPluginsDir
     SetOutPath "$PLUGINSDIR"
-    File /oname=setup-worker.exe "${PAYLOAD_DIR}/openrad-setup-helper.exe"
-    File /oname=expected-manifest.json "${PAYLOAD_DIR}/INSTALL-MANIFEST.json"
+    File /oname=setup-worker.exe "${PAYLOAD_DIR}\openrad-setup-helper.exe"
+    File /oname=expected-manifest.json "${PAYLOAD_DIR}\INSTALL-MANIFEST.json"
     StrCpy $Worker "$PLUGINSDIR\setup-worker.exe"
     StrCpy $ErrorFile "$PLUGINSDIR\setup-error.txt"
     ; Run before both first-time TAP creation and the already-ready launch path.
@@ -294,7 +294,7 @@ Section "OpenRad" Main
     locked_reboot_done:
     SetOutPath "$INSTDIR"
     SetOverwrite on
-    File /r "${PAYLOAD_DIR}/*"
+    File /r "${PAYLOAD_DIR}\*"
     DetailPrint "Setting up the dedicated OpenRad TAP-Windows6 adapter..."
     ClearErrors
     ExecWait '"$Worker" --error-file "$ErrorFile" configure --install-dir "$INSTDIR"' $0

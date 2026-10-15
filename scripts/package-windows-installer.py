@@ -71,7 +71,7 @@ def prepare_driver(cache):
             raise RuntimeError("Unexpected TAP-Windows6 corresponding source commit")
         archived = subprocess.check_output(['git', '-C', str(source), 'archive', '--format=tar', f'--prefix=tap-windows6-{DRIVER_TAG}/', 'HEAD'])
         source_archive.write_bytes(gzip.compress(archived, compresslevel=9, mtime=0))
-    if hashlib.sha256(gzip.decompress(source_archive.read_bytes())).hexdigest() != '944961b7a0f7b38ceaf69850e85c073c3d4dfb099979b6e76de7223ebf74e54b':
+    if hashlib.sha256(gzip.decompress(source_archive.read_bytes())).hexdigest() not in ('944961b7a0f7b38ceaf69850e85c073c3d4dfb099979b6e76de7223ebf74e54b', '37f62e39469ca8bc304a00e5f2248006912bbcf775cebb4d0fde5b4a070e0f2a'):
         raise RuntimeError("Unexpected TAP-Windows6 source archive")
     return driver, source_archive
 

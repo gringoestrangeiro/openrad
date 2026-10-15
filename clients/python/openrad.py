@@ -31,7 +31,7 @@ import radproto as p
 from radvpn import Engine, Framed, MTU, PeerChannel, Profile, Tap, WakeQueue, ensure_identity, has_net_admin, poll_readable, private_json
 
 
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 __version__ = VERSION
 MAGIC = b'ORAD'
 HEADER = struct.Struct('!4sBBHIQI16s')
@@ -221,17 +221,24 @@ class UDPServer:
             self._reply(key, dict(ok=False, error=str(exc)))
 
     def deliver(self, rid, frame):
+        # Filter by peer before parsing: Ethernet-only or unsubscribed API
+        # consumers must not pay for IPv4 and UDP checksum validation.
+        recipients = tuple((address, client) for address, client in self.clients.items()
+                           if not client['peers'] or rid in client['peers'])
+        if not recipients:
+            return
         self.event_sequence = self.event_sequence % 0xffffffff + 1
         sequence, ip, udp = self.event_sequence, None, None
-        if frame[12:14] == b'\x08\x00':
+        want_ipv4 = any('ipv4' in client['subscribe'] for _, client in recipients)
+        want_udp = any('udp' in client['subscribe'] for _, client in recipients)
+        if (want_ipv4 or want_udp) and frame[12:14] == b'\x08\x00':
             try:
                 ip = p.ipv4_packet(frame[14:])[0]
-                udp = p.decode_udp(ip)
+                if want_udp:
+                    udp = p.decode_udp(ip)
             except ValueError:
                 self.engine.count('api_invalid_udp')
-        for address, client in tuple(self.clients.items()):
-            if client['peers'] and rid not in client['peers']:
-                continue
+        for address, client in recipients:
             if 'ethernet' in client['subscribe']:
                 if self.send(address, encode_message(RX_ETHERNET, sequence, self.token, frame, peer=rid)):
                     self.engine.count('api_packet_rx')
@@ -1370,6 +1377,81 @@ def self_test():
             finally:
                 framed.close()
                 b.close()
+
+        def test_checksum_handles_odd_lengths_and_mutable_buffers(self):
+            def reference(data):
+                total = sum((data[i] << 8) | (data[i + 1] if i + 1 < len(data) else 0)
+                            for i in range(0, len(data), 2))
+                while total >> 16:
+                    total = (total & 0xffff) + (total >> 16)
+                return (~total) & 0xffff
+
+            for size in (0, 1, 2, 3, 7, 8, 9, 31, 32, 33, 1472, 1500, 1514, 65535):
+                sample = bytearray((n * 37 + 11) & 0xff for n in range(size))
+                original = sample[:]
+                expected = reference(sample)
+                self.assertEqual(p.checksum(sample), expected)
+                self.assertEqual(p.checksum(memoryview(sample)), expected)
+                self.assertEqual(p.checksum(bytes(sample)), expected)
+                self.assertEqual(sample, original)
+
+        def test_packet_builders_reject_oversize_and_invalid_fields(self):
+            mac = p.mac_for_ip('26.1.2.3')
+            args = (mac, mac, '26.1.2.3', '26.1.2.4')
+            with self.assertRaisesRegex(ValueError, '16-bit total length'):
+                p.ipv4_frame(*args, b'x' * 65516)
+            with self.assertRaisesRegex(ValueError, 'Ethernet addresses'):
+                p.ipv4_frame(mac[:5], mac, '26.1.2.3', '26.1.2.4', b'payload')
+            for invalid in (mac[:5], mac + b'\0'):
+                for source, target in ((invalid, mac), (mac, invalid)):
+                    with self.subTest(mac_length=len(invalid), source=source == invalid):
+                        with self.assertRaisesRegex(ValueError, 'Ethernet addresses'):
+                            p.arp_frame(source, '26.1.2.3', target, '26.1.2.4')
+            for protocol in (-1, 256, True, '17'):
+                with self.subTest(protocol=protocol), self.assertRaisesRegex(ValueError, 'IPv4 protocol'):
+                    p.ipv4_frame(*args, b'payload', protocol=protocol)
+            for port in (-1, 0, 65536, True, '5000'):
+                with self.subTest(port=port), self.assertRaisesRegex(ValueError, 'UDP ports'):
+                    p.udp_ipv4('26.1.2.3', '26.1.2.4', port, 5000, b'payload')
+
+        def test_local_udp_delivery_decodes_only_for_interested_subscribers(self):
+            mac = p.mac_for_ip('26.1.2.3')
+            packet = p.udp_ipv4('26.1.2.3', '26.1.2.4', 5000, 5001, b'hello')
+            frame = mac + mac + b'\x08\x00' + packet
+            server = object.__new__(UDPServer)
+            server.token = bytes(16)
+            server.event_sequence = 0
+            counts, sent = [], []
+            server.engine = SimpleNamespace(count=counts.append)
+            server.send = lambda address, message: (sent.append((address, message)) or True)
+            ethernet_only = {'peers': set(), 'subscribe': {'ethernet'}, 'ports': set()}
+            udp_only = {'peers': set(), 'subscribe': {'udp'}, 'ports': {5001}}
+            ipv4_only = {'peers': set(), 'subscribe': {'ipv4'}, 'ports': set()}
+            server.clients = {}
+            with patch.object(p, 'ipv4_packet', side_effect=AssertionError('no subscribers')):
+                server.deliver(123, frame)
+            self.assertEqual((server.event_sequence, sent), (0, []))
+            server.clients = {('127.0.0.1', 1111): ethernet_only}
+            with patch.object(p, 'ipv4_packet', side_effect=AssertionError('Ethernet only')):
+                server.deliver(123, frame)
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(decode_message(sent[0][1], server.token)[0], RX_ETHERNET)
+            sent.clear()
+            server.clients = {('127.0.0.1', 1112): ipv4_only}
+            with patch.object(p, 'decode_udp', side_effect=AssertionError('IPv4 only')):
+                server.deliver(123, frame)
+            self.assertEqual(decode_message(sent[0][1], server.token)[0], RX_IPV4)
+            sent.clear()
+            server.clients = {('127.0.0.1', 1113): udp_only}
+            server.deliver(123, frame)
+            self.assertEqual(decode_message(sent[0][1], server.token)[0], RX_UDP)
+            self.assertEqual(UDP_RECEIVE.unpack_from(decode_message(sent[0][1], server.token)[-1])[3], 5001)
+            sent.clear()
+            server.clients = {('127.0.0.1', 1113): dict(udp_only, peers={456})}
+            with patch.object(p, 'ipv4_packet', side_effect=AssertionError('wrong peer')):
+                server.deliver(123, frame)
+            self.assertFalse(sent)
+            self.assertEqual(counts, ['api_packet_rx'] * 3)
 
         def test_udp_checksum_source_and_group_routing(self):
             ip = p.udp_ipv4('26.1.2.3', '26.1.2.4', 50001, 50002, b'payload\0\xff')
