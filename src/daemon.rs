@@ -3,6 +3,9 @@
 #[cfg(windows)]
 #[path = "platform/windows_pipe.rs"]
 mod windows_pipe;
+#[cfg(windows)]
+#[path = "platform/windows_spawn.rs"]
+mod windows_spawn;
 
 use crate::{
     diagnostics::Diagnostics,
@@ -21,11 +24,12 @@ use std::os::unix::{
     fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     net::{UnixListener, UnixStream},
 };
+#[cfg(unix)]
+use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     path::PathBuf,
-    process::{Child, Command as ProcessCommand, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender, SyncSender},
@@ -1550,20 +1554,20 @@ pub fn spawn_with_executable(
     if request(dir, &Request::Status).is_ok() {
         return Ok(false);
     }
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
     #[cfg(unix)]
-    options
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let log = options.open(dir.path.join("service.log"))?;
-    let mut command = ProcessCommand::new(executable);
-    command.arg("--data-dir").arg(&dir.path).arg("__daemon");
-    if disable_interface {
-        command.arg("--no-tap");
-    }
-    #[cfg(unix)]
-    {
+    let mut child = {
+        let mut options = OpenOptions::new();
+        options
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let log = options.open(dir.path.join("service.log"))?;
+        let mut command = ProcessCommand::new(executable);
+        command.arg("--data-dir").arg(&dir.path).arg("__daemon");
+        if disable_interface {
+            command.arg("--no-tap");
+        }
         use std::os::unix::process::CommandExt;
         unsafe {
             command.pre_exec(|| {
@@ -1573,18 +1577,18 @@ pub fn spawn_with_executable(
                 Ok(())
             });
         }
-    }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()?
+    };
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
-        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-    }
-    let mut child: Child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(log))
-        .spawn()?;
+    let child = windows_spawn::spawn(executable, &dir.path, disable_interface)?;
+    #[cfg(unix)]
+    let diagnostic_log = dir.path.join("service.log");
+    #[cfg(windows)]
+    let diagnostic_log = early_log::path().with_file_name("cli-daemon-startup.log");
     early_log::child_started(child.id());
     let until = Instant::now() + Duration::from_secs(5);
     loop {
@@ -1592,12 +1596,15 @@ pub fn spawn_with_executable(
             early_log::checkpoint(Stage::ServiceReady);
             return Ok(true);
         }
-        if let Some(status) = child.try_wait()? {
-            early_log::child_exited(status);
+        #[cfg(unix)]
+        let exit_status = child.try_wait()?.map(|status| status.to_string());
+        #[cfg(windows)]
+        let exit_status = child.try_exit_code()?.map(|code| code.to_string());
+        if let Some(status) = exit_status {
             early_log::checkpoint(Stage::ServiceExited);
             bail!(
                 "service exited with {status}; see {}",
-                dir.path.join("service.log").display()
+                diagnostic_log.display()
             );
         }
         if Instant::now() >= until {
@@ -1606,7 +1613,7 @@ pub fn spawn_with_executable(
         ensure!(
             Instant::now() < until,
             "service did not create its control socket; see {}",
-            dir.path.join("service.log").display()
+            diagnostic_log.display()
         );
         thread::sleep(Duration::from_millis(50));
     }

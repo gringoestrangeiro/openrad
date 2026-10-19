@@ -211,6 +211,11 @@ function New-OpenRadRadminResultPipe {
 }
 function Read-OpenRadRadminResult {
     param($Pipe, $Connection)
+    # The error pipe must be consumed while the worker is still running.
+    # Otherwise a synchronous Write() can block worker exit indefinitely.
+    if ($script:polls -ge 4) {
+        throw 'Diagnostic pipe read only after the task exited'
+    }
     return $script:taskError
 }
 function Join-Path {
@@ -321,10 +326,18 @@ foreach ($message in @('synthetic adapter failure: ошибка, não, lỗi', (
         $child.StartInfo.UseShellExecute = $false
         $child.StartInfo.RedirectStandardError = $true
         $child.Start() | Out-Null
+        # A synchronous named-pipe client Write can wait for the server to
+        # consume its message. Waiting for process exit first deadlocks this
+        # test (and used to hide the real worker error).
+        if (-not $connection.AsyncWaitHandle.WaitOne(5000)) {
+            $child.Kill()
+            throw 'Diagnostic worker did not connect within five seconds.'
+        }
+        $received = & $originalResultReader -Pipe $pipe -Connection $connection
         if (-not $child.WaitForExit(5000)) { $child.Kill(); throw 'Diagnostic worker did not exit within five seconds.' }
         Assert-Equal $child.ExitCode 1 'Encoded worker did not report failure'
         $expected = $message.Substring(0, [Math]::Min(1000, $message.Length))
-        Assert-Equal (& $originalResultReader -Pipe $pipe -Connection $connection) $expected 'Actual worker error was lost, truncated incorrectly, or decoded incorrectly'
+        Assert-Equal $received $expected 'Actual worker error was lost, truncated incorrectly, or decoded incorrectly'
         Assert-Equal $child.StandardError.ReadToEnd() '' 'Encoded worker leaked CLIXML instead of reporting through IPC'
     } finally { $pipe.Dispose(); $child.Dispose() }
 }

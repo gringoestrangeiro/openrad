@@ -190,15 +190,9 @@ impl Paths {
             settings == &settings.clone().normalized(),
             "Settings are out of range"
         );
-        let target = self.directory.join("settings.json");
-        let tmp = self
-            .directory
-            .join(format!("settings-{}.tmp", std::process::id()));
-        let mut file = private_file(&tmp, true)?;
-        file.write_all(&serde_json::to_vec_pretty(settings)?)?;
-        file.sync_all()?;
-        fs::rename(tmp, target)?;
-        Ok(())
+        let bytes = serde_json::to_vec_pretty(settings)?;
+        ensure!(bytes.len() < 64 * 1024, "Settings file is too large");
+        atomic_private_json(&self.directory, "settings", &bytes)
     }
     pub fn network_preferences(&self) -> Result<NetworkPreferences> {
         let path = self.directory.join("network-preferences.json");
@@ -216,21 +210,7 @@ impl Paths {
             bytes.len() <= 1024 * 1024,
             "Network preferences file is too large"
         );
-        let target = self.directory.join("network-preferences.json");
-        let tmp = self
-            .directory
-            .join(format!("network-preferences-{}.tmp", std::process::id()));
-        let result = (|| -> Result<()> {
-            let mut file = private_file(&tmp, true)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            fs::rename(&tmp, target)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        result
+        atomic_private_json(&self.directory, "network-preferences", &bytes)
     }
     pub fn entry(&self) -> Result<keyring::Entry> {
         keyring::Entry::new("org.openrad.desktop", &self.directory.to_string_lossy())
@@ -241,6 +221,27 @@ impl Paths {
             }))
     }
 }
+fn atomic_private_json(directory: &Path, stem: &str, bytes: &[u8]) -> Result<()> {
+    let target = directory.join(format!("{stem}.json"));
+    let temporary = directory.join(format!(
+        "{stem}-{}-{}.tmp",
+        std::process::id(),
+        u64::from_le_bytes(openrad::crypto::random_array())
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = private_file(&temporary, true)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn private_file(path: &Path, exclusive: bool) -> Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).read(true);
@@ -360,6 +361,59 @@ mod tests {
             Ok(())
         }
     }
+    #[test]
+    fn failed_settings_save_cleans_up_and_can_be_retried() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-settings-save-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        fs::create_dir(&directory).unwrap();
+        let paths = Paths {
+            directory: directory.clone(),
+        };
+        let target = directory.join("settings.json");
+        fs::create_dir(&target).unwrap();
+        let settings = Settings::default();
+
+        assert!(paths.save_settings(&settings).is_err());
+        assert!(fs::read_dir(&directory).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+
+        fs::remove_dir(&target).unwrap();
+        paths.save_settings(&settings).unwrap();
+        paths.save_settings(&settings).unwrap();
+        assert!(paths.settings().unwrap() == settings);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn orphaned_preferences_temp_file_does_not_block_future_saves() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-preferences-save-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        fs::create_dir(&directory).unwrap();
+        let paths = Paths {
+            directory: directory.clone(),
+        };
+        let old_temporary =
+            directory.join(format!("network-preferences-{}.tmp", std::process::id()));
+        fs::write(&old_temporary, b"interrupted save").unwrap();
+        let preferences = NetworkPreferences::default();
+
+        paths.save_network_preferences(&preferences).unwrap();
+        assert!(paths.network_preferences().unwrap() == preferences);
+        assert_eq!(fs::read(&old_temporary).unwrap(), b"interrupted save");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     fn identity() -> Identity {
         Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap()
     }

@@ -119,9 +119,13 @@ If Windows requests a driver restart, setup reports it and exits with code 3010;
 restart Windows and run the setup EXE again. Close/disconnect an active desktop
 and stop CLI background processes before repair, upgrade or uninstall. Use
 **Uninstall OpenRad** or Windows Installed apps to remove application files and
-only an adapter created by this setup. Shared TAP driver packages, manually
-adopted adapters, profile files and stored identities are retained. Unknown files
-added to the application directory are retained as well.
+only an adapter created by this setup. The last option in Desktop Settings,
+**Uninstall OpenRad**, opens this same Windows uninstaller after a confirmation.
+The desktop closes gracefully; the uninstaller waits for the window to exit
+before continuing. Shared TAP driver packages, manually adopted adapters,
+profile files, saved identities, connection logs and personal settings are
+retained, including when removal starts from Settings. Unknown files added to
+the application directory are retained as well.
 
 ### Upgrading, repairing and locked files
 
@@ -203,8 +207,12 @@ seconds of stable state. It repeats termination and adapter disabling if the
 GUI/service restarts or the adapter is reenabled during this observation.
 Connection recovery then rechecks active interface addresses before proceeding.
 A protected current-user/SYSTEM named pipe returns bounded SYSTEM failure
-details. Errors are readable text and retain failed service/adapter method
-information instead of PowerShell CLIXML.
+details. The coordinator consumes the diagnostic pipe as soon as its
+asynchronous connection completes, before waiting for the task to exit:
+a synchronous worker write may otherwise block indefinitely if the
+coordinator waits for process completion first. Errors remain readable
+text and retain failed service/adapter method information instead of
+PowerShell CLIXML.
 
 This recovery is offline and uses Windows' built-in tools. Microsoft's
 [taskkill reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill),
@@ -336,13 +344,16 @@ Early CLI logs are written automatically, including before profile loading:
 %LOCALAPPDATA%\OpenRad\logs\cli-startup.log
 %LOCALAPPDATA%\OpenRad\logs\cli-daemon-startup.log
 %LOCALAPPDATA%\OpenRad\logs\cli-launcher.log
-%LOCALAPPDATA%\openrad\service.log
 %LOCALAPPDATA%\openrad\diagnostics\connection.jsonl
 ```
 
 `cli-launcher.log` is added by the CLI/Diagnostics shortcut; direct `openrad.exe`
-commands still produce the two startup logs. A custom `--data-dir` moves
-`service.log` and connection diagnostics. The logs record the account SID,
+commands still produce the two startup logs. The background service starts
+without inheriting the CLI's stdout/stderr handles. Its startup and failure
+details remain in `cli-daemon-startup.log`, rather than the profile-local
+`service.log` used on Linux. A custom `--data-dir` moves connection diagnostics
+but not startup logs; use `OPENRAD_LOG_DIR` to relocate the latter.
+The logs record the account SID,
 administrator token, safe command name, daemon PID/readiness/early exit, panic
 backtraces and each TAP configuration stage. They omit command arguments and
 reply data. TAP failures also log their full error chain; the preceding TAP stage

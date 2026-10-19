@@ -645,6 +645,8 @@ pub struct App {
     closing: bool,
     stopped: bool,
     confirm_reset: bool,
+    #[cfg(windows)]
+    confirm_uninstall: bool,
     replacement_pending: bool,
     network_form: Option<NetworkForm>,
     member_confirmation: Option<MemberConfirmation>,
@@ -737,6 +739,8 @@ impl App {
             activity: VecDeque::new(),
             import_path: String::new(),
             confirm_reset: false,
+            #[cfg(windows)]
+            confirm_uninstall: false,
             replacement_pending: false,
             network_form: None,
             member_confirmation: None,
@@ -3200,6 +3204,20 @@ impl App {
         });
         ui.add_space(16.);
         ui.label(RichText::new(language.text("Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate")).size(11.).color(MUTED));
+        #[cfg(windows)]
+        {
+            ui.add_space(22.);
+            card().inner_margin(22).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new(language.text("Uninstall OpenRad")).size(18.).strong().color(RED));
+                ui.add_space(9.);
+                ui.label(RichText::new(language.text("Remove the OpenRad app and its dedicated TAP adapter. Your saved identity, profiles and personal settings will be preserved.")).size(12.).color(MUTED));
+                ui.add_space(12.);
+                if ui.add_enabled(!self.closing, egui::Button::new(RichText::new(language.text("Uninstall OpenRad")).color(RED))).clicked() {
+                    self.confirm_uninstall = true;
+                }
+            });
+        }
     }
     fn update_notice(&mut self, ui: &mut egui::Ui) {
         let Some(release) = self.release.clone() else {
@@ -3383,6 +3401,32 @@ impl App {
             }
         }
         self.network_dialogs(&ctx);
+        #[cfg(windows)]
+        if self.confirm_uninstall && !self.closing {
+            egui::Modal::new(egui::Id::new("complete-uninstall")).show(&ctx, |ui| {
+                ui.set_max_width(470.);
+                ui.heading(RichText::new(language.text("Uninstall OpenRad?")).color(RED));
+                ui.label(language.text("The Windows uninstaller will remove OpenRad and its dedicated TAP adapter. Your saved identity, profiles, settings and logs will remain available if you reinstall later."));
+                ui.add_space(10.);
+                ui.horizontal(|ui| {
+                    if ui.button(language.text("Cancel")).clicked() {
+                        self.confirm_uninstall = false;
+                    }
+                    if ui.button(RichText::new(language.text("Open Windows uninstaller")).color(RED)).clicked() {
+                        match crate::uninstall::launch_installed_uninstaller() {
+                            Ok(()) => {
+                                self.confirm_uninstall = false;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            Err(error) => {
+                                self.toast = Some((format!("{}: {error}", language.text("Could not start the uninstaller")), true, Instant::now()));
+                                self.confirm_uninstall = false;
+                            }
+                        }
+                    }
+                });
+            });
+        }
         if self.confirm_reset && !self.closing {
             egui::Modal::new(egui::Id::new("reset-identity")).show(&ctx, |ui| {
                 ui.set_max_width(430.);

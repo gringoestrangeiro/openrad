@@ -1,4 +1,14 @@
 # Changelog
+## 2.0.2 — proposta (ainda nao publicada)
+
+- Windows: corrigir handles herdados pelo servico da VPN e bloqueio de comandos CLI.
+- Conexao: tentar IPv4 se endereco IPv6 nao responder no prazo.
+- Persistencia: corrigir gravacao de configuracoes e preferencias de rede.
+- Configuracoes: iniciar o desinstalador oficial preservando identidade e perfis.
+- Radmin Recovery: consumir diagnosticos do named pipe antes do encerramento do worker.
+- Validado anteriormente: Rust 313 testes, desktop 62, Python/Linux 14 em duas passagens.
+- Pendente: Android SDK, TAP/VPN real, teste IPC de Radmin e auditoria abrangente de seguranca.
+
 
 ## 2.0.1 — 2026-10-15
 

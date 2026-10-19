@@ -266,7 +266,16 @@ try { & { WORKER } -AdapterGuid @(GUIDS); exit 0 } catch {
         $registered = $true
         Start-ScheduledTask -TaskName $taskName
         $deadline = [DateTime]::UtcNow.AddSeconds(40)
+        $diagnostic = ''
+        $diagnosticRead = $false
         do {
+            # The worker writes to a synchronous Windows named pipe before
+            # exiting. Consume the error as soon as the pipe connects, or
+            # waiting for task completion can deadlock the worker's Write().
+            if ($connection.IsCompleted -and -not $diagnosticRead) {
+                $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection
+                $diagnosticRead = $true
+            }
             $info = Get-ScheduledTaskInfo -TaskName $taskName
             $task = Get-ScheduledTask -TaskName $taskName
             # A just-registered task reports Ready/zero before its first run.
@@ -275,8 +284,10 @@ try { & { WORKER } -AdapterGuid @(GUIDS); exit 0 } catch {
             # combine with a later LastRunTime and falsely signal completion.
             if ($info.LastRunTime.Year -gt 2000 -and $task.State -notin @('Running', 'Queued') -and $info.LastTaskResult -notin @(267009, 267011)) {
                 if ($info.LastTaskResult -ne 0) {
-                    $detail = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection
-                    throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult + ': ' + $detail)
+                    if (-not $diagnosticRead) {
+                        $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection
+                    }
+                    throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult + ': ' + $diagnostic)
                 }
                 return
             }

@@ -340,6 +340,23 @@ FunctionEnd
 Function un.onInit
     SetRegView 64
     SetShellVarContext all
+    ; The Settings shortcut launches this process before the desktop finishes
+    ; its graceful shutdown. Wait only for this explicit entry point.
+    ${GetParameters} $Params
+    ClearErrors
+    ${GetOptions} $Params "/FROMSETTINGS" $0
+    ${IfNot} ${Errors}
+        StrCpy $0 120
+      wait_for_desktop:
+        FindWindow $1 "" "OpenRad"
+        ${If} $1 != 0
+            Sleep 250
+            IntOp $0 $0 - 1
+            ${If} $0 > 0
+                Goto wait_for_desktop
+            ${EndIf}
+        ${EndIf}
+    ${EndIf}
     FindWindow $0 "" "OpenRad"
     ${If} $0 != 0
         MessageBox MB_OK|MB_ICONEXCLAMATION "Disconnect and close OpenRad Desktop before uninstalling. Stop any OpenRad CLI background process too."

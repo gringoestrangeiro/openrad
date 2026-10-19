@@ -217,7 +217,7 @@ Share the password file securely and remove extra copies when they are no longer
 
 Names must match exactly; use the ID from `networks` when a name is ambiguous. The server enforces administrator permissions. Kicking a member does not permanently ban them if they still know the password. Deletion removes the network for everyone and requires `--yes`.
 
-Use `--json` for scripts, for example `openrad --json status`. This includes a full connection snapshot. The local socket, lock, service log, and bounded rotating diagnostics are under the private data directory. `service.log` is useful if the service fails to start; connection diagnostics are under `diagnostics/`. These files can contain peer IDs, addresses, and network names, but should never contain passwords, session keys, or packet payloads.
+Use `--json` for scripts, for example `openrad --json status`. This includes a full connection snapshot. The local control endpoint, lock, and bounded rotating connection diagnostics belong to the private data directory. On Linux, startup errors are also written to `service.log` in that directory. On Windows, the detached daemon instead writes its startup diagnostics to `cli-daemon-startup.log` in the OpenRad log directory, without inheriting the CLI's output pipes. Connection diagnostics live under `diagnostics/`. These files can contain peer IDs, addresses, and network names, but should never contain passwords, session keys, or packet payloads.
 
 `init --host IPV4_ADDRESS --modulus FILE` remains available for controlled deployments with a different registration endpoint and raw public RSA modulus. An imported identity can also use `--modulus FILE`. The modulus is saved with the profile so later `start` commands use the same key.
 
