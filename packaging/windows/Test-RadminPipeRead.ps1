@@ -12,6 +12,11 @@ try {
     $connection = $server.BeginWaitForConnection($null, $null)
     $client = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::Out)
     $client.Connect(2000)
+    # Connecting the client and completing BeginWaitForConnection are separate
+    # operations; wait for the server-side completion before starting ReadAsync.
+    if (-not $connection.AsyncWaitHandle.WaitOne(2000)) {
+        throw 'Named-pipe server did not complete its local connection.'
+    }
     $state = @{}
     $initial = Read-OpenRadRadminResult -Pipe $server -Connection $connection -ReadState $state
     if ($initial -ne '') { throw 'Read reported data before the worker wrote anything.' }

@@ -295,7 +295,20 @@ try { & { WORKER } -AdapterGuid @(GUIDS); exit 0 } catch {
             if ($info.LastRunTime.Year -gt 2000 -and $task.State -notin @('Running', 'Queued') -and $info.LastTaskResult -notin @(267009, 267011)) {
                 if ($info.LastTaskResult -ne 0) {
                     if (-not $diagnosticRead) {
-                        $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection -ReadState $readState
+                        # The task may report its exit before the pending pipe
+                        # read publishes the diagnostic. Wait briefly, bounded
+                        # by the existing overall recovery deadline.
+                        $readDeadline = [DateTime]::UtcNow.AddSeconds(2)
+                        if ($readDeadline -gt $deadline) { $readDeadline = $deadline }
+                        do {
+                            $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection -ReadState $readState
+                            if (-not [string]::IsNullOrEmpty($diagnostic)) {
+                                $diagnosticRead = $true
+                                break
+                            }
+                            if ([DateTime]::UtcNow -ge $readDeadline) { break }
+                            Start-Sleep -Milliseconds 50
+                        } while ($true)
                     }
                     throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult + ': ' + $diagnostic)
                 }

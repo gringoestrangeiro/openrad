@@ -236,10 +236,14 @@ fn atomic_private_json(directory: &Path, stem: &str, bytes: &[u8]) -> Result<()>
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        // Acquire the directory handle before replacing the target. If its
+        // permissions prevent opening it, leave the previous JSON untouched.
+        #[cfg(unix)]
+        let parent = File::open(directory)?;
         fs::rename(&temporary, &target)?;
         // On POSIX a rename is not durable until its parent directory is synced.
         #[cfg(unix)]
-        File::open(directory)?.sync_all()?;
+        parent.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
