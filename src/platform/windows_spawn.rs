@@ -20,16 +20,19 @@ use windows_sys::Win32::{
     },
 };
 
+/// The child daemon process handle and identifier owned by the CLI.
 pub(crate) struct ServiceProcess {
     process: OwnedHandle,
     pid: u32,
 }
 
 impl ServiceProcess {
+    /// Return the process identifier for startup diagnostics.
     pub(crate) fn id(&self) -> u32 {
         self.pid
     }
 
+    /// Query whether the daemon has exited without blocking the caller.
     pub(crate) fn try_exit_code(&self) -> io::Result<Option<u32>> {
         // SAFETY: the owned process handle remains valid for this wait.
         let wait = unsafe { WaitForSingleObject(self.process.as_raw_handle(), 0) };
@@ -48,6 +51,7 @@ impl ServiceProcess {
     }
 }
 
+/// Encode a Windows path as a checked, NUL-terminated UTF-16 string.
 fn nul_terminated(value: &OsStr) -> io::Result<Vec<u16>> {
     let mut wide: Vec<u16> = value.encode_wide().collect();
     if wide.contains(&0) {
@@ -61,6 +65,7 @@ fn nul_terminated(value: &OsStr) -> io::Result<Vec<u16>> {
 }
 
 // Windows argv quoting: escape embedded quotes and double trailing backslashes.
+/// Quote a Windows command-line argument and escape its embedded quotes and slashes.
 fn quoted(value: &OsStr) -> io::Result<Vec<u16>> {
     let mut output = vec![b'"' as u16];
     let mut slashes = 0usize;
@@ -89,6 +94,7 @@ fn quoted(value: &OsStr) -> io::Result<Vec<u16>> {
     Ok(output)
 }
 
+/// Start the detached daemon without inheriting stdout or stderr handles.
 pub(crate) fn spawn(
     executable: &Path,
     data_dir: &Path,
@@ -153,7 +159,9 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Check proper quoting of paths, quotes, and trailing backslashes.
     fn command_line_quotes_windows_paths_and_trailing_backslashes() {
+        /// Decode the generated UTF-16 command-line fixture for assertions.
         fn decoded(value: &[u16]) -> String {
             String::from_utf16(value).unwrap()
         }

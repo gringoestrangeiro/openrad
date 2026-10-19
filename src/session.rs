@@ -111,6 +111,7 @@ impl Framed {
     ) -> Result<Self> {
         Self::connect_timeout(host, port, duration, stop, Duration::from_secs(8))
     }
+    /// Resolve a host and share a bounded connect deadline across its IPv4 and IPv6 addresses.
     pub fn connect_timeout(
         host: &str,
         port: u16,

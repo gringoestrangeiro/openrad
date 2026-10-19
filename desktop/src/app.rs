@@ -2842,6 +2842,7 @@ impl App {
             ui.label(RichText::new(language.text("Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.")).size(11.).color(MUTED));
         });
     }
+    /// Render the Settings page, including Windows-only uninstall confirmation.
     fn settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
         ui.label(

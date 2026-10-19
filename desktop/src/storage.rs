@@ -184,6 +184,7 @@ impl Paths {
         let settings: Settings = serde_json::from_slice(&bytes)?;
         Ok(settings.normalized())
     }
+    /// Validate and atomically persist public UI settings without credentials.
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {
         openrad::protocol::validate_node_name(&settings.node_name)?;
         ensure!(
@@ -203,6 +204,7 @@ impl Paths {
         preferences.validate()?;
         Ok(preferences)
     }
+    /// Validate and persist saved network metadata with an atomic file replacement.
     pub fn save_network_preferences(&self, preferences: &NetworkPreferences) -> Result<()> {
         preferences.validate()?;
         let bytes = serde_json::to_vec_pretty(preferences)?;
@@ -221,6 +223,7 @@ impl Paths {
             }))
     }
 }
+/// Replace a private JSON file atomically, persisting the directory entry on Unix.
 fn atomic_private_json(directory: &Path, stem: &str, bytes: &[u8]) -> Result<()> {
     let target = directory.join(format!("{stem}.json"));
     let temporary = directory.join(format!(
@@ -234,6 +237,9 @@ fn atomic_private_json(directory: &Path, stem: &str, bytes: &[u8]) -> Result<()>
         file.sync_all()?;
         drop(file);
         fs::rename(&temporary, &target)?;
+        // On POSIX a rename is not durable until its parent directory is synced.
+        #[cfg(unix)]
+        File::open(directory)?.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
@@ -362,6 +368,7 @@ mod tests {
         }
     }
     #[test]
+    /// Ensure a failed save cleans its temporary file and does not prevent retries.
     fn failed_settings_save_cleans_up_and_can_be_retried() {
         let directory = std::env::temp_dir().join(format!(
             "openrad-settings-save-{}-{}",
@@ -393,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    /// Ensure leftover temporary files do not block writing network preferences.
     fn orphaned_preferences_temp_file_does_not_block_future_saves() {
         let directory = std::env::temp_dir().join(format!(
             "openrad-preferences-save-{}-{}",

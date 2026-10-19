@@ -209,8 +209,9 @@ function New-OpenRadRadminResultPipe {
     $pipe | Add-Member ScriptMethod Dispose { $script:pipeDisposed = $true }
     return $pipe
 }
+# Mock pipe reader: validate that errors are consumed before the worker exits.
 function Read-OpenRadRadminResult {
-    param($Pipe, $Connection)
+    param($Pipe, $Connection, [hashtable]$ReadState)
     # The error pipe must be consumed while the worker is still running.
     # Otherwise a synchronous Write() can block worker exit indefinitely.
     if ($script:polls -ge 4) {

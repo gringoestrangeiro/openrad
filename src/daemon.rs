@@ -1530,6 +1530,9 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
 pub fn spawn(dir: &DataDir, disable_interface: bool) -> Result<bool> {
     spawn_with_executable(dir, disable_interface, &std::env::current_exe()?)
 }
+/// Launch the background VPN service without inheriting CLI output handles.
+///
+/// Returns whether this call started a new daemon; it reports early exits.
 pub fn spawn_with_executable(
     dir: &DataDir,
     disable_interface: bool,
