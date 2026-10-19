@@ -25,7 +25,7 @@ use std::os::unix::{
     net::{UnixListener, UnixStream},
 };
 #[cfg(unix)]
-use std::process::{Child, Command as ProcessCommand, Stdio};
+use std::process::{Command as ProcessCommand, Stdio};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
