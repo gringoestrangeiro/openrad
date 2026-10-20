@@ -16,8 +16,8 @@ import java.util.BitSet
 import java.util.TreeMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** A UDP socket and its public endpoint agreed by two UES hosts. */
-typealias MappedSocket = Pair<UdpSocket, InetSocketAddress>
+/** A UDP socket and the public endpoint the UES hosts observed for it. */
+typealias MappedSocket = Pair<UdpSocket, Udp.Mapping>
 
 /**
  * CRC used by the TCP rendezvous and ENET datagrams (`session.rs`): generator
@@ -64,6 +64,13 @@ object Udp {
     const val REFUSED_RETRY_MS = 10L
     const val LIVENESS_MS = 35_000L
     const val MAX_TRIES = 20
+    /** A datagram from the peer this recently shows that it is still alive. */
+    const val ACTIVE_PEER_MS = 5_000L
+    /** Learned peer-reflexive ports per rendezvous. */
+    const val MAX_LEARNED_ENDPOINTS = 8
+    /** UES discovery budget and request offsets from its start (`udp.rs::MAPPING_RESENDS`). */
+    const val MAPPING_TIMEOUT_MS = 2_500L
+    private val MAPPING_RESENDS_MS = longArrayOf(0, 400, 900, 1500)
     const val MAX_CANDIDATES = 32
     /** UES hosts answer on 17301 plus a random offset below 99 (`udp.rs::discover_mapping`). */
     const val UES_BASE_PORT = 17301
@@ -126,11 +133,26 @@ object Udp {
         return mapped ?: fail("missing UES mapping")
     }
 
+    /** How the two authenticated hosts saw a socket (`udp.rs::MappingAgreement`). */
+    enum class Agreement(val label: String) {
+        /** Both hosts reported the same mapping (endpoint-independent NAT). */
+        AGREE("two_servers_agree"),
+        /** Only one host answered before the deadline. */
+        ONE_SERVER("one_server"),
+        /**
+         * The hosts disagree (endpoint-dependent NAT). The first host's
+         * observation is still advertised; no other port is predicted or probed.
+         */
+        VARIES("mapping_varies_by_destination"),
+    }
+
+    data class Mapping(val endpoint: InetSocketAddress, val agreement: Agreement)
+
     /**
-     * Queries two authenticated hosts concurrently on the same socket. Both must
-     * agree; a response from one host never substitutes for the other.
+     * Queries two authenticated hosts concurrently on the same socket and
+     * compares their observations. A lone answer is used only after the deadline.
      */
-    fun discoverMapping(socket: UdpSocket, hosts: List<Int>, stop: AtomicBoolean?): InetSocketAddress {
+    fun discoverMapping(socket: UdpSocket, hosts: List<Int>, stop: AtomicBoolean?): Mapping {
         val unique = hosts.distinct().sortedBy { it.toLong() and 0xffffffffL }
         ensure(unique.size >= 2) { "insufficient authenticated UES hosts" }
         val choice = randomBytes(3)
@@ -138,29 +160,33 @@ object Udp {
         val servers = List(2) { index ->
             endpoint(unique[(start + index) % unique.size], UES_BASE_PORT + (choice[index + 1].toInt() and 0xff) % 99)
         }
-        return discoverMappingAt(socket, servers, stop, 2000)
+        return discoverMappingAt(socket, servers, stop, MAPPING_TIMEOUT_MS)
     }
 
-    internal fun discoverMappingAt(socket: UdpSocket, servers: List<InetSocketAddress>, stop: AtomicBoolean?, durationMs: Long): InetSocketAddress {
+    internal fun discoverMappingAt(socket: UdpSocket, servers: List<InetSocketAddress>, stop: AtomicBoolean?, durationMs: Long): Mapping {
         val transactions = List(2) { randomBytes(16) }
         val addresses = arrayOfNulls<InetSocketAddress>(2)
-        val until = now() + durationMs
-        var next = now()
+        val started = now()
+        val until = started + durationMs
         var sends = 0
         val buffer = ByteBuffer.allocate(2048)
         while (true) {
             if (stop?.get() == true) throw CancelledException()
-            if (now() >= until) throw IOException("UES mapping timeout")
-            if (sends < 2 && now() >= next) {
+            if (now() >= until) {
+                // One authenticated observation is better than no candidate.
+                val lone = addresses.filterNotNull().singleOrNull() ?: throw IOException("UES mapping timeout")
+                return Mapping(lone, Agreement.ONE_SERVER)
+            }
+            if (sends < MAPPING_RESENDS_MS.size && now() - started >= MAPPING_RESENDS_MS[sends]) {
                 for ((index, server) in servers.withIndex()) {
                     if (addresses[index] == null) socket.sendBestEffort(byteArrayOf(0, 1, 0, 0) + transactions[index], server)
                 }
                 sends++
-                next = now() + 750
             }
             val source = socket.receive(buffer)
             if (source == null) {
-                socket.waitReadable(minOf(if (sends < 2) next else until, until) - now())
+                val nextSend = if (sends < MAPPING_RESENDS_MS.size) started + MAPPING_RESENDS_MS[sends] else until
+                socket.waitReadable(minOf(nextSend, until) - now())
                 continue
             }
             val index = servers.indexOf(canonical(source))
@@ -169,11 +195,25 @@ object Udp {
             }
             val a = addresses[0]
             val b = addresses[1]
-            if (a != null && b != null) {
-                ensure(a == b) { "UES mapping changes by destination; no port prediction attempted" }
-                return a
-            }
+            if (a != null && b != null) return Mapping(a, if (a == b) Agreement.AGREE else Agreement.VARIES)
         }
+    }
+
+    /** Punch quickly while both NATs open bindings, then settle (`udp.rs::punch_interval`). */
+    fun punchIntervalMs(elapsedMs: Long): Long = if (elapsedMs < 2000) 100 else 250
+
+    /**
+     * Admits a punch source: an authenticated candidate, or another port on an
+     * authenticated candidate's IP address (an endpoint-dependent NAT). The punch
+     * must still carry the server-correlated nonce; peer SH authentication follows.
+     */
+    internal fun admitSource(endpoints: List<InetSocketAddress>, learned: MutableList<InetSocketAddress>, source: InetSocketAddress): Boolean {
+        if (source in endpoints || source in learned) return true
+        if (learned.size < MAX_LEARNED_ENDPOINTS && endpoints.any { it.address == source.address }) {
+            learned.add(source)
+            return true
+        }
+        return false
     }
 
     /**
@@ -472,12 +512,17 @@ class Enet internal constructor(
         val due = nextRetry
         if (due == null || t < due) return
         var next: Long? = null
+        val peerActive = t - lastReceive < Udp.ACTIVE_PEER_MS
         for (p in pending.values) {
             var retry = p.last + Udp.RETRY_INTERVAL_MS
             if (t >= retry) {
-                if (p.tries >= Udp.MAX_TRIES) throw IOException("UDP acknowledgement timeout")
+                // A peer that is still sending is alive: keep retrying a command it has
+                // not acknowledged instead of tearing down a working direct channel.
+                if (p.tries >= Udp.MAX_TRIES && !peerActive) throw IOException("UDP acknowledgement timeout")
                 // Bound sustained send-buffer congestion even when tries never advance.
-                if (t - p.queued >= Udp.LIVENESS_MS) throw IOException("UDP send congestion timeout")
+                if (t - p.queued >= Udp.LIVENESS_MS) {
+                    throw IOException(if (p.tries >= Udp.MAX_TRIES) "UDP acknowledgement timeout" else "UDP send congestion timeout")
+                }
                 if (transmit(p.command)) {
                     p.tries++
                     p.last = t
@@ -731,12 +776,27 @@ class Enet internal constructor(
          * CONNECT/VERIFY/ACK. This is transport setup, not peer authentication.
          * The socket is closed on failure.
          */
-        fun accept(socket: UdpSocket, endpoints: List<InetSocketAddress>, nonce: Int, durationMs: Long, stop: AtomicBoolean?): Enet =
-            establish(socket, endpoints, nonce, durationMs, stop, incoming = true)
+        fun accept(
+            socket: UdpSocket,
+            endpoints: List<InetSocketAddress>,
+            nonce: Int,
+            durationMs: Long,
+            stop: AtomicBoolean?,
+            progress: () -> Unit = {},
+        ): Enet = establish(socket, endpoints, nonce, durationMs, stop, incoming = true, progress)
 
-        /** Outgoing role: punches every candidate, then sends ENET CONNECT. The socket is closed on failure. */
-        fun connect(socket: UdpSocket, endpoints: List<InetSocketAddress>, nonce: Int, durationMs: Long, stop: AtomicBoolean?): Enet =
-            establish(socket, endpoints, nonce, durationMs, stop, incoming = false)
+        /**
+         * Outgoing role: punches every candidate, then sends ENET CONNECT. The socket
+         * is closed on failure. [progress] runs whenever a valid punch from the peer arrives.
+         */
+        fun connect(
+            socket: UdpSocket,
+            endpoints: List<InetSocketAddress>,
+            nonce: Int,
+            durationMs: Long,
+            stop: AtomicBoolean?,
+            progress: () -> Unit = {},
+        ): Enet = establish(socket, endpoints, nonce, durationMs, stop, incoming = false, progress)
 
         private fun establish(
             socket: UdpSocket,
@@ -745,13 +805,14 @@ class Enet internal constructor(
             durationMs: Long,
             stop: AtomicBoolean?,
             incoming: Boolean,
+            progress: () -> Unit,
         ): Enet {
             try {
                 ensure((endpoints.isNotEmpty() || !incoming) && endpoints.size <= Udp.MAX_CANDIDATES && nonce in 1..0xffff) {
                     "UDP candidate/nonce limit"
                 }
                 val until = now() + durationMs
-                val endpoint = rendezvous(socket, endpoints, nonce, until, stop, incoming)
+                val endpoint = rendezvous(socket, endpoints, nonce, until, stop, incoming, progress)
                 socket.connect(endpoint)
                 val e = Enet(socket, endpoint, until, stop)
                 if (incoming) {
@@ -779,7 +840,10 @@ class Enet internal constructor(
             }
         }
 
-        /** Exact authenticated candidates only: no port guessing or unsolicited peers. */
+        /**
+         * Authenticated candidates, or another port on one of their addresses
+         * ([Udp.admitSource]): no port guessing or unrelated hosts.
+         */
         private fun rendezvous(
             socket: UdpSocket,
             endpoints: List<InetSocketAddress>,
@@ -787,9 +851,12 @@ class Enet internal constructor(
             until: Long,
             stop: AtomicBoolean?,
             incoming: Boolean,
+            progress: () -> Unit,
         ): InetSocketAddress {
             val localPort = socket.localPort
-            var next = now()
+            val started = now()
+            var next = started
+            val learned = ArrayList<InetSocketAddress>()
             val buffer = ByteBuffer.allocate(4096)
             var received = 0
             var matched = 0
@@ -801,13 +868,13 @@ class Enet internal constructor(
                         if (incoming) {
                             "incoming UDP rendezvous timeout"
                         } else {
-                            "UDP rendezvous timeout (received=$received, matched=$matched, P/A/C=${kinds.toList()})"
+                            "UDP rendezvous timeout (received=$received, matched=$matched, P/A/C=${kinds.toList()}, learned=${learned.size})"
                         },
                     )
                 }
                 if (now() >= next) {
-                    for (a in endpoints) runCatching { socket.sendTo(Udp.punch(nonce, a.port, localPort, 'P'), a) }
-                    next = now() + 250
+                    for (a in endpoints + learned) runCatching { socket.sendTo(Udp.punch(nonce, a.port, localPort, 'P'), a) }
+                    next = now() + Udp.punchIntervalMs(now() - started)
                 }
                 val source = socket.receive(buffer)
                 if (source == null) {
@@ -817,8 +884,9 @@ class Enet internal constructor(
                 received++
                 val a = Udp.canonical(source)
                 val data = buffer.array()
-                if (a !in endpoints || !Udp.validPunch(data, buffer.position(), nonce)) continue
+                if (!Udp.validPunch(data, buffer.position(), nonce) || !Udp.admitSource(endpoints, learned, a)) continue
                 matched++
+                progress()
                 val kind = data[6].toInt().toChar()
                 kinds[when (kind) { 'P' -> 0; 'A' -> 1; else -> 2 }]++
                 if (incoming) {

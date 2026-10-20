@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Arc,
     },
     thread,
@@ -135,7 +135,7 @@ pub(crate) struct SetupTasks<T> {
     sender: mpsc::Sender<SetupResult<T>>,
     receiver: mpsc::Receiver<SetupResult<T>>,
     cancel: Arc<AtomicBool>,
-    active: usize,
+    running: Vec<&'static str>,
 }
 impl<T: Send> SetupTasks<T> {
     pub(crate) fn new() -> Self {
@@ -144,7 +144,7 @@ impl<T: Send> SetupTasks<T> {
             sender,
             receiver,
             cancel: Arc::new(AtomicBool::new(false)),
-            active: 0,
+            running: Vec::new(),
         }
     }
 
@@ -173,18 +173,25 @@ impl<T: Send> SetupTasks<T> {
                     result,
                 });
             })?;
-        self.active += 1;
+        self.running.push(name);
         Ok(())
     }
 
     pub(crate) fn poll(&mut self) -> Option<SetupResult<T>> {
         let result = self.receiver.try_recv().ok()?;
-        self.active -= 1;
+        if let Some(index) = self.running.iter().position(|name| *name == result.name) {
+            self.running.swap_remove(index);
+        }
         Some(result)
     }
 
     pub(crate) fn is_idle(&self) -> bool {
-        self.active == 0
+        self.running.is_empty()
+    }
+
+    /// Workers that have not reported yet; a winner cancels them.
+    pub(crate) fn running(&self) -> &[&'static str] {
+        &self.running
     }
 }
 impl<T> Drop for SetupTasks<T> {
@@ -236,9 +243,60 @@ impl HandshakeBudget {
     }
 }
 
+/// Counts running direct attempts that have proven the path reachable: a valid
+/// punch from the peer arrived, or a TCP rendezvous preamble was accepted. The
+/// relay head start is extended only while such an attempt is still running.
+#[derive(Clone, Default)]
+pub(crate) struct DirectProgress(Arc<AtomicUsize>);
+impl DirectProgress {
+    pub(crate) fn active(&self) -> bool {
+        self.0.load(Ordering::Relaxed) > 0
+    }
+    /// One tracker per transport worker; it stops counting when dropped.
+    pub(crate) fn tracker(&self) -> ProgressTracker {
+        ProgressTracker {
+            shared: self.0.clone(),
+            marked: AtomicBool::new(false),
+        }
+    }
+}
+pub(crate) struct ProgressTracker {
+    shared: Arc<AtomicUsize>,
+    marked: AtomicBool,
+}
+impl ProgressTracker {
+    pub(crate) fn mark(&self) {
+        if !self.marked.swap(true, Ordering::Relaxed) {
+            self.shared.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+impl Drop for ProgressTracker {
+    fn drop(&mut self) {
+        if *self.marked.get_mut() {
+            self.shared.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_progress_counts_only_marked_running_attempts() {
+        let progress = DirectProgress::default();
+        let quiet = progress.tracker();
+        let reached = progress.tracker();
+        assert!(!progress.active());
+        reached.mark();
+        reached.mark();
+        assert!(progress.active());
+        drop(quiet);
+        assert!(progress.active());
+        drop(reached);
+        assert!(!progress.active());
+    }
 
     #[test]
     fn retries_back_off_are_bounded_and_spread_large_rosters() {

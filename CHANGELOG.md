@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Direct-path success and incoming-offer stability, based on a local analysis of
+41,315 diagnostic events. Wire formats are unchanged.
+
+- Relay no longer preempts working direct paths: while a direct attempt has already received a valid punch or TCP rendezvous from the peer, relay authentication waits up to 16 s after the ticket (previously 4–8 s). Silent direct paths keep the old timing. UDP rendezvous windows are 14 s on both roles (previously 8 s outgoing, 12 s incoming) and punch every 100 ms for the first two seconds.
+- UDP rendezvous admits a nonce-correlated punch from another port on an authenticated candidate's IP address (at most eight learned ports), so peers behind endpoint-dependent NATs can still connect directly. Unrelated hosts are still ignored and peer SH authentication is unchanged.
+- UES mapping discovery resends lost requests (0, 0.4, 0.9, 1.5 s, 2.5 s deadline), uses a lone reply at the deadline, and still advertises the first observation when the hosts disagree, instead of giving up on mapped UDP.
+- Incoming offers now request their own relay ticket (op 22) after a 2 s direct preference (300 ms when relay-only); the service does not push one to the accepting side, so incoming setups previously could never fall back to relay. A service refusal or disconnect within 5 s of such a request disables further requests for the process. Offers that receive nothing for 15 s are abandoned early instead of holding the peer for 40 s.
+- An established UDP channel is not closed for a missing acknowledgement while the peer is still sending (seen within 5 s); the 35 s per-command bound remains.
+- Diagnostics record mapping agreement, direct/relay start times, and attempts cancelled by the winning path.
+- Android: the same changes are ported to the Kotlin engine. On mobile data (relay-only), incoming offers are no longer skipped while waiting for a relay ticket that never arrived.
+- Validation: Linux workspace tests, Linux/Windows Clippy and Android unit tests pass, including new regressions for each change. Behavior against the live service and real NATs, including how the service answers acceptor relay requests, has not been measured yet.
+
 ## 2.0.1 — 2026-10-15
 
 A maintenance release with lighter desktop status updates, Android TUN reader

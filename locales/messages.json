@@ -2119,10 +2119,15 @@
     "Время входящего UDP-рандеву истекло",
     "Điểm hẹn UDP đến hết thời gian chờ"
   ],
-  "UDP rendezvous timeout (received={received}, matched={matched}, P/A/C={kinds})": [
-    "O tempo do rendezvous UDP esgotou (recebidos={received}, correspondentes={matched}, P/A/C={kinds})",
-    "Время UDP-рандеву истекло (получено={received}, совпало={matched}, P/A/C={kinds})",
-    "Điểm hẹn UDP hết thời gian chờ (đã nhận={received}, khớp={matched}, P/A/C={kinds})"
+  "UDP rendezvous timeout (received={received}, matched={matched}, P/A/C={kinds}, learned={learned_ports})": [
+    "O tempo do rendezvous UDP esgotou (recebidos={received}, correspondentes={matched}, P/A/C={kinds}, portas aprendidas={learned_ports})",
+    "Время UDP-рандеву истекло (получено={received}, совпало={matched}, P/A/C={kinds}, изучено портов={learned_ports})",
+    "Điểm hẹn UDP hết thời gian chờ (đã nhận={received}, khớp={matched}, P/A/C={kinds}, cổng đã học={learned_ports})"
+  ],
+  "incoming offer abandoned: no candidates or relay ticket arrived": [
+    "Oferta de entrada abandonada: nenhum candidato ou ticket de relay chegou",
+    "Входящее предложение заброшено: не пришло ни кандидатов, ни билета ретранслятора",
+    "Yêu cầu kết nối đến bị bỏ dở: không nhận được ứng viên hay vé chuyển tiếp nào"
   ],
   "short UDP datagram write": [
     "Gravação incompleta do datagrama UDP",

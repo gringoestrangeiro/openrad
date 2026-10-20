@@ -276,3 +276,44 @@ fn relay_only_incoming_setup_advertises_no_direct_endpoints() {
     channel.send(&bytes).unwrap();
     server.join().unwrap();
 }
+
+#[test]
+fn an_incoming_offer_without_a_relay_ticket_requests_one_from_the_service() {
+    use openrad::incoming::{Hub, Policy};
+    let (wire, advertisements) = std::sync::mpsc::sync_channel(8);
+    let mut hub = Hub::new("127.0.0.1".parse().unwrap(), vec![], wire);
+    hub.ingest(
+        &[
+            u32v(SERVER_OP, 11),
+            u64v(0x020001c1, 77),
+            tlv(
+                0x1235,
+                &[
+                    u64v(0x020001e1, 11),
+                    tlv(0x0a0001cd, b"synthetic-connection-password"),
+                ]
+                .concat(),
+            ),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let setup = hub.take(11, Policy::Relay).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let cancel = stop.clone();
+    let worker = std::thread::spawn(move || {
+        setup.accept(
+            42,
+            "26.0.0.42".parse().unwrap(),
+            peer(),
+            &ReportDirectory::disabled(),
+            cancel,
+        )
+    });
+    let request = advertisements
+        .recv_timeout(Duration::from_secs(2))
+        .expect("relay request");
+    assert_eq!(request, request_relay(77));
+    stop.store(true, Ordering::Relaxed);
+    assert!(worker.join().unwrap().is_err());
+}

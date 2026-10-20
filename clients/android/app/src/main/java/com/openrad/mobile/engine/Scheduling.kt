@@ -22,10 +22,19 @@ object PeerScheduling {
     /** Direct paths get this head start over relay authentication (`peer.rs`). */
     const val DIRECT_HEAD_START_MS = 4000L
     const val MAX_RELAY_WAIT_MS = 8000L
-    /** Budget of one outgoing direct TCP lane or UDP rendezvous (`peer.rs::negotiate`). */
-    const val DIRECT_ATTEMPT_MS = 8000L
-    /** Incoming UDP rendezvous budget (`incoming.rs::Setup::accept`). */
-    const val INCOMING_UDP_MS = 12_000L
+    /**
+     * Relay authentication waits this long after its ticket while a direct
+     * attempt that already heard from the peer is still running (`peer.rs`).
+     */
+    const val MAX_PROGRESS_HOLD_MS = 16_000L
+    /** Punching window of one UDP rendezvous, both roles; covers the progress hold. */
+    const val UDP_ATTEMPT_MS = 14_000L
+    /** The service sends the acceptor no relay ticket unless asked (`incoming.rs`). */
+    const val ACCEPTOR_RELAY_DELAY_MS = 2_000L
+    /** Relay-only acceptors ask almost at once, after reading buffered records. */
+    const val RELAY_ONLY_REQUEST_DELAY_MS = 300L
+    /** An offer whose initiator sends no candidate or ticket at all is abandoned. */
+    const val ABANDONED_OFFER_MS = 15_000L
 
     /** A channel that lasted this long resets its retry backoff. */
     const val STABLE_CONNECTION_MS = 60_000L
@@ -48,11 +57,16 @@ object PeerScheduling {
     /**
      * Relay authentication waits for the direct head start, measured from the
      * later of the relay offer and the last direct start, but never longer than
-     * [MAX_RELAY_WAIT_MS] after the offer. An exhausted direct path skips the wait.
+     * [MAX_RELAY_WAIT_MS] after the offer. While a running direct attempt has
+     * heard from the peer ([directProgress]) it waits up to [MAX_PROGRESS_HOLD_MS]
+     * instead, so a working path is not cut off by a relay that merely started
+     * first. An exhausted direct path skips the wait.
      */
-    fun relayReady(now: Long, receivedAt: Long, lastDirectStart: Long?, directExhausted: Boolean): Boolean {
+    fun relayReady(now: Long, receivedAt: Long, lastDirectStart: Long?, directExhausted: Boolean, directProgress: Boolean = false): Boolean {
+        if (directExhausted) return true
+        if (directProgress) return now >= receivedAt + MAX_PROGRESS_HOLD_MS
         val startAt = minOf(maxOf(lastDirectStart ?: receivedAt, receivedAt) + DIRECT_HEAD_START_MS, receivedAt + MAX_RELAY_WAIT_MS)
-        return directExhausted || now >= startAt
+        return now >= startAt
     }
 
     private const val GOLDEN = -0x61c8864680b583ebL // 0x9e3779b97f4a7c15
@@ -184,5 +198,59 @@ class SetupRace<T : Any>(private val label: String, private val dispose: (T) -> 
             val value = result.getOrNull()
             if (value != null && value !== winner) runCatching { dispose(value) }
         }
+    }
+}
+
+/**
+ * Counts running direct attempts that proved the path reachable: a valid punch
+ * from the peer arrived, or a TCP rendezvous matched (`scheduling.rs::DirectProgress`).
+ */
+class DirectProgress {
+    private val count = java.util.concurrent.atomic.AtomicInteger()
+
+    val active: Boolean get() = count.get() > 0
+
+    /** One tracker per transport worker; [Tracker.close] stops counting it. */
+    fun tracker(): Tracker = Tracker()
+
+    inner class Tracker : java.io.Closeable {
+        private val marked = AtomicBoolean(false)
+        private val closed = AtomicBoolean(false)
+
+        fun mark() {
+            if (!closed.get() && marked.compareAndSet(false, true)) count.incrementAndGet()
+        }
+
+        override fun close() {
+            if (closed.compareAndSet(false, true) && marked.get()) count.decrementAndGet()
+        }
+    }
+}
+
+/**
+ * Process-wide guard for acceptor relay requests on the shared attachment
+ * session (`incoming.rs::acceptor_relay`): a refusal or disconnect soon after
+ * one disables further requests instead of risking the session.
+ */
+class AcceptorRelayGuard {
+    @Volatile private var disabled = false
+    @Volatile private var lastRequest: Long? = null
+
+    val allowed: Boolean get() = !disabled
+
+    fun requested(now: Long) {
+        lastRequest = now
+    }
+
+    /** True when the objection followed a request closely enough to disable requests. */
+    fun objected(now: Long): Boolean {
+        val recent = lastRequest?.let { now - it <= OBJECTION_WINDOW_MS } == true
+        if (recent) disabled = true
+        return recent
+    }
+
+    companion object {
+        const val OBJECTION_WINDOW_MS = 5_000L
+        val shared = AcceptorRelayGuard()
     }
 }

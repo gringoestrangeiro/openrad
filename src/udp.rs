@@ -95,13 +95,41 @@ pub fn mapped_response(data: &[u8], transaction: &[u8; 16]) -> Result<SocketAddr
     }
     mapped.ok_or_else(|| anyhow::anyhow!("missing UES mapping"))
 }
-/// Query two authenticated hosts concurrently on the same socket. Both must
-/// agree; a response from one host never substitutes for the other.
+/// How the two authenticated hosts saw this socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MappingAgreement {
+    /// Both hosts reported the same mapping (endpoint-independent NAT).
+    Agree,
+    /// Only one host answered before the deadline.
+    OneServer,
+    /// The hosts reported different mappings (endpoint-dependent NAT). The
+    /// first host's observation is still advertised: the peer's punches to it
+    /// are harmless, and our punches can still open a path to a peer whose NAT
+    /// filters by address only. No other port is predicted or probed.
+    Varies,
+}
+impl MappingAgreement {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Agree => "two_servers_agree",
+            Self::OneServer => "one_server",
+            Self::Varies => "mapping_varies_by_destination",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mapping {
+    pub endpoint: SocketAddr,
+    pub agreement: MappingAgreement,
+}
+
+/// Query two authenticated hosts concurrently on the same socket and compare
+/// their observations. A lone answer is used only after the deadline.
 pub fn discover_mapping(
     socket: &UdpSocket,
     hosts: &[std::net::Ipv4Addr],
     stop: &Option<Arc<AtomicBool>>,
-) -> Result<SocketAddr> {
+) -> Result<Mapping> {
     let hosts: Vec<_> = hosts
         .iter()
         .copied()
@@ -117,20 +145,30 @@ pub fn discover_mapping(
             17301 + (choice[index + 1] as u16 % 99),
         )
     });
-    discover_mapping_at(socket, servers, stop, Duration::from_secs(2))
+    discover_mapping_at(socket, servers, stop, MAPPING_TIMEOUT)
 }
+
+const MAPPING_TIMEOUT: Duration = Duration::from_millis(2500);
+/// Request offsets from the start of discovery. A lost request or reply is
+/// resent quickly instead of costing the mapped UDP path for this attempt.
+const MAPPING_RESENDS: [Duration; 4] = [
+    Duration::ZERO,
+    Duration::from_millis(400),
+    Duration::from_millis(900),
+    Duration::from_millis(1500),
+];
 
 fn discover_mapping_at(
     socket: &UdpSocket,
     servers: [SocketAddr; 2],
     stop: &Option<Arc<AtomicBool>>,
     duration: Duration,
-) -> Result<SocketAddr> {
+) -> Result<Mapping> {
     socket.set_nonblocking(true)?;
     let transactions: [[u8; 16]; 2] = std::array::from_fn(|_| crate::crypto::random_array());
     let mut addresses = [None; 2];
-    let until = Instant::now() + duration;
-    let mut next = Instant::now();
+    let started = Instant::now();
+    let until = started + duration;
     let mut sends = 0;
     let mut data = [0; 2048];
     loop {
@@ -138,8 +176,21 @@ fn discover_mapping_at(
             !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
             "cancelled"
         );
-        ensure!(Instant::now() < until, "UES mapping timeout");
-        if sends < 2 && Instant::now() >= next {
+        if Instant::now() >= until {
+            // One authenticated observation is the same mapping a single
+            // server would have reported; it is better than no candidate.
+            return match addresses {
+                [Some(endpoint), None] | [None, Some(endpoint)] => Ok(Mapping {
+                    endpoint,
+                    agreement: MappingAgreement::OneServer,
+                }),
+                _ => bail!("UES mapping timeout"),
+            };
+        }
+        if MAPPING_RESENDS
+            .get(sends)
+            .is_some_and(|offset| started.elapsed() >= *offset)
+        {
             for (index, server) in servers.iter().enumerate() {
                 if addresses[index].is_none() {
                     let request = [vec![0, 1, 0, 0], transactions[index].to_vec()].concat();
@@ -147,7 +198,6 @@ fn discover_mapping_at(
                 }
             }
             sends += 1;
-            next = Instant::now() + Duration::from_millis(750);
         }
         match socket.recv_from(&mut data) {
             Ok((n, source)) => {
@@ -159,11 +209,14 @@ fn discover_mapping_at(
                     }
                 }
                 if let [Some(a), Some(b)] = addresses {
-                    ensure!(
-                        a == b,
-                        "UES mapping changes by destination; no port prediction attempted"
-                    );
-                    return Ok(a);
+                    return Ok(Mapping {
+                        endpoint: a,
+                        agreement: if a == b {
+                            MappingAgreement::Agree
+                        } else {
+                            MappingAgreement::Varies
+                        },
+                    });
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -177,7 +230,7 @@ fn discover_mapping_at(
 /// Mapping is independent of coordinator reads and direct/relay handshakes.
 /// Own and join this worker so a winning path or disconnect closes its socket.
 pub(crate) struct MappingDiscovery {
-    results: std::sync::mpsc::Receiver<Result<(UdpSocket, SocketAddr)>>,
+    results: std::sync::mpsc::Receiver<Result<(UdpSocket, Mapping)>>,
     cancel: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -191,8 +244,8 @@ impl MappingDiscovery {
             .spawn(move || {
                 let result = (|| {
                     let socket = bind_dual_stack()?;
-                    let endpoint = discover_mapping(&socket, &hosts, &Some(stop))?;
-                    Ok((socket, endpoint))
+                    let mapping = discover_mapping(&socket, &hosts, &Some(stop))?;
+                    Ok((socket, mapping))
                 })();
                 let _ = sender.send(result);
             })?;
@@ -202,7 +255,7 @@ impl MappingDiscovery {
             worker: Some(worker),
         })
     }
-    pub(crate) fn poll(&self) -> Option<Result<(UdpSocket, SocketAddr)>> {
+    pub(crate) fn poll(&self) -> Option<Result<(UdpSocket, Mapping)>> {
         self.results.try_recv().ok()
     }
 }
@@ -354,6 +407,10 @@ const RECEIVE_WINDOW: u16 = 512;
 /// kernel buffer holds the rest instead of the channel failing.
 const READY_HIGH_WATER: usize = 128;
 const RETRY_INTERVAL: Duration = Duration::from_millis(400);
+/// Transmissions of one command before a silent peer is declared lost.
+const RETRY_LIMIT: u8 = 20;
+/// A datagram from the peer this recently shows that it is still alive.
+const ACTIVE_PEER: Duration = Duration::from_secs(5);
 /// A datagram the kernel could not accept yet is retried soon, not after a full
 /// retransmission interval.
 const REFUSED_RETRY: Duration = Duration::from_millis(10);
@@ -435,8 +492,39 @@ pub struct Enet {
     last_receive: Instant,
     stop: Option<Arc<AtomicBool>>,
 }
+/// Punch quickly while both NATs are opening bindings, then settle down.
+/// Punches are seven bytes, so the faster start costs almost nothing.
+fn punch_interval(elapsed: Duration) -> Duration {
+    if elapsed < Duration::from_secs(2) {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_millis(250)
+    }
+}
+/// Learned peer-reflexive ports per rendezvous.
+const MAX_LEARNED_ENDPOINTS: usize = 8;
+
+/// Admit a punch source: an authenticated candidate, or a different port on
+/// an authenticated candidate's IP address. An endpoint-dependent NAT gives
+/// the peer's punches a port it could not advertise; the punch still has to
+/// carry the server-correlated nonce, and peer SH authentication follows.
+fn admit_source(
+    endpoints: &[SocketAddr],
+    learned: &mut Vec<SocketAddr>,
+    source: SocketAddr,
+) -> bool {
+    if endpoints.contains(&source) || learned.contains(&source) {
+        return true;
+    }
+    if learned.len() < MAX_LEARNED_ENDPOINTS && endpoints.iter().any(|e| e.ip() == source.ip()) {
+        learned.push(source);
+        return true;
+    }
+    false
+}
+
 impl Enet {
-    /// Incoming role: exact candidate + server-correlated nonce, then ENET's
+    /// Incoming role: authenticated candidate + server-correlated nonce, then ENET's
     /// CONNECT/VERIFY/ACK. This is transport setup, not peer authentication.
     pub fn accept(
         socket: UdpSocket,
@@ -445,14 +533,27 @@ impl Enet {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
+        Self::accept_tracked(socket, endpoints, nonce, duration, stop, &|| {})
+    }
+    /// `progress` runs whenever a valid punch from the peer arrives.
+    pub(crate) fn accept_tracked(
+        socket: UdpSocket,
+        endpoints: &[SocketAddr],
+        nonce: u16,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+        progress: &dyn Fn(),
+    ) -> Result<Self> {
         ensure!(
             !endpoints.is_empty() && endpoints.len() <= 32 && nonce != 0,
             "UDP candidate/nonce limit"
         );
         socket.set_nonblocking(true)?;
-        let until = Instant::now() + duration;
+        let started = Instant::now();
+        let until = started + duration;
         let local_port = socket.local_addr()?.port();
         let mut next = Instant::now();
+        let mut learned = Vec::new();
         let mut buffer = [0; 4096];
         let endpoint = loop {
             ensure!(
@@ -461,17 +562,18 @@ impl Enet {
             );
             ensure!(Instant::now() < until, "incoming UDP rendezvous timeout");
             if Instant::now() >= next {
-                for &a in endpoints {
+                for &a in endpoints.iter().chain(&learned) {
                     let _ = socket.send_to(&punch(nonce, a.port(), local_port, b'P'), mapped(a));
                 }
-                next = Instant::now() + Duration::from_millis(250);
+                next = Instant::now() + punch_interval(started.elapsed());
             }
             match socket.recv_from(&mut buffer) {
                 Ok((n, source))
-                    if endpoints.contains(&canonical(source))
-                        && valid_punch(&buffer[..n], nonce)
-                        && matches!(buffer[6], b'P' | b'A') =>
+                    if valid_punch(&buffer[..n], nonce)
+                        && matches!(buffer[6], b'P' | b'A')
+                        && admit_source(endpoints, &mut learned, canonical(source)) =>
                 {
+                    progress();
                     send_best_effort(
                         socket.send_to(&punch(nonce, source.port(), local_port, b'C'), source),
                     )?;
@@ -500,14 +602,27 @@ impl Enet {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
+        Self::connect_tracked(socket, endpoints, nonce, duration, stop, &|| {})
+    }
+    /// `progress` runs whenever a valid punch from the peer arrives.
+    pub(crate) fn connect_tracked(
+        socket: UdpSocket,
+        endpoints: &[SocketAddr],
+        nonce: u16,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+        progress: &dyn Fn(),
+    ) -> Result<Self> {
         ensure!(
             endpoints.len() <= 32 && nonce != 0,
             "UDP candidate/nonce limit"
         );
         socket.set_nonblocking(true)?;
-        let until = Instant::now() + duration;
+        let started = Instant::now();
+        let until = started + duration;
         let local_port = socket.local_addr()?.port();
         let mut next = Instant::now();
+        let mut learned = Vec::new();
         let mut buffer = [0; 4096];
         let mut received = 0;
         let mut matched = 0;
@@ -517,25 +632,30 @@ impl Enet {
                 !stop.as_ref().is_some_and(|s| s.load(Ordering::Relaxed)),
                 "cancelled"
             );
+            let learned_ports = learned.len();
             ensure!(
                 Instant::now() < until,
-                "UDP rendezvous timeout (received={received}, matched={matched}, P/A/C={kinds:?})"
+                "UDP rendezvous timeout (received={received}, matched={matched}, P/A/C={kinds:?}, learned={learned_ports})"
             );
             if Instant::now() >= next {
-                for &a in endpoints {
+                for &a in endpoints.iter().chain(&learned) {
                     let _ = socket.send_to(&punch(nonce, a.port(), local_port, b'P'), mapped(a));
                 }
-                next = Instant::now() + Duration::from_millis(250);
+                next = Instant::now() + punch_interval(started.elapsed());
             }
             match socket.recv_from(&mut buffer) {
                 Ok((n, source)) => {
                     received += 1;
                     let a = canonical(source);
-                    // Exact authenticated candidates only: no port guessing or unsolicited peers.
-                    if !endpoints.contains(&a) || !valid_punch(&buffer[..n], nonce) {
+                    // Authenticated candidates, or another port on one of their
+                    // addresses; no port guessing or unrelated hosts.
+                    if !valid_punch(&buffer[..n], nonce)
+                        || !admit_source(endpoints, &mut learned, a)
+                    {
                         continue;
                     }
                     matched += 1;
+                    progress();
                     kinds[match buffer[6] {
                         b'P' => 0,
                         b'A' => 1,
@@ -872,18 +992,30 @@ impl Enet {
             return Ok(());
         }
         let mut next_retry: Option<Instant> = None;
+        // A peer that is still sending is alive: a command it has not
+        // acknowledged after the usual retries (a full receive window, or a
+        // burst of loss) keeps retrying instead of tearing down a working
+        // direct channel. The wall-clock bound below still applies.
+        let peer_active = now.duration_since(self.last_receive) < ACTIVE_PEER;
         for p in self.pending.values_mut() {
             let mut retry = p.last + RETRY_INTERVAL;
             if now >= retry {
-                ensure!(p.tries < 20, "UDP acknowledgement timeout");
+                ensure!(
+                    p.tries < RETRY_LIMIT || peer_active,
+                    "UDP acknowledgement timeout"
+                );
                 // Bound sustained send-buffer congestion even when `tries`
                 // never advances and liveness stays fresh from incoming data.
                 ensure!(
                     now.duration_since(p.queued) < Duration::from_secs(35),
-                    "UDP send congestion timeout"
+                    if p.tries >= RETRY_LIMIT {
+                        "UDP acknowledgement timeout"
+                    } else {
+                        "UDP send congestion timeout"
+                    }
                 );
                 if Self::transmit_to(&self.socket, self.remote_id, self.started, &p.command)? {
-                    p.tries += 1;
+                    p.tries = p.tries.saturating_add(1);
                     p.last = now;
                 } else {
                     // Not transmitted, so not a failed attempt: try again soon.
@@ -1249,15 +1381,18 @@ mod tests {
             .unwrap();
         a.send_to(&mapping_response(&request_a[4..], 1234), client_a)
             .unwrap();
-        assert_eq!(
-            worker.join().unwrap().unwrap().to_string(),
-            "192.0.2.10:1234"
-        );
+        let mapping = worker.join().unwrap().unwrap();
+        assert_eq!(mapping.endpoint.to_string(), "192.0.2.10:1234");
+        assert_eq!(mapping.agreement, MappingAgreement::Agree);
     }
 
     #[test]
-    fn mapping_rejects_disagreement_and_needs_both_servers() {
-        for disagree in [true, false] {
+    fn mapping_reports_disagreement_and_uses_a_lone_answer_only_after_the_deadline() {
+        for (answers, expected) in [
+            (2, Some(MappingAgreement::Varies)),
+            (1, Some(MappingAgreement::OneServer)),
+            (0, None),
+        ] {
             let a = UdpSocket::bind("127.0.0.1:0").unwrap();
             let b = UdpSocket::bind("127.0.0.1:0").unwrap();
             for socket in [&a, &b] {
@@ -1266,6 +1401,7 @@ mod tests {
                     .unwrap();
             }
             let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
+            let started = Instant::now();
             let worker = std::thread::spawn(move || {
                 discover_mapping_at(
                     &bind_dual_stack().unwrap(),
@@ -1275,22 +1411,124 @@ mod tests {
                 )
             });
             let mut request = [0; 20];
-            let (_, client) = a.recv_from(&mut request).unwrap();
-            let response = mapping_response(&request[4..], 1234);
-            a.send_to(&response, client).unwrap();
-            a.send_to(&response, client).unwrap();
-            if disagree {
+            if answers >= 1 {
+                let (_, client) = a.recv_from(&mut request).unwrap();
+                let response = mapping_response(&request[4..], 1234);
+                a.send_to(&response, client).unwrap();
+                a.send_to(&response, client).unwrap();
+            }
+            if answers == 2 {
                 let (_, client) = b.recv_from(&mut request).unwrap();
                 b.send_to(&mapping_response(&request[4..], 1235), client)
                     .unwrap();
             }
-            let error = worker.join().unwrap().unwrap_err().to_string();
-            assert!(error.contains(if disagree {
-                "changes by destination"
-            } else {
-                "timeout"
-            }));
+            let result = worker.join().unwrap();
+            match expected {
+                Some(agreement) => {
+                    let mapping = result.unwrap();
+                    assert_eq!(mapping.agreement, agreement);
+                    // The first host's observation, never a predicted port.
+                    assert_eq!(mapping.endpoint.to_string(), "192.0.2.10:1234");
+                    if agreement == MappingAgreement::OneServer {
+                        assert!(started.elapsed() >= Duration::from_millis(300));
+                    }
+                }
+                None => assert!(result.unwrap_err().to_string().contains("timeout")),
+            }
         }
+    }
+
+    #[test]
+    fn rendezvous_learns_another_port_on_a_candidate_address_but_no_other_host() {
+        // Production sockets are dual-stack and punch IPv4-mapped addresses.
+        let loopback = |socket: &UdpSocket| {
+            SocketAddr::from((Ipv4Addr::LOCALHOST, socket.local_addr().unwrap().port()))
+        };
+        let outgoing = bind_dual_stack().unwrap();
+        let incoming = bind_dual_stack().unwrap();
+        // The coordinator advertised a port the peer's NAT did not use.
+        let stale = bind_dual_stack().unwrap();
+        let advertised = loopback(&stale);
+        let outgoing_address = loopback(&outgoing);
+        let actual = loopback(&incoming);
+        let acceptor = std::thread::spawn(move || {
+            Enet::accept(
+                incoming,
+                &[outgoing_address],
+                77,
+                Duration::from_secs(5),
+                None,
+            )
+            .unwrap()
+        });
+        let progress = std::sync::atomic::AtomicUsize::new(0);
+        let channel = Enet::connect_tracked(
+            outgoing,
+            &[advertised],
+            77,
+            Duration::from_secs(5),
+            None,
+            &|| {
+                progress.fetch_add(1, Ordering::Relaxed);
+            },
+        )
+        .unwrap();
+        assert_eq!(channel.endpoint(), actual);
+        assert!(progress.load(Ordering::Relaxed) > 0);
+        assert_eq!(acceptor.join().unwrap().endpoint(), outgoing_address);
+
+        let mut learned = vec![];
+        let candidate: SocketAddr = "192.0.2.1:1000".parse().unwrap();
+        assert!(admit_source(&[candidate], &mut learned, candidate));
+        assert!(learned.is_empty());
+        assert!(!admit_source(
+            &[candidate],
+            &mut learned,
+            "192.0.2.2:1000".parse().unwrap()
+        ));
+        for port in 1..=20 {
+            admit_source(
+                &[candidate],
+                &mut learned,
+                SocketAddr::new(candidate.ip(), 2000 + port),
+            );
+        }
+        assert_eq!(learned.len(), MAX_LEARNED_ENDPOINTS);
+    }
+
+    #[test]
+    fn mapping_requests_are_resent_after_a_lost_reply() {
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        for socket in [&a, &b] {
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+        }
+        let servers = [a.local_addr().unwrap(), b.local_addr().unwrap()];
+        let worker = std::thread::spawn(move || {
+            discover_mapping_at(
+                &bind_dual_stack().unwrap(),
+                servers,
+                &None,
+                Duration::from_secs(2),
+            )
+        });
+        let mut request = [0; 20];
+        // Drop both first requests, as if the replies were lost.
+        let (_, first_a) = a.recv_from(&mut request).unwrap();
+        let first_transaction = request[4..].to_vec();
+        b.recv_from(&mut request).unwrap();
+        let (_, client) = a.recv_from(&mut request).unwrap();
+        assert_eq!(client, first_a);
+        assert_eq!(request[4..], first_transaction[..], "same transaction");
+        a.send_to(&mapping_response(&request[4..], 1234), client)
+            .unwrap();
+        let (_, client) = b.recv_from(&mut request).unwrap();
+        b.send_to(&mapping_response(&request[4..], 1234), client)
+            .unwrap();
+        let mapping = worker.join().unwrap().unwrap();
+        assert_eq!(mapping.agreement, MappingAgreement::Agree);
     }
 
     #[test]
@@ -1685,13 +1923,45 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("liveness timeout"));
-        e.last_receive = Instant::now();
+        e.last_receive = Instant::now() - ACTIVE_PEER;
         e.send(b"unacknowledged").unwrap();
         for pending in e.pending.values_mut() {
-            pending.tries = 20;
+            pending.tries = RETRY_LIMIT;
             pending.last = Instant::now() - Duration::from_secs(1);
         }
         refresh_retry_deadline(&mut e);
+        assert!(e
+            .pump()
+            .unwrap_err()
+            .to_string()
+            .contains("acknowledgement timeout"));
+    }
+    #[test]
+    fn an_active_peer_keeps_an_unacknowledged_command_retrying_within_the_bound() {
+        let (mut e, remote) = pair();
+        remote
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        e.sustain();
+        e.send(b"lost twenty times").unwrap();
+        let command = received_command(&remote);
+        // The peer is still sending, so the channel is not torn down.
+        e.last_receive = Instant::now();
+        for pending in e.pending.values_mut() {
+            pending.tries = RETRY_LIMIT;
+            pending.last = Instant::now() - Duration::from_secs(1);
+        }
+        refresh_retry_deadline(&mut e);
+        e.pump().unwrap();
+        assert_eq!(received_command(&remote), command);
+        assert_eq!(e.pending[&(0, 1)].tries, RETRY_LIMIT + 1);
+        // A command that stays unacknowledged still fails eventually.
+        for pending in e.pending.values_mut() {
+            pending.queued = Instant::now() - Duration::from_secs(36);
+            pending.last = Instant::now() - Duration::from_secs(1);
+        }
+        refresh_retry_deadline(&mut e);
+        e.last_receive = Instant::now();
         assert!(e
             .pump()
             .unwrap_err()

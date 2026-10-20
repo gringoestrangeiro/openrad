@@ -56,6 +56,11 @@ class EnginePeerTest {
     /** Whether the coordinator forwards TCP (op 6) and UDP (op 29) candidates. */
     private var forwardTcp = true
     private var forwardUdp = false
+    /**
+     * Like the live service: the acceptor gets a relay ticket only when it sends
+     * its own relay request (op 22) on the attachment session.
+     */
+    private var ticketsOnRequestOnly = false
     /** Direct-path requests and advertisements (ops 2, 3, 28) received from any engine. */
     private val directMessages = AtomicInteger()
 
@@ -178,7 +183,19 @@ class EnginePeerTest {
                 val cid = Tlv.unique(records, 0x020001c1).u64()
                 pairings[cid]?.requester?.send(udpCandidates(cid, records))
             }
+            if (op == 22L) {
+                val cid = Tlv.unique(records, 0x020001c1).u64()
+                if (pairings[cid]?.target == session.rid) session.send(relayOffer(cid))
+            }
         }
+    }
+
+    private fun relayOffer(cid: Long): ByteArray {
+        val ticket = ByteArray(256) { (cid + it).toByte() }
+        return Tlv.u32(Protocol.SERVER_OP, 23) + Tlv.u64(0x020001c1, cid) + Tlv.tlv(
+            0x123f,
+            Tlv.text(0x030001cb, "127.0.0.1") + Tlv.u32(0x010001cc, relay.localPort.toLong()) + Tlv.tlv(0x090001ca, ticket),
+        )
     }
 
     private fun coordinator(session: Session, target: Long) {
@@ -206,13 +223,8 @@ class EnginePeerTest {
             if (op in DIRECT_OPS) directMessages.incrementAndGet()
             if (op == 28L && forwardUdp) mains[target]?.send(udpCandidates(cid, records))
             if (op == 22L) {
-                val ticket = ByteArray(256) { (cid + it).toByte() }
-                val relayOffer = Tlv.u32(Protocol.SERVER_OP, 23) + Tlv.u64(0x020001c1, cid) + Tlv.tlv(
-                    0x123f,
-                    Tlv.text(0x030001cb, "127.0.0.1") + Tlv.u32(0x010001cc, relay.localPort.toLong()) + Tlv.tlv(0x090001ca, ticket),
-                )
-                session.send(relayOffer)
-                mains[target]?.send(relayOffer)
+                session.send(relayOffer(cid))
+                if (!ticketsOnRequestOnly) mains[target]?.send(relayOffer(cid))
             }
         }
     }
@@ -348,6 +360,16 @@ class EnginePeerTest {
         assertEquals(TransportPath.RELAY, connectAndExchange(forceRelay = false, policyA = cellular, policyB = cellular))
         assertTrue(relayed.get() > 0)
         assertEquals("no direct candidate requests or UDP advertisements", 0, directMessages.get())
+    }
+
+    @Test
+    fun aRelayOnlyAcceptorRequestsItsOwnTicketAndConnectsOverRelay() {
+        // Previously the acceptor waited for a ticket the service never pushes,
+        // so incoming offers on cellular networks were never accepted.
+        ticketsOnRequestOnly = true
+        val cellular = NetworkPolicy { false }
+        assertEquals(TransportPath.RELAY, connectAndExchange(forceRelay = false, policyA = cellular, policyB = cellular))
+        assertTrue(relayed.get() > 0)
     }
 
     @Test

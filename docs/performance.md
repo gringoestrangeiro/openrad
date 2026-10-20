@@ -29,8 +29,10 @@ the advertisement queue accommodates a burst from all 128 setup workers.
 - Local UDP advertisement and the relay request no longer wait for mapped UDP
   discovery. Mapping runs in its own cancellable worker on both connection roles.
 - Both authenticated UDP discovery servers are queried concurrently on the same
-  socket with a shared two-second deadline. Both replies must still match their
-  transactions and agree on the external address. Only unanswered queries retry.
+  socket with a shared 2.5-second deadline; unanswered queries are resent at 0.4,
+  0.9 and 1.5 seconds. Replies must match their transactions. Agreement returns at
+  once; a lone reply is used at the deadline; a disagreement still advertises the
+  first host's observation (no other port is predicted).
 - Relay TCP connection and ticket pairing start as soon as an authenticated relay
   offer arrives, independently of direct workers. A prepared socket is not a peer
   channel and cannot forward traffic. Its authentication starts only when the
@@ -45,6 +47,17 @@ the advertisement queue accommodates a burst from all 128 setup workers.
   the wait. Late direct candidates continue to be accepted during relay setup.
   Once relay starts, the first fully authenticated Ethernet service wins;
   established sessions are not subsequently migrated between transports.
+- A direct attempt that has heard from the peer (a valid UDP punch or a matching
+  TCP rendezvous) holds relay authentication for up to 16 seconds after the
+  ticket while it runs. A UDP rendezvous may punch for 14 seconds in either role,
+  every 100 ms for the first two seconds and every 250 ms after. Silent direct
+  paths keep the four/eight-second timing, so relay fallback is not slower when
+  direct is impossible. Outgoing transport reports now include start times,
+  relay start, and the attempts a winner cancelled.
+- An established UDP channel whose peer sent a datagram within the last five
+  seconds keeps retransmitting a command after 20 tries instead of closing; the
+  35-second bound per command still applies. A silent peer still fails after 20
+  tries.
 - Linux TCP connects use one nonblocking connection attempt, with cancellation
   checks at most 50 ms apart. Losing or superseded attempts no longer occupy
   setup slots until the blocking connect timeout expires.

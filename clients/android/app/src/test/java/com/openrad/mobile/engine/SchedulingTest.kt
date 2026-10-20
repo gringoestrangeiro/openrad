@@ -114,6 +114,44 @@ class SchedulingTest {
         assertTrue(PeerScheduling.relayReady(6000, 0, 2000, directExhausted = false))
         assertTrue(PeerScheduling.relayReady(8000, 0, 7000, directExhausted = false))
         assertTrue(PeerScheduling.relayReady(0, 0, null, directExhausted = true))
+        // A running direct attempt that heard from the peer holds the relay, bounded.
+        assertFalse(PeerScheduling.relayReady(8000, 0, null, directExhausted = false, directProgress = true))
+        assertFalse(PeerScheduling.relayReady(PeerScheduling.MAX_PROGRESS_HOLD_MS - 1, 0, null, directExhausted = false, directProgress = true))
+        assertTrue(PeerScheduling.relayReady(PeerScheduling.MAX_PROGRESS_HOLD_MS, 0, null, directExhausted = false, directProgress = true))
+        assertTrue(PeerScheduling.relayReady(0, 0, null, directExhausted = true, directProgress = true))
+    }
+
+    @Test
+    fun directProgressCountsOnlyMarkedRunningAttempts() {
+        val progress = DirectProgress()
+        val quiet = progress.tracker()
+        val reached = progress.tracker()
+        assertFalse(progress.active)
+        reached.mark()
+        reached.mark()
+        assertTrue(progress.active)
+        quiet.close()
+        assertTrue(progress.active)
+        reached.close()
+        reached.close()
+        assertFalse(progress.active)
+        // A closed tracker never counts again.
+        reached.mark()
+        assertFalse(progress.active)
+    }
+
+    @Test
+    fun onlyAnObjectionSoonAfterAnAcceptorRelayRequestDisablesRequests() {
+        val guard = AcceptorRelayGuard()
+        assertFalse(guard.objected(1_000))
+        assertTrue(guard.allowed)
+        guard.requested(10_000)
+        // An unrelated, later refusal.
+        assertFalse(guard.objected(16_000))
+        assertTrue(guard.allowed)
+        guard.requested(20_000)
+        assertTrue(guard.objected(24_000))
+        assertFalse(guard.allowed)
     }
 
     private class Resource(val name: String) {

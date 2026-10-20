@@ -119,14 +119,30 @@ pub(crate) struct RelayOffer {
 }
 const DIRECT_HEAD_START: Duration = Duration::from_secs(4);
 const MAX_RELAY_WAIT: Duration = Duration::from_secs(8);
+/// Relay authentication waits this long after its ticket while a direct
+/// attempt that has already heard from the peer is still running.
+pub(crate) const MAX_PROGRESS_HOLD: Duration = Duration::from_secs(16);
+/// Punching window of one direct UDP attempt, covering the progress hold.
+pub(crate) const UDP_ATTEMPT: Duration = Duration::from_secs(14);
 
 impl RelayOffer {
+    /// `direct_progress`: a running direct attempt has received a valid punch
+    /// or TCP rendezvous from the peer. Such a path usually completes within a
+    /// few seconds, so it is not cut off by a relay that would win only
+    /// because it started first. Silent direct paths keep the old timing.
     pub(crate) fn ready(
         &self,
         now: Instant,
         last_direct_start: Option<Instant>,
         direct_exhausted: bool,
+        direct_progress: bool,
     ) -> bool {
+        if direct_exhausted {
+            return true;
+        }
+        if direct_progress {
+            return now >= self.received_at + MAX_PROGRESS_HOLD;
+        }
         // Late mapped UDP candidates deserve their own head start. Bound the
         // extension so a silent direct path cannot suppress the relay forever.
         let start_at = (last_direct_start
@@ -134,7 +150,7 @@ impl RelayOffer {
             .max(self.received_at)
             + DIRECT_HEAD_START)
             .min(self.received_at + MAX_RELAY_WAIT);
-        direct_exhausted || now >= start_at
+        now >= start_at
     }
 }
 
@@ -409,6 +425,8 @@ impl PeerChannel {
         let mut relay_started = false;
         let mut last_direct_start = None;
         let mut records_received = 0;
+        let begun = Instant::now();
+        let progress = crate::scheduling::DirectProgress::default();
         let mut channel = std::thread::scope(|scope| -> Result<Self> {
             // This guard cancels every losing transport before scope joins it,
             // including on malformed coordinator messages or user cancellation.
@@ -427,7 +445,16 @@ impl PeerChannel {
                             report.attempts.push(serde_json::json!({
                                 "phase":completed.name, "result":"authenticated_service",
                                 "setup_ms":completed.elapsed.as_millis(), "endpoint":channel.transport.endpoint,
+                                "after_ms":begun.elapsed().as_millis(),
                             }));
+                            // Losers are cancelled without reporting; record them
+                            // so a relay win shows which direct paths it preempted.
+                            for name in tasks.running() {
+                                report.attempts.push(serde_json::json!({
+                                    "phase":name, "result":"cancelled_by_winner",
+                                    "direct_progress":progress.active(),
+                                }));
+                            }
                             return Ok(channel);
                         }
                         Err(error) => report.attempts.push(serde_json::json!({
@@ -442,17 +469,20 @@ impl PeerChannel {
                 {
                     mapping = None;
                     match result {
-                        Ok((socket, endpoint)) => {
+                        Ok((socket, discovered)) => {
                             let cid = pending
                                 .as_ref()
                                 .ok_or_else(|| {
                                     anyhow::anyhow!("mapped candidates before NewConnection")
                                 })?
                                 .0;
-                            coord.send(&advertise_mapped_udp(cid, endpoint)?)?;
+                            coord.send(&advertise_mapped_udp(cid, discovered.endpoint)?)?;
                             mapped_socket = Some(socket);
                             mapped_received = mapped_nonce.is_some();
-                            report.attempts.push(serde_json::json!({"phase":"ues_mapping","endpoint":endpoint,"result":"two_servers_agree"}));
+                            report.attempts.push(serde_json::json!({
+                                "phase":"ues_mapping", "endpoint":discovered.endpoint,
+                                "result":discovered.agreement.label(), "after_ms":begun.elapsed().as_millis(),
+                            }));
                         }
                         Err(error) => report.attempts.push(
                             serde_json::json!({"phase":"ues_mapping","error":error.to_string()}),
@@ -514,6 +544,7 @@ impl PeerChannel {
                                     .collect();
                                 let dial = dial();
                                 let cid = *cid;
+                                let tracker = progress.tracker();
                                 tasks.spawn(scope, name, move |cancel| {
                                     let deadline =
                                         until.min(Instant::now() + Duration::from_secs(8));
@@ -535,6 +566,7 @@ impl PeerChannel {
                                                 Duration::from_secs(2),
                                             )?;
                                             stream.peer_rendezvous(identity.rid, cid, server_id)?;
+                                            tracker.mark();
                                             dial.authenticate(
                                                 PeerStream::Tcp(stream),
                                                 TransportPath::DirectTcp,
@@ -569,18 +601,24 @@ impl PeerChannel {
                         if let Some(nonce) = nonce.filter(|_| !candidates.is_empty()) {
                             if let Some(socket) = socket.take() {
                                 last_direct_start = Some(Instant::now());
+                                report.attempts.push(serde_json::json!({
+                                    "phase": format!("{name}_start"), "candidates": candidates.len(),
+                                    "after_ms": begun.elapsed().as_millis(),
+                                }));
                                 let endpoints: Vec<_> =
                                     candidates.iter().map(|c| c.endpoint).collect();
                                 let dial = dial();
+                                let tracker = progress.tracker();
                                 tasks.spawn(scope, name, move |cancel| {
-                                    let stream = crate::udp::Enet::connect(
+                                    let stream = crate::udp::Enet::connect_tracked(
                                         socket,
                                         &endpoints,
                                         nonce,
                                         until
                                             .saturating_duration_since(Instant::now())
-                                            .min(Duration::from_secs(8)),
+                                            .min(UDP_ATTEMPT),
                                         Some(cancel),
+                                        &|| tracker.mark(),
                                     )?;
                                     dial.authenticate(
                                         PeerStream::Udp(stream),
@@ -599,10 +637,19 @@ impl PeerChannel {
                     if !relay_started
                         && relay_stream.is_some()
                         && relay.as_ref().is_some_and(|r: &RelayOffer| {
-                            r.ready(Instant::now(), last_direct_start, direct_exhausted)
+                            r.ready(
+                                Instant::now(),
+                                last_direct_start,
+                                direct_exhausted,
+                                progress.active(),
+                            )
                         })
                     {
                         relay_started = true;
+                        report.attempts.push(serde_json::json!({
+                            "phase": "relay_start", "after_ms": begun.elapsed().as_millis(),
+                            "direct_running": tasks.running().len(),
+                        }));
                         let mut stream = relay_stream.take().unwrap();
                         let dial = dial();
                         tasks.spawn(scope, "relay", move |cancel| {
@@ -1413,18 +1460,29 @@ mod connection_tests {
             ticket: vec![],
             received_at: now,
         };
-        assert!(!offer.ready(now + Duration::from_secs(3), None, false));
-        assert!(offer.ready(now + Duration::from_secs(4), None, false));
+        assert!(!offer.ready(now + Duration::from_secs(3), None, false, false));
+        assert!(offer.ready(now + Duration::from_secs(4), None, false, false));
         let late_udp = now + Duration::from_secs(3);
-        assert!(!offer.ready(now + Duration::from_secs(6), Some(late_udp), false));
-        assert!(offer.ready(now + Duration::from_secs(7), Some(late_udp), false));
+        assert!(!offer.ready(now + Duration::from_secs(6), Some(late_udp), false, false));
+        assert!(offer.ready(now + Duration::from_secs(7), Some(late_udp), false, false));
         assert!(offer.ready(
             now + Duration::from_secs(8),
             Some(now + Duration::from_secs(7)),
+            false,
             false
         ));
+        // A direct attempt that already heard from the peer holds the relay,
+        // up to a bound, but never delays a relay after direct is exhausted.
+        assert!(!offer.ready(now + Duration::from_secs(8), None, false, true));
+        assert!(!offer.ready(
+            now + MAX_PROGRESS_HOLD - Duration::from_millis(1),
+            None,
+            false,
+            true
+        ));
+        assert!(offer.ready(now + MAX_PROGRESS_HOLD, None, false, true));
         assert!(
-            offer.ready(now, None, true),
+            offer.ready(now, None, true, true),
             "exhausted direct paths need no extra wait"
         );
     }

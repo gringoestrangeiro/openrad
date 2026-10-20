@@ -268,7 +268,9 @@ impl Setup {
         observe: impl FnOnce(&crate::peer::TransportReport),
     ) -> Result<PeerChannel> {
         let cancel = Arc::new(AtomicBool::new(false));
-        let until = Instant::now() + Duration::from_secs(40);
+        let begun = Instant::now();
+        let until = begun + Duration::from_secs(40);
+        let progress = crate::scheduling::DirectProgress::default();
         let mut attempts = vec![];
         let mut tcp_candidates = vec![];
         let mut udp_candidates = vec![];
@@ -331,15 +333,17 @@ impl Setup {
                 let tx = tx.clone();
                 let cancel = cancel.clone();
                 let start = &start;
+                let tracker = progress.tracker();
                 thread::Builder::new()
                     .name(name.into())
                     .spawn_scoped(scope, move || {
-                        let r = udp::Enet::accept(
+                        let r = udp::Enet::accept_tracked(
                             socket,
                             &endpoints,
                             nonce,
-                            Duration::from_secs(12),
+                            crate::peer::UDP_ATTEMPT,
                             Some(cancel),
+                            &|| tracker.mark(),
                         )
                         .and_then(|s| start(name, PeerStream::Udp(s), TransportPath::DirectUdp));
                         let _ = tx.send((name, r));
@@ -350,9 +354,30 @@ impl Setup {
             let mut relay_preparation = None;
             let mut relay_stream = None;
             let mut last_direct_start = None;
+            let relays = matches!(self.policy, Policy::All | Policy::Relay);
+            // The service does not send the acceptor a relay ticket on its own.
+            // Ask for one after a short direct preference (almost at once when
+            // relay is the only allowed path), so an initiator that falls back
+            // to relay finds us at the relay instead of timing out.
+            let mut relay_request_at = relays.then(|| {
+                begun
+                    + if self.policy == Policy::Relay {
+                        // Long enough to read records buffered with the offer.
+                        Duration::from_millis(300)
+                    } else {
+                        ACCEPTOR_RELAY_DELAY
+                    }
+            });
+            let mut records_seen = 0usize;
             loop {
                 ensure!(!stop.load(Ordering::Relaxed), "cancelled");
                 ensure!(Instant::now() < until, "incoming peer setup timeout");
+                // An initiator that abandoned its offer sends nothing at all;
+                // free the peer for a fresh attempt instead of waiting 40 s.
+                ensure!(
+                    records_seen > 0 || accepted > 0 || begun.elapsed() < ABANDONED_OFFER,
+                    "incoming offer abandoned: no candidates or relay ticket arrived"
+                );
                 for (name, r) in rx.try_iter() {
                     match r {
                         Ok(mut p) => {
@@ -360,9 +385,10 @@ impl Setup {
                             p.transport.udp_candidates = udp_candidates.clone();
                             p.transport.mapped_udp_candidates = mapped_candidates.clone();
                             p.transport.attempts = attempts.clone();
-                            p.transport
-                                .attempts
-                                .push(json!({"winner":name,"connection_id":self.cid}));
+                            p.transport.attempts.push(json!({
+                                "winner":name,"connection_id":self.cid,
+                                "after_ms":begun.elapsed().as_millis(),
+                            }));
                             return Ok(p);
                         }
                         Err(e) => {
@@ -427,9 +453,13 @@ impl Setup {
                         )?;
                         let tx = tx.clone();
                         let start = &start;
+                        // The rendezvous preamble already matched this peer/CID.
+                        let tracker = progress.tracker();
+                        tracker.mark();
                         thread::Builder::new()
                             .name("incoming-tcp".into())
                             .spawn_scoped(scope, move || {
+                                let _tracker = tracker;
                                 let _ = tx.send((
                                     "tcp",
                                     start("tcp", PeerStream::Tcp(stream), TransportPath::DirectTcp),
@@ -441,11 +471,17 @@ impl Setup {
                 if let Some(result) = mapping.as_ref().and_then(udp::MappingDiscovery::poll) {
                     mapping = None;
                     match result {
-                        Ok((socket, endpoint)) => {
+                        Ok((socket, discovered)) => {
                             self.wire.try_send(advertise_mapped_udp_with_nonce(
-                                self.cid, endpoint, nonce,
+                                self.cid,
+                                discovered.endpoint,
+                                nonce,
                             )?)?;
                             mapped_socket = Some(socket);
+                            attempts.push(json!({
+                                "phase":"mapped_discovery","endpoint":discovered.endpoint,
+                                "result":discovered.agreement.label(),"after_ms":begun.elapsed().as_millis(),
+                            }));
                         }
                         Err(error) => attempts
                             .push(json!({"phase":"mapped_discovery","error":error.to_string()})),
@@ -456,6 +492,9 @@ impl Setup {
                 if !mapped_candidates.is_empty() {
                     if let Some(socket) = mapped_socket.take() {
                         last_direct_start = Some(Instant::now());
+                        attempts.push(json!({
+                            "phase":"mapped-udp_start","after_ms":begun.elapsed().as_millis(),
+                        }));
                         spawn_udp(socket, mapped_candidates.clone(), "mapped-udp")?;
                     }
                 }
@@ -473,6 +512,20 @@ impl Setup {
                         }
                     }
                 }
+                if relay.is_none() && relay_request_at.is_some_and(|at| Instant::now() >= at) {
+                    relay_request_at = None;
+                    if acceptor_relay::allowed() {
+                        // A full advertisement queue only loses this fallback.
+                        let queued = self.wire.try_send(request_relay(self.cid)).is_ok();
+                        if queued {
+                            acceptor_relay::requested();
+                        }
+                        attempts.push(json!({
+                            "phase":"relay_request","queued":queued,
+                            "after_ms":begun.elapsed().as_millis(),
+                        }));
+                    }
+                }
                 if !relay_started
                     && relay_stream.is_some()
                     && relay.as_ref().is_some_and(|offer| {
@@ -480,11 +533,15 @@ impl Setup {
                             Instant::now(),
                             last_direct_start,
                             self.policy == Policy::Relay,
+                            progress.active(),
                         )
                     })
                 {
                     let mut stream = relay_stream.take().unwrap();
                     relay_started = true;
+                    attempts.push(json!({
+                        "phase":"relay_start","after_ms":begun.elapsed().as_millis(),
+                    }));
                     let tx = tx.clone();
                     let cancel = cancel.clone();
                     let start = &start;
@@ -501,6 +558,7 @@ impl Setup {
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(_) => bail!("incoming coordinator closed"),
                 };
+                records_seen += 1;
                 // The router has correlated CID; all endpoint parsers check it again.
                 let operation = op(&data)?;
                 match operation {
@@ -531,6 +589,10 @@ impl Setup {
                         };
                         if let Some(socket) = socket {
                             last_direct_start = Some(Instant::now());
+                            attempts.push(json!({
+                                "phase": if operation == 29 { "udp_start" } else { "mapped-udp_start" },
+                                "after_ms": begun.elapsed().as_millis(),
+                            }));
                             spawn_udp(
                                 socket,
                                 c,
@@ -570,6 +632,9 @@ impl Setup {
                                 );
                             }
                         }
+                        attempts.push(json!({
+                            "phase":"relay_ticket","after_ms":begun.elapsed().as_millis(),
+                        }));
                         relay = Some(offer);
                     }
                     _ => {}
@@ -600,6 +665,89 @@ impl Setup {
         Ok(channel)
     }
 }
+/// Direct paths usually win an incoming offer within about three seconds.
+const ACCEPTOR_RELAY_DELAY: Duration = Duration::from_secs(2);
+/// An offer whose initiator never sends a candidate or ticket is abandoned.
+const ABANDONED_OFFER: Duration = Duration::from_secs(15);
+
+/// Process-wide guard for acceptor relay requests. They use the shared
+/// attachment session, so if the service ever objects shortly after one, the
+/// requests stop for the rest of this process rather than risk the session.
+pub(crate) mod acceptor_relay {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        OnceLock,
+    };
+    use std::time::{Duration, Instant};
+
+    const OBJECTION_WINDOW: Duration = Duration::from_secs(5);
+
+    pub(crate) struct Guard {
+        disabled: AtomicBool,
+        /// Milliseconds after `epoch()` of the last request, plus one (0 = none).
+        last_request: AtomicU64,
+    }
+    impl Guard {
+        pub(crate) const fn new() -> Self {
+            Self {
+                disabled: AtomicBool::new(false),
+                last_request: AtomicU64::new(0),
+            }
+        }
+        pub(crate) fn allowed(&self) -> bool {
+            !self.disabled.load(Ordering::Relaxed)
+        }
+        pub(crate) fn requested_at(&self, now_ms: u64) {
+            self.last_request.store(now_ms + 1, Ordering::Relaxed);
+        }
+        pub(crate) fn objected_at(&self, now_ms: u64) -> bool {
+            let last = self.last_request.load(Ordering::Relaxed);
+            let recent = last != 0
+                && (now_ms + 1).saturating_sub(last) <= OBJECTION_WINDOW.as_millis() as u64;
+            if recent {
+                self.disabled.store(true, Ordering::Relaxed);
+            }
+            recent
+        }
+    }
+
+    static GUARD: Guard = Guard::new();
+    fn now_ms() -> u64 {
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
+    }
+    pub(crate) fn allowed() -> bool {
+        GUARD.allowed()
+    }
+    pub(crate) fn requested() {
+        GUARD.requested_at(now_ms());
+    }
+    /// Report a server refusal or disconnect. Returns true when it followed an
+    /// acceptor relay request closely enough to disable further requests.
+    pub(crate) fn server_objected() -> bool {
+        GUARD.objected_at(now_ms())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn only_an_objection_soon_after_a_request_disables_requests() {
+            let guard = Guard::new();
+            // No request yet.
+            assert!(!guard.objected_at(1_000));
+            assert!(guard.allowed());
+            guard.requested_at(10_000);
+            // An unrelated, later refusal.
+            assert!(!guard.objected_at(16_000));
+            assert!(guard.allowed());
+            guard.requested_at(20_000);
+            assert!(guard.objected_at(24_000));
+            assert!(!guard.allowed());
+        }
+    }
+}
+
 struct Cancel(Arc<AtomicBool>);
 impl Drop for Cancel {
     fn drop(&mut self) {

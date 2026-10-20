@@ -586,11 +586,22 @@ fn control_loop(
                 16 => {
                     let fields = records(&data)?;
                     diagnostics.event("server_disconnect", json!({
+                        "acceptor_relay_disabled": crate::incoming::acceptor_relay::server_objected(),
                         "reason_code": optional(&fields, 0x010001d2)?.map(int32).transpose()?,
                         "record_bytes": data.len(),
                         "fields": fields.iter().map(|field| json!({"tag": format!("0x{:08x}", field.tag), "bytes": field.value.len()})).collect::<Vec<_>>(),
                     }));
                     bail!("server disconnected the session");
+                }
+                44 => {
+                    // A refusal on the shared session. Record its shape, and stop
+                    // acceptor relay requests if it answered one of them.
+                    let fields = records(&data)?;
+                    diagnostics.event("server_refusal", json!({
+                        "acceptor_relay_disabled": crate::incoming::acceptor_relay::server_objected(),
+                        "record_bytes": data.len(),
+                        "fields": fields.iter().map(|field| json!({"tag": format!("0x{:08x}", field.tag), "bytes": field.value.len()})).collect::<Vec<_>>(),
+                    }));
                 }
                 11 | 6 | 7 | 23 | 29 => {
                     let bytes = data.len();

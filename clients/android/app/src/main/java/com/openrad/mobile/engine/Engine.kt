@@ -482,7 +482,12 @@ class Engine(
         val records = Tlv.parse(data)
         val op = Tlv.unique(records, Protocol.SERVER_OP).u32()
         Protocol.checkRedirect(records)
-        if (op == 16L) throw IOException("server disconnected the attachment session")
+        if (op == 16L) {
+            AcceptorRelayGuard.shared.objected(now())
+            throw IOException("server disconnected the attachment session")
+        }
+        // A refusal on the shared session stops acceptor relay requests if it answered one.
+        if (op == 44L && AcceptorRelayGuard.shared.objected(now())) event("Relay requests for incoming peers disabled after a service refusal", true)
         synchronized(lock) {
             when (op) {
                 38L -> {
@@ -557,7 +562,6 @@ class Engine(
                 p.wipe()
                 continue
             }
-            if (relayOnly() && p.records.none { runCatching { Protocol.operation(it) }.getOrNull() == 23L }) continue
             val peer = eligible[p.offer.rid] ?: continue
             if (workers[peer.rid]?.thread?.isAlive == true) continue
             if (!budget.tryStart(incoming = true)) break
@@ -922,6 +926,7 @@ class Engine(
             var records = 0
             var lastError: String? = null
             var winner: PeerChannel? = null
+            val progress = DirectProgress()
             try {
                 while (true) {
                     if (stop.get()) throw CancelledException()
@@ -939,10 +944,10 @@ class Engine(
                     mapping?.poll()?.let { (_, result) ->
                         mapping?.close()
                         mapping = null
-                        result.onSuccess { (socket, endpoint) ->
+                        result.onSuccess { (socket, discovered) ->
                             mappedSocket = socket
                             mappedReceived = mappedNonce != null
-                            offer?.let { coord.send(Protocol.advertiseMappedUdp(it.cid, endpoint, 0)) }
+                            offer?.let { coord.send(Protocol.advertiseMappedUdp(it.cid, discovered.endpoint, 0)) }
                         }.onFailure { lastError = "mapped-udp: ${describe(it)}" }
                     }
                     relayPreparation.poll()?.let { (_, result) ->
@@ -957,25 +962,25 @@ class Engine(
                         if (!relayOnly && !directStarted && !c.isNullOrEmpty() && serverId != 0L) {
                             directStarted = true
                             lastDirectStart = now()
-                            startDirectLanes(race, own, o, c, serverId, until)
+                            startDirectLanes(race, own, o, c, serverId, until, progress)
                         }
                         val direct = udpSocket
                         val nonce = udpNonce
                         if (direct != null && nonce != null && udpCandidates.isNotEmpty()) {
                             udpSocket = null
                             lastDirectStart = now()
-                            startUdpLane(race, "direct-udp", direct, udpCandidates, nonce, own, o, until)
+                            startUdpLane(race, "direct-udp", direct, udpCandidates, nonce, own, o, until, progress)
                         }
                         val mappedLocal = mappedSocket
                         val mappedPeerNonce = mappedNonce
                         if (mappedLocal != null && mappedPeerNonce != null && mappedCandidates.isNotEmpty()) {
                             mappedSocket = null
                             lastDirectStart = now()
-                            startUdpLane(race, "mapped-udp", mappedLocal, mappedCandidates, mappedPeerNonce, own, o, until)
+                            startUdpLane(race, "mapped-udp", mappedLocal, mappedCandidates, mappedPeerNonce, own, o, until, progress)
                         }
                         val prepared = relayStream
                         val directExhausted = race.idle && mapping == null && tcpReceived && udpReceived && mappedReceived
-                        if (!relayStarted && prepared != null && PeerScheduling.relayReady(now(), relayAt, lastDirectStart, directExhausted)) {
+                        if (!relayStarted && prepared != null && PeerScheduling.relayReady(now(), relayAt, lastDirectStart, directExhausted, progress.active)) {
                             relayStarted = true
                             relayStream = null
                             prepared.stop = race.cancel
@@ -1117,10 +1122,13 @@ class Engine(
             own: Identity,
             offer: Protocol.ConnectionOffer,
             until: Long,
+            progress: DirectProgress,
         ) {
             race.launch(name, abandon = { socket.close() }) {
-                val enet = Enet.connect(socket, endpoints, nonce, minOf(until - now(), PeerScheduling.DIRECT_ATTEMPT_MS), race.cancel)
-                PeerChannel(enet, own.rid, own.vip, peer.rid, offer.password, false, null, TransportPath.DIRECT_UDP, (until - now()).coerceAtLeast(100))
+                progress.tracker().use { tracker ->
+                    val enet = Enet.connect(socket, endpoints, nonce, minOf(until - now(), PeerScheduling.UDP_ATTEMPT_MS), race.cancel) { tracker.mark() }
+                    PeerChannel(enet, own.rid, own.vip, peer.rid, offer.password, false, null, TransportPath.DIRECT_UDP, (until - now()).coerceAtLeast(100))
+                }
             }
         }
 
@@ -1132,6 +1140,7 @@ class Engine(
             candidates: List<Pair<String, Int>>,
             serverId: Long,
             until: Long,
+            progress: DirectProgress,
         ) {
             val lanes = minOf(candidates.size, PeerScheduling.DIRECT_TCP_LANES)
             val body = beU64(own.rid) + beU64(offer.cid) + beU32(serverId)
@@ -1143,11 +1152,13 @@ class Engine(
                     for ((host, port) in assigned) {
                         if (now() >= deadline || race.cancel.get()) break
                         var direct: Framed? = null
+                        val tracker = progress.tracker()
                         try {
                             direct = Framed.connect(host, port, (deadline - now()).coerceIn(1, 3000).toInt(), protector, race.cancel)
                             direct.write(byteArrayOf(0, 0x14, 0, 1) + body)
                             val check = readBeU32(direct.readExact(4, now() + 2000))
                             ensure(check == Protocol.rendezvousChecksum(body)) { "TCP rendezvous checksum mismatch" }
+                            tracker.mark()
                             return@launch PeerChannel(
                                 direct, own.rid, own.vip, peer.rid, offer.password, false, null, TransportPath.DIRECT_TCP,
                                 (until - now()).coerceIn(100, 10_000),
@@ -1156,6 +1167,8 @@ class Engine(
                             direct?.close()
                             if (e is CancelledException) throw e
                             errors.add("$host:$port ${describe(e)}")
+                        } finally {
+                            tracker.close()
                         }
                     }
                     throw IOException("direct TCP candidates failed: ${errors.joinToString("; ")}")
@@ -1188,12 +1201,22 @@ class Engine(
             var relayStarted = false
             var lastError: String? = null
             var winner: PeerChannel? = null
+            val begun = now()
+            val progress = DirectProgress()
+            val tcpSeen = AtomicBoolean(false)
+            var recordsSeen = 0
+            // The service sends the acceptor no relay ticket unless asked. Ask after a
+            // short direct preference (almost at once when relay is the only path), so an
+            // initiator that falls back to relay finds us there instead of timing out.
+            var relayRequestAt: Long? = begun + if (relayOnly) PeerScheduling.RELAY_ONLY_REQUEST_DELAY_MS else PeerScheduling.ACCEPTOR_RELAY_DELAY_MS
             val route = routeIp?.let { runCatching { Ip.parse(it) }.getOrNull() }
             fun startUdp(name: String, socket: UdpSocket, endpoints: List<InetSocketAddress>) {
                 lastDirectStart = now()
                 race.launch(name, abandon = { socket.close() }) {
-                    val enet = Enet.accept(socket, endpoints, nonce, PeerScheduling.INCOMING_UDP_MS, race.cancel)
-                    PeerChannel(enet, own.rid, own.vip, peer.rid, offer.password, true, null, TransportPath.DIRECT_UDP, (until - now()).coerceAtLeast(100))
+                    progress.tracker().use { tracker ->
+                        val enet = Enet.accept(socket, endpoints, nonce, PeerScheduling.UDP_ATTEMPT_MS, race.cancel) { tracker.mark() }
+                        PeerChannel(enet, own.rid, own.vip, peer.rid, offer.password, true, null, TransportPath.DIRECT_UDP, (until - now()).coerceAtLeast(100))
+                    }
                 }
             }
             try {
@@ -1203,7 +1226,7 @@ class Engine(
                     server.soTimeout = 200
                     listener = server
                     wire.offer(Protocol.advertiseTcp(offer.cid, Ip.format(route), server.localPort))
-                    acceptDirect(race, server, own, offer, until)
+                    acceptDirect(race, server, own, offer, until, progress, tcpSeen)
                     bindUdp(route)?.let { (socket, endpoints) ->
                         directSocket = socket
                         wire.offer(Protocol.advertiseUdp(offer.cid, endpoints, nonce))
@@ -1214,6 +1237,11 @@ class Engine(
                 while (true) {
                     if (stop.get()) throw CancelledException()
                     if (now() >= until) throw IOException(failure("incoming peer setup timed out", lastError))
+                    // An initiator that abandoned its offer sends nothing at all; free the
+                    // peer for a fresh attempt instead of waiting the full setup budget.
+                    if (recordsSeen == 0 && !tcpSeen.get() && now() - begun >= PeerScheduling.ABANDONED_OFFER_MS) {
+                        throw IOException("incoming offer abandoned: no candidates or relay ticket arrived")
+                    }
                     while (true) {
                         val (name, result) = race.poll() ?: break
                         val ch = result.getOrNull()
@@ -1227,9 +1255,9 @@ class Engine(
                     mapping?.poll()?.let { (_, result) ->
                         mapping?.close()
                         mapping = null
-                        result.onSuccess { (socket, endpoint) ->
+                        result.onSuccess { (socket, discovered) ->
                             mappedSocket = socket
-                            wire.offer(Protocol.advertiseMappedUdp(offer.cid, endpoint, nonce))
+                            wire.offer(Protocol.advertiseMappedUdp(offer.cid, discovered.endpoint, nonce))
                         }.onFailure { lastError = "mapped-udp: ${describe(it)}" }
                     }
                     // Candidates can arrive before our mapping result; start once both are known.
@@ -1244,8 +1272,16 @@ class Engine(
                             lastError = "relay: ${describe(it)}"
                         }
                     }
+                    val requestAt = relayRequestAt
+                    if (!relayOffered && requestAt != null && now() >= requestAt) {
+                        relayRequestAt = null
+                        // A full advertisement queue only loses this fallback.
+                        if (AcceptorRelayGuard.shared.allowed && wire.offer(Protocol.requestRelay(offer.cid))) {
+                            AcceptorRelayGuard.shared.requested(now())
+                        }
+                    }
                     val prepared = relayStream
-                    if (!relayStarted && prepared != null && PeerScheduling.relayReady(now(), relayAt, lastDirectStart, directExhausted)) {
+                    if (!relayStarted && prepared != null && PeerScheduling.relayReady(now(), relayAt, lastDirectStart, directExhausted, progress.active)) {
                         relayStarted = true
                         relayStream = null
                         prepared.stop = race.cancel
@@ -1256,6 +1292,7 @@ class Engine(
                     val nothingLeft = mapping == null && directSocket == null && mappedSocket == null
                     if (race.idle && relayStarted && nothingLeft) throw IOException(failure("all incoming transports failed", lastError))
                     val data = offers.poll(20, TimeUnit.MILLISECONDS) ?: continue
+                    recordsSeen++
                     when (runCatching { Protocol.operation(data) }.getOrNull()) {
                         29L -> if (!relayOnly) {
                             val c = runCatching { Protocol.directCandidates(data, offer.cid, 29, 0x127cL, route) }.getOrNull().orEmpty()
@@ -1294,7 +1331,15 @@ class Engine(
          * rendezvous at once, so a partial or unrelated connection cannot hold the
          * listener. The service handshake stays serialized: one TCP winner only.
          */
-        private fun acceptDirect(race: SetupRace<PeerChannel>, server: ServerSocket, own: Identity, offer: Protocol.ConnectionOffer, until: Long) {
+        private fun acceptDirect(
+            race: SetupRace<PeerChannel>,
+            server: ServerSocket,
+            own: Identity,
+            offer: Protocol.ConnectionOffer,
+            until: Long,
+            progress: DirectProgress,
+            seen: AtomicBoolean,
+        ) {
             val validated = ArrayBlockingQueue<Framed>(8)
             var closed = false
             fun admit(direct: Framed) {
@@ -1329,6 +1374,7 @@ class Engine(
                         break
                     }
                     accepted++
+                    seen.set(true)
                     val validator = Thread({
                         try {
                             validate(sock)
@@ -1351,10 +1397,14 @@ class Engine(
                     while (!race.cancel.get() && now() < until) {
                         val direct = validated.poll(100, TimeUnit.MILLISECONDS) ?: continue
                         try {
-                            return@launch PeerChannel(
-                                direct, own.rid, own.vip, peer.rid, offer.password, true, null, TransportPath.DIRECT_TCP,
-                                (until - now()).coerceIn(100, 10_000),
-                            )
+                            // The rendezvous preamble already matched this peer and CID.
+                            return@launch progress.tracker().use { tracker ->
+                                tracker.mark()
+                                PeerChannel(
+                                    direct, own.rid, own.vip, peer.rid, offer.password, true, null, TransportPath.DIRECT_TCP,
+                                    (until - now()).coerceIn(100, 10_000),
+                                )
+                            }
                         } catch (e: Exception) {
                             direct.close()
                             if (e is CancelledException) throw e

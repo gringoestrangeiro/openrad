@@ -317,13 +317,37 @@ class UdpTest {
         e.sustain()
         e.lastReceive = now() - 36_000
         assertTrue(runCatching { e.pump() }.exceptionOrNull()!!.message!!.contains("liveness timeout"))
-        e.lastReceive = now()
+        e.lastReceive = now() - Udp.ACTIVE_PEER_MS
         e.send("unacknowledged".toByteArray())
         for (p in e.pending.values) {
             p.tries = Udp.MAX_TRIES
             p.last = now() - 1000
         }
         refreshRetryDeadline(e)
+        assertTrue(runCatching { e.pump() }.exceptionOrNull()!!.message!!.contains("acknowledgement timeout"))
+    }
+
+    @Test
+    fun anActivePeerKeepsAnUnacknowledgedCommandRetryingWithinTheBound() {
+        val (e, remote) = pair()
+        e.sustain()
+        e.send("lost twenty times".toByteArray())
+        val command = receivedCommand(remote)
+        // The peer is still sending, so the channel is not torn down.
+        e.lastReceive = now()
+        for (p in e.pending.values) {
+            p.tries = Udp.MAX_TRIES
+            p.last = now() - 1000
+        }
+        refreshRetryDeadline(e)
+        e.pump()
+        assertArrayEquals(command, receivedCommand(remote))
+        assertEquals(Udp.MAX_TRIES + 1, e.pending.values.single().tries)
+        // A command that stays unacknowledged still fails eventually.
+        val stale = e.pending.values.single()
+        e.pending[e.pending.firstKey()] = Enet.Pending(stale.command, now() - 1000, stale.tries, now() - 36_000)
+        refreshRetryDeadline(e)
+        e.lastReceive = now()
         assertTrue(runCatching { e.pump() }.exceptionOrNull()!!.message!!.contains("acknowledgement timeout"))
     }
 
@@ -584,7 +608,7 @@ class UdpTest {
         val a = server()
         val b = server()
         val servers = listOf(InetSocketAddress(loopback, a.localPort), InetSocketAddress(loopback, b.localPort))
-        val result = CompletableFuture<InetSocketAddress>()
+        val result = CompletableFuture<Udp.Mapping>()
         thread {
             runCatching { Udp.discoverMappingAt(keep(UdpSocket.bind(null)), servers, null, 3000) }
                 .fold(result::complete, result::completeExceptionally)
@@ -597,28 +621,86 @@ class UdpTest {
         a.send(DatagramPacket(mappingResponse(wrong, 1234), 32, requestA.socketAddress))
         b.send(DatagramPacket(mappingResponse(requestB.data.copyOfRange(4, 20), 1234), 32, requestB.socketAddress))
         a.send(DatagramPacket(mappingResponse(requestA.data.copyOfRange(4, 20), 1234), 32, requestA.socketAddress))
-        assertEquals(Udp.endpoint(Ip.parse("192.0.2.10"), 1234), result.get(3, TimeUnit.SECONDS))
+        assertEquals(Udp.Mapping(Udp.endpoint(Ip.parse("192.0.2.10"), 1234), Udp.Agreement.AGREE), result.get(3, TimeUnit.SECONDS))
     }
 
     @Test
-    fun mappingRejectsDisagreementAndNeedsBothServers() {
-        for (disagree in listOf(true, false)) {
+    fun mappingReportsDisagreementAndUsesALoneAnswerOnlyAfterTheDeadline() {
+        for ((answers, expected) in listOf(2 to Udp.Agreement.VARIES, 1 to Udp.Agreement.ONE_SERVER, 0 to null)) {
             val a = server()
             val b = server()
             val servers = listOf(InetSocketAddress(loopback, a.localPort), InetSocketAddress(loopback, b.localPort))
-            val result = CompletableFuture<Throwable?>()
-            thread { result.complete(runCatching { Udp.discoverMappingAt(keep(UdpSocket.bind(null)), servers, null, 300) }.exceptionOrNull()) }
-            val request = DatagramPacket(ByteArray(20), 20).also { a.receive(it) }
-            val response = mappingResponse(request.data.copyOfRange(4, 20), 1234)
-            a.send(DatagramPacket(response, 32, request.socketAddress))
-            a.send(DatagramPacket(response, 32, request.socketAddress))
-            if (disagree) {
+            val started = now()
+            val result = CompletableFuture<Result<Udp.Mapping>>()
+            thread { result.complete(runCatching { Udp.discoverMappingAt(keep(UdpSocket.bind(null)), servers, null, 300) }) }
+            if (answers >= 1) {
+                val request = DatagramPacket(ByteArray(20), 20).also { a.receive(it) }
+                val response = mappingResponse(request.data.copyOfRange(4, 20), 1234)
+                a.send(DatagramPacket(response, 32, request.socketAddress))
+                a.send(DatagramPacket(response, 32, request.socketAddress))
+            }
+            if (answers == 2) {
                 val other = DatagramPacket(ByteArray(20), 20).also { b.receive(it) }
                 b.send(DatagramPacket(mappingResponse(other.data.copyOfRange(4, 20), 1235), 32, other.socketAddress))
             }
-            val error = result.get(3, TimeUnit.SECONDS)?.message.orEmpty()
-            assertTrue(error, error.contains(if (disagree) "changes by destination" else "timeout"))
+            val outcome = result.get(3, TimeUnit.SECONDS)
+            if (expected == null) {
+                assertTrue(outcome.exceptionOrNull()!!.message!!.contains("timeout"))
+            } else {
+                val mapping = outcome.getOrThrow()
+                assertEquals(expected, mapping.agreement)
+                // The first host's observation, never a predicted port.
+                assertEquals(Udp.endpoint(Ip.parse("192.0.2.10"), 1234), mapping.endpoint)
+                if (expected == Udp.Agreement.ONE_SERVER) assertTrue(now() - started >= 300)
+            }
         }
+    }
+
+    @Test
+    fun mappingRequestsAreResentAfterALostReply() {
+        val a = server().apply { soTimeout = 2000 }
+        val b = server().apply { soTimeout = 2000 }
+        val servers = listOf(InetSocketAddress(loopback, a.localPort), InetSocketAddress(loopback, b.localPort))
+        val result = CompletableFuture<Udp.Mapping>()
+        thread {
+            runCatching { Udp.discoverMappingAt(keep(UdpSocket.bind(null)), servers, null, 2000) }
+                .fold(result::complete, result::completeExceptionally)
+        }
+        // Drop both first requests, as if the replies were lost.
+        val first = DatagramPacket(ByteArray(20), 20).also { a.receive(it) }
+        val transaction = first.data.copyOfRange(4, 20)
+        DatagramPacket(ByteArray(20), 20).also { b.receive(it) }
+        val again = DatagramPacket(ByteArray(20), 20).also { a.receive(it) }
+        assertArrayEquals("same transaction", transaction, again.data.copyOfRange(4, 20))
+        a.send(DatagramPacket(mappingResponse(transaction, 1234), 32, again.socketAddress))
+        val otherAgain = DatagramPacket(ByteArray(20), 20).also { b.receive(it) }
+        b.send(DatagramPacket(mappingResponse(otherAgain.data.copyOfRange(4, 20), 1234), 32, otherAgain.socketAddress))
+        assertEquals(Udp.Agreement.AGREE, result.get(3, TimeUnit.SECONDS).agreement)
+    }
+
+    @Test
+    fun rendezvousLearnsAnotherPortOnACandidateAddressButNoOtherHost() {
+        val a = UdpSocket.bind(null)
+        val b = UdpSocket.bind(null)
+        // The coordinator advertised a port the peer's NAT did not use.
+        val stale = keep(DatagramSocket(0, loopback))
+        val aAddress = InetSocketAddress(loopback, a.localPort)
+        val bActual = InetSocketAddress(loopback, b.localPort)
+        val incoming = CompletableFuture<Enet>()
+        thread { runCatching { Enet.accept(b, listOf(aAddress), 77, 5000, null) }.fold(incoming::complete, incoming::completeExceptionally) }
+        val progress = java.util.concurrent.atomic.AtomicInteger()
+        val outgoing = keep(Enet.connect(a, listOf(InetSocketAddress(loopback, stale.localPort)), 77, 5000, null) { progress.incrementAndGet() })
+        assertEquals(bActual, outgoing.endpoint)
+        assertTrue(progress.get() > 0)
+        assertEquals(aAddress, keep(incoming.get(5, TimeUnit.SECONDS)).endpoint)
+
+        val candidate = Udp.endpoint(Ip.parse("192.0.2.1"), 1000)
+        val learned = ArrayList<InetSocketAddress>()
+        assertTrue(Udp.admitSource(listOf(candidate), learned, candidate))
+        assertTrue(learned.isEmpty())
+        assertFalse(Udp.admitSource(listOf(candidate), learned, Udp.endpoint(Ip.parse("192.0.2.2"), 1000)))
+        for (port in 1..20) Udp.admitSource(listOf(candidate), learned, Udp.endpoint(Ip.parse("192.0.2.1"), 2000 + port))
+        assertEquals(Udp.MAX_LEARNED_ENDPOINTS, learned.size)
     }
 
     @Test
