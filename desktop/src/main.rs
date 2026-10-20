@@ -5,6 +5,8 @@ mod graphics;
 mod network_ui;
 mod startup_log;
 mod storage;
+#[cfg(windows)]
+mod uninstall;
 #[cfg(any(windows, test))]
 #[path = "platform/windows_launch.rs"]
 mod windows_launch;

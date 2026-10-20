@@ -111,6 +111,7 @@ impl Framed {
     ) -> Result<Self> {
         Self::connect_timeout(host, port, duration, stop, Duration::from_secs(8))
     }
+    /// Resolve a host and share a bounded connect deadline across its IPv4 and IPv6 addresses.
     pub fn connect_timeout(
         host: &str,
         port: u16,
@@ -126,12 +127,17 @@ impl Framed {
         let until = started + timeout.min(duration);
         let addresses = resolve_endpoints(host, port, until, &stop)?;
         let mut last_error = anyhow::anyhow!("no endpoint address");
-        for address in addresses {
+        let address_count = addresses.len();
+        for (index, address) in addresses.into_iter().enumerate() {
             let remaining = until.saturating_duration_since(Instant::now());
             if remaining.is_zero() || is_cancelled(&stop) {
                 break;
             }
-            match connect_socket(&address, remaining, &stop) {
+            // Reserve time for other resolved addresses. A black-holed IPv6
+            // candidate must not consume the entire budget before IPv4 gets a try.
+            let candidates_left = (address_count - index) as u32;
+            let attempt_timeout = remaining / candidates_left;
+            match connect_socket(&address, attempt_timeout, &stop) {
                 Ok(socket) => {
                     return Self::from_socket(
                         socket,

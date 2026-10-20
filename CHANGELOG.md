@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2.0.2 — proposed (not yet published)
+
+OpenRad 2.0.2 is a maintenance update. Wire formats are unchanged.
 
 Direct-path success and incoming-offer stability, based on a local analysis of
-41,315 diagnostic events. Wire formats are unchanged.
+41,315 diagnostic events:
 
 - Relay no longer preempts working direct paths: while a direct attempt has already received a valid punch or TCP rendezvous from the peer, relay authentication waits up to 16 s after the ticket (previously 4–8 s). Silent direct paths keep the old timing. UDP rendezvous windows are 14 s on both roles (previously 8 s outgoing, 12 s incoming) and punch every 100 ms for the first two seconds.
 - UDP rendezvous admits a nonce-correlated punch from another port on an authenticated candidate's IP address (at most eight learned ports), so peers behind endpoint-dependent NATs can still connect directly. Unrelated hosts are still ignored and peer SH authentication is unchanged.
@@ -12,7 +14,17 @@ Direct-path success and incoming-offer stability, based on a local analysis of
 - An established UDP channel is not closed for a missing acknowledgement while the peer is still sending (seen within 5 s); the 35 s per-command bound remains.
 - Diagnostics record mapping agreement, direct/relay start times, and attempts cancelled by the winning path.
 - Android: the same changes are ported to the Kotlin engine. On mobile data (relay-only), incoming offers are no longer skipped while waiting for a relay ticket that never arrived.
-- Validation: Linux workspace tests, Linux/Windows Clippy and Android unit tests pass, including new regressions for each change. Behavior against the live service and real NATs, including how the service answers acceptor relay requests, has not been measured yet.
+
+Windows, networking and desktop maintenance:
+
+- Windows: start the detached service without inheriting CLI stdout/stderr handles, so commands no longer hang after starting the VPN, and keep the daemon exit status in the CLI startup log.
+- Networking: distribute the remaining connect deadline across resolved addresses so an unresponsive IPv6 address cannot consume the whole budget before IPv4 is tried.
+- Persistence: atomically replace settings and network-preference JSON files with unique temporary names, clean up failed writes, bound file sizes, and sync the parent directory after a POSIX rename.
+- Settings: add a confirmed **Uninstall OpenRad** action that elevates through the Windows shell and preserves identities, profiles, settings and logs.
+- Radmin Recovery: keep the named-pipe diagnostic read pending across polls and retry it after task failure, so worker errors are neither lost nor blocked.
+- Localization and documentation: add the uninstall strings, preserve Unicode, and clarify Windows startup log locations.
+
+Validation: Linux workspace tests, Linux/Windows Clippy and Android unit tests pass, including new regressions for the direct-path changes. Behavior against the live service and real NATs, including how the service answers acceptor relay requests, has not been measured yet. Native Windows TAP, UAC and installer cycles remain unverified.
 
 ## 2.0.1 — 2026-10-15
 

@@ -4118,5 +4118,36 @@
     "Peer IP: {endpoint}",
     "IP узла: {endpoint}",
     "IP máy ngang hàng: {endpoint}"
+  ],
+
+  "Uninstall OpenRad": [
+    "Desinstalar o OpenRad",
+    "Удалить OpenRad",
+    "Gỡ cài đặt OpenRad"
+  ],
+  "Remove the OpenRad app and its dedicated TAP adapter. Your saved identity, profiles and personal settings will be preserved.": [
+    "Remove o aplicativo OpenRad e seu adaptador TAP dedicado. Sua identidade salva, seus perfis e suas configurações pessoais serão preservados.",
+    "Удалите приложение OpenRad и его выделенный TAP-адаптер. Сохранённые данные удостоверения, профили и личные настройки останутся без изменений.",
+    "Gỡ ứng dụng OpenRad và bộ điều hợp TAP riêng của ứng dụng. Danh tính đã lưu, hồ sơ và cài đặt cá nhân của bạn sẽ được giữ nguyên."
+  ],
+  "Uninstall OpenRad?": [
+    "Desinstalar o OpenRad?",
+    "Удалить OpenRad?",
+    "Gỡ cài đặt OpenRad?"
+  ],
+  "The Windows uninstaller will remove OpenRad and its dedicated TAP adapter. Your saved identity, profiles, settings and logs will remain available if you reinstall later.": [
+    "O desinstalador do Windows removerá o OpenRad e seu adaptador TAP dedicado. Sua identidade salva, seus perfis, configurações e registros permanecerão disponíveis se você reinstalar o aplicativo depois.",
+    "Программа удаления Windows удалит OpenRad и его выделенный TAP-адаптер. Сохранённые данные удостоверения, профили, настройки и журналы останутся доступными при повторной установке.",
+    "Trình gỡ cài đặt Windows sẽ xóa OpenRad và bộ điều hợp TAP riêng. Danh tính đã lưu, hồ sơ, cài đặt và nhật ký của bạn vẫn sẽ có sẵn nếu bạn cài đặt lại sau này."
+  ],
+  "Open Windows uninstaller": [
+    "Abrir o desinstalador do Windows",
+    "Открыть программу удаления Windows",
+    "Mở trình gỡ cài đặt Windows"
+  ],
+  "Could not start the uninstaller": [
+    "Não foi possível iniciar o desinstalador",
+    "Не удалось запустить программу удаления",
+    "Không thể khởi chạy trình gỡ cài đặt"
   ]
 }

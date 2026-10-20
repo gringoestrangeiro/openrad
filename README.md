@@ -15,9 +15,9 @@ This repository is a monorepo with three clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.0.1 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.0.1 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.0.1 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.0.2 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.0.2 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.0.2 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and

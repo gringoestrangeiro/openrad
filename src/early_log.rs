@@ -284,11 +284,8 @@ pub fn command(kind: &str) {
 pub fn child_started(pid: u32) {
     event(format_args!("Service spawned; child_pid={pid}"));
 }
-pub fn child_exited(status: std::process::ExitStatus) {
-    event(format_args!(
-        "Service child exited; code={:?}; status={status}",
-        status.code()
-    ));
+pub fn child_exited(status: impl fmt::Display) {
+    event(format_args!("Service child exited; status={status}"));
 }
 pub fn reply(ok: bool, last_error: Option<&str>) {
     event(format_args!("CLI reply; ok={ok}"));

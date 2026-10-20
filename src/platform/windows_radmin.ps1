@@ -220,15 +220,22 @@ function New-OpenRadRadminResultPipe {
     return [IO.Pipes.NamedPipeServerStream]::new($Name, [IO.Pipes.PipeDirection]::In, 1, [IO.Pipes.PipeTransmissionMode]::Message, [IO.Pipes.PipeOptions]::Asynchronous, 4096, 4096, $security)
 }
 
+# Return diagnostic text when ready without discarding an in-progress async read.
+# The caller reuses ReadState across polls, including when the client connects
+# before writing its error. A single ReadAsync remains pending until completion.
 function Read-OpenRadRadminResult {
-    param($Pipe, $Connection)
+    param($Pipe, $Connection, [hashtable]$ReadState = $null)
     try {
         if (-not $Connection.IsCompleted) { return '' }
-        $Pipe.EndWaitForConnection($Connection)
-        $buffer = [byte[]]::new(4096)
-        $read = $Pipe.ReadAsync($buffer, 0, $buffer.Length)
-        if (-not $read.Wait(1000)) { return '' }
-        return [Text.Encoding]::UTF8.GetString($buffer, 0, $read.Result)
+        if ($null -eq $ReadState) { $ReadState = @{} }
+        if (-not $ReadState.ContainsKey('Task')) {
+            $Pipe.EndWaitForConnection($Connection)
+            $ReadState.Buffer = [byte[]]::new(4096)
+            $ReadState.Task = $Pipe.ReadAsync($ReadState.Buffer, 0, $ReadState.Buffer.Length)
+        }
+        if (-not $ReadState.Task.IsCompleted) { return '' }
+        $count = $ReadState.Task.GetAwaiter().GetResult()
+        return [Text.Encoding]::UTF8.GetString($ReadState.Buffer, 0, $count)
     } catch { return 'Worker diagnostic pipe could not be read.' }
 }
 
@@ -266,7 +273,19 @@ try { & { WORKER } -AdapterGuid @(GUIDS); exit 0 } catch {
         $registered = $true
         Start-ScheduledTask -TaskName $taskName
         $deadline = [DateTime]::UtcNow.AddSeconds(40)
+        $diagnostic = ''
+        $diagnosticRead = $false
+        $readState = @{}
         do {
+            # The worker writes to a synchronous Windows named pipe before
+            # exiting. Consume the error as soon as the pipe connects, or
+            # waiting for task completion can deadlock the worker's Write().
+            if ($connection.IsCompleted -and -not $diagnosticRead) {
+                $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection -ReadState $readState
+                # A connected pipe may not contain bytes yet. Keep the same
+                # pending read until a diagnostic arrives or the deadline ends.
+                $diagnosticRead = -not [string]::IsNullOrEmpty($diagnostic)
+            }
             $info = Get-ScheduledTaskInfo -TaskName $taskName
             $task = Get-ScheduledTask -TaskName $taskName
             # A just-registered task reports Ready/zero before its first run.
@@ -275,8 +294,23 @@ try { & { WORKER } -AdapterGuid @(GUIDS); exit 0 } catch {
             # combine with a later LastRunTime and falsely signal completion.
             if ($info.LastRunTime.Year -gt 2000 -and $task.State -notin @('Running', 'Queued') -and $info.LastTaskResult -notin @(267009, 267011)) {
                 if ($info.LastTaskResult -ne 0) {
-                    $detail = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection
-                    throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult + ': ' + $detail)
+                    if (-not $diagnosticRead) {
+                        # The task may report its exit before the pending pipe
+                        # read publishes the diagnostic. Wait briefly, bounded
+                        # by the existing overall recovery deadline.
+                        $readDeadline = [DateTime]::UtcNow.AddSeconds(2)
+                        if ($readDeadline -gt $deadline) { $readDeadline = $deadline }
+                        do {
+                            $diagnostic = Read-OpenRadRadminResult -Pipe $pipe -Connection $connection -ReadState $readState
+                            if (-not [string]::IsNullOrEmpty($diagnostic)) {
+                                $diagnosticRead = $true
+                                break
+                            }
+                            if ([DateTime]::UtcNow -ge $readDeadline) { break }
+                            Start-Sleep -Milliseconds 50
+                        } while ($true)
+                    }
+                    throw ('SYSTEM Radmin VPN recovery failed; task result ' + $info.LastTaskResult + ': ' + $diagnostic)
                 }
                 return
             }

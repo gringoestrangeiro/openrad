@@ -348,12 +348,13 @@ em stderr, sem produzir JSON em stdout.
 
 ## Diagnóstico
 
-O perfil contém o log do serviço em `service.log` e os diagnósticos de conexão
-no diretório `diagnostics/`. Os logs de inicialização ficam no diretório de
-logs do OpenRad, normalmente `~/.local/share/OpenRad/logs` no Linux;
-`OPENRAD_LOG_DIR` permite substituí-lo. Eles podem conter identificadores,
-endereços e nomes de redes, mas não devem conter senhas, chaves de sessão ou
-conteúdo dos pacotes.
+O perfil contém os diagnósticos de conexão em `diagnostics/`. No Linux, o log
+do serviço também fica no perfil, em `service.log`. No Windows, o serviço em
+segundo plano registra a inicialização em `cli-daemon-startup.log`, no diretório
+de logs do OpenRad, sem herdar os handles de saída da CLI. No Linux, o diretório
+de logs costuma ser `~/.local/share/OpenRad/logs`; `OPENRAD_LOG_DIR` permite
+alterá-lo. Esses registros podem conter identificadores, endereços e nomes de
+redes, mas não devem conter senhas, chaves de sessão ou conteúdo de pacotes.
 
 | Situação | Ação |
 | --- | --- |

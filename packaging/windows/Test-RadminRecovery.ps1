@@ -43,6 +43,7 @@ function Reset-Case {
     $script:respawn = $false; $script:replaceAtKill = $false; $script:adminFailures = 0; $script:systemFails = $false
     $script:polls = 0; $script:taskResult = 0; $script:startDenied = $false; $script:registrationDenied = $false; $script:startRace = $false
     $script:pipeDisposed = $false; $script:taskError = 'synthetic worker failure: adapter access denied'
+    $script:delayDiagnostic = $false; $script:delayedReadCount = 0
 }
 function Test-Case([string]$Name, [scriptblock]$Action) {
     Reset-Case
@@ -137,7 +138,7 @@ function Invoke-TestNative {
         default { throw 'Unexpected native executable.' }
     }
 }
-function Start-Sleep { param([int]$Milliseconds); if ($Milliseconds -notin @(200,250)) { throw 'Unexpected wait interval.' } }
+function Start-Sleep { param([int]$Milliseconds); if ($Milliseconds -notin @(50,200,250)) { throw 'Unexpected wait interval.' } }
 # Intercept only the native child-process helper. The target/service/process
 # validation and five-method fallback code are the exact embedded worker.
 $ast = [Management.Automation.Language.Parser]::ParseInput($originalWorker.ToString(), [ref]$tokens, [ref]$errors)
@@ -209,8 +210,22 @@ function New-OpenRadRadminResultPipe {
     $pipe | Add-Member ScriptMethod Dispose { $script:pipeDisposed = $true }
     return $pipe
 }
+# Mock pipe reader: validate that errors are consumed before the worker exits.
 function Read-OpenRadRadminResult {
-    param($Pipe, $Connection)
+    param($Pipe, $Connection, [hashtable]$ReadState)
+    # The error pipe must be consumed while the worker is still running.
+    # Otherwise a synchronous Write() can block worker exit indefinitely.
+    if ($script:delayDiagnostic) {
+        # No bytes arrive before task failure; the first read after exit is
+        # still pending. The coordinator must retry and retain the same state.
+        if ($script:polls -lt 4) { return '' }
+        $script:delayedReadCount++
+        if ($script:delayedReadCount -lt 2) { return '' }
+        return $script:taskError
+    }
+    if ($script:polls -ge 4) {
+        throw 'Diagnostic pipe read only after the task exited'
+    }
     return $script:taskError
 }
 function Join-Path {
@@ -294,6 +309,14 @@ Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') '
 Assert-Equal $script:pipeDisposed $true 'Failed recovery leaked its diagnostic pipe'
 
 Reset-Case
+$script:taskResult = 1
+$script:delayDiagnostic = $true
+Assert-ErrorContains { Invoke-OpenRadRadminSystemRecovery -AdapterGuid @($script:adapters[0].InterfaceGuid) } $script:taskError
+if ($script:delayedReadCount -lt 2) { throw 'Pending diagnostic was not polled after task failure.' }
+Assert-Equal $script:pipeDisposed $true 'Delayed recovery diagnostic leaked its pipe'
+$script:passed++
+
+Reset-Case
 $script:startDenied = $true
 Assert-Rejected { Invoke-OpenRadRadminSystemRecovery -AdapterGuid @($script:adapters[0].InterfaceGuid) } 'Task start failure was ignored'
 Assert-Equal $script:actions @('register', 'start', 'stop-task', 'unregister') 'Task start failure leaked a task'
@@ -321,10 +344,28 @@ foreach ($message in @('synthetic adapter failure: ошибка, não, lỗi', (
         $child.StartInfo.UseShellExecute = $false
         $child.StartInfo.RedirectStandardError = $true
         $child.Start() | Out-Null
+        # A synchronous named-pipe client Write can wait for the server to
+        # consume its message. Waiting for process exit first deadlocks this
+        # test (and used to hide the real worker error).
+        if (-not $connection.AsyncWaitHandle.WaitOne(5000)) {
+            $child.Kill()
+            throw 'Diagnostic worker did not connect within five seconds.'
+        }
+        # The async read can still be pending after the worker connects.
+        # Reuse the read task until the diagnostic arrives or the test times out.
+        $readState = @{}
+        $received = ''
+        $readDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $received = & $originalResultReader -Pipe $pipe -Connection $connection -ReadState $readState
+            if (-not [string]::IsNullOrEmpty($received)) { break }
+            if ([DateTime]::UtcNow -ge $readDeadline) { break }
+            Start-Sleep -Milliseconds 20
+        } while ($true)
         if (-not $child.WaitForExit(5000)) { $child.Kill(); throw 'Diagnostic worker did not exit within five seconds.' }
         Assert-Equal $child.ExitCode 1 'Encoded worker did not report failure'
         $expected = $message.Substring(0, [Math]::Min(1000, $message.Length))
-        Assert-Equal (& $originalResultReader -Pipe $pipe -Connection $connection) $expected 'Actual worker error was lost, truncated incorrectly, or decoded incorrectly'
+        Assert-Equal $received $expected 'Actual worker error was lost, truncated incorrectly, or decoded incorrectly'
         Assert-Equal $child.StandardError.ReadToEnd() '' 'Encoded worker leaked CLIXML instead of reporting through IPC'
     } finally { $pipe.Dispose(); $child.Dispose() }
 }

@@ -1642,7 +1642,19 @@ mod tests {
             if notified {
                 wake.notify();
             }
-            assert!(worker.join().unwrap().is_err());
+            let outcome = worker.join().unwrap();
+            if notified {
+                // The notification may arrive after pump() has checked stop.
+                // In that race ready_or_wake returns Ok(false), which is a
+                // valid local wake-up (the caller checks stop on its next loop).
+                assert!(
+                    matches!(outcome, Err(_) | Ok(false)),
+                    "notification must not report incoming UDP data: {outcome:?}"
+                );
+            } else {
+                // With no explicit wake, the polling path must observe stop.
+                assert!(outcome.is_err(), "stop flag was not observed: {outcome:?}");
+            }
             assert!(start.elapsed() < Duration::from_secs(1));
         }
     }
