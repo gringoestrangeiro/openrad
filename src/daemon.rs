@@ -1605,6 +1605,7 @@ pub fn spawn_with_executable(
         let exit_status = child.try_exit_code()?.map(|code| code.to_string());
         if let Some(status) = exit_status {
             early_log::checkpoint(Stage::ServiceExited);
+            early_log::child_exited(&status);
             bail!(
                 "service exited with {status}; see {}",
                 diagnostic_log.display()
