@@ -18,7 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.95.0'
-          components: rust-docs
+          components: rust-docs, rustfmt
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -70,7 +70,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.95.0'
-          components: rust-docs
+          components: rust-docs, rustfmt
           targets: x86_64-pc-windows-gnu
       - name: Install Windows cross-build tools
         run: |
