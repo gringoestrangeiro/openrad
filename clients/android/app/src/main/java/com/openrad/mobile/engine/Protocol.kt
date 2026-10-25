@@ -478,7 +478,11 @@ class Membership(val ownRid: Long) {
         val ids = HashSet(old?.networkIds ?: emptySet())
         if (networkId != null) ids.add(networkId)
         val server = Tlv.optional(fields, 0x030001c9L)?.let { Tlv.decodeText(it) } ?: old?.server
-        val state = Tlv.optional(fields, 0x010003a0L)?.u32() ?: old?.state ?: 0L
+        // A new member announced by the authenticated server is live when
+        // it includes a coordinator, unless its status is explicitly offline.
+        // Full snapshots without presence information remain conservative.
+        val state = Tlv.optional(fields, 0x010003a0L)?.u32() ?: old?.state
+            ?: if (networkId != null && server != null) 1L else 0L
         peers[rid] = PeerEntry(
             rid,
             Tlv.decodeText(Tlv.unique(fields, 0x03000304L)),
