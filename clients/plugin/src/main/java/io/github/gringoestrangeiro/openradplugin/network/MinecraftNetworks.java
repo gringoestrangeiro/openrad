@@ -31,6 +31,11 @@ public final class MinecraftNetworks {
                     Map.entry("فارسی", "persian"), Map.entry("ภาษาไทย", "thai"),
                     Map.entry("日本語", "japanese"), Map.entry("한국어", "korean"));
 
+    /** Available language selectors for the Fabric configuration UI before catalog fetch. */
+    public static List<String> knownLanguageGroups() {
+        return LANGUAGES.values().stream().distinct().sorted().toList();
+    }
+
     public record Entry(
             String selector, String language, int number, String name, long reportedCount) {}
 

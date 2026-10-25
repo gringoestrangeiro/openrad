@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - 'feature/2.1.5-minecraft-mod-paper'
+      - 'release/2.1.5'
+    paths:
+      - 'clients/mod/**'
+      - 'clients/plugin/**'
+      - '.github/workflows/minecraft-2.1.5-integration.yml'
   pull_request:
     branches:
       - 'release/2.1.5'
