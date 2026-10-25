@@ -80,26 +80,25 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **2.1.0** (Paper plugin, membership-presence fix and the 2.0.2 maintenance
-work) is prepared in source but its packages are not published yet; see the
-[2.1.0 notes](docs/releases/2.1.0.md). The latest published version,
-**2.0.1**, includes freshly built Linux x86-64 and Windows x64 packages,
-an offline Windows installer, a signed Android APK (beta), build metadata,
-dependency notices, and checksums.
-Enable **Settings → Peer IP** to show per-peer direct or relay transport addresses
-while connected. The packet path uses sliced checksums, pipelined CBC receive and
-8 KiB read-ahead; a full UDP send buffer retries as congestion instead of failing
-the channel. Read the [2.0.1 release notes](docs/releases/2.0.1.md) for upgrade behavior,
-validation, and platform limitations, and the
-[complete change inventory](docs/releases/2.0.1-changes.md) for every changed file.
+Version **[2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0)** adds the Minecraft **Paper server plugin**
+(`OpenRadPlugin-2.1.0.jar`, alpha), fixes newly joined members being shown offline,
+and includes the direct-path, incoming-offer and Windows reliability work prepared as
+2.0.2. It ships freshly built Linux x86-64 and Windows x64 packages, an offline
+Windows installer, a signed Android APK (beta), the plugin JAR, build metadata,
+dependency notices, and checksums. Read the [2.1.0 release notes](docs/releases/2.1.0.md)
+for upgrade behavior, validation, and platform limitations, and the
+[complete change inventory](docs/releases/2.1.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
 - **Windows:** Run `OpenRad-Setup.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.0.1-android.apk` (Android 8.0 or newer).
+- **Android (beta):** Install `openrad-2.1.0-android.apk` (Android 8.0 or newer).
+  It is signed with the same key as 2.0.1 and installs as an update.
   See the [Android client guide](clients/android/README.md).
+- **Minecraft server (Paper 1.21.x, alpha):** Put `OpenRadPlugin-2.1.0.jar` in the
+  server's `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
 
 ## Quick start
 
@@ -172,7 +171,7 @@ driver, root access or native libraries, so it also works on shared hosting.
 The plugin is **alpha**: full multiplayer gameplay through the official Radmin
 client has not been measured yet.
 
-1. Build the JAR (JDK 21) — or take it from a release that includes it:
+1. Download `OpenRadPlugin-2.1.0.jar` from the [2.1.0 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0), or build it (JDK 21):
 
    ```sh
    cd clients/plugin
@@ -252,7 +251,7 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [2.1.0 notes](docs/releases/2.1.0.md) | Prepared 2.1.0: Paper plugin, presence fix, validation, and limitations |
+| [2.1.0 release](docs/releases/2.1.0.md) | Paper plugin, presence fix, packages, upgrading, validation, and limitations |
 | [2.1.0 change inventory](docs/releases/2.1.0-changes.md) | File-by-file account of all changes since v2.0.1 |
 | [2.0.1 release](docs/releases/2.0.1.md) | Packages, upgrading, verification, and limitations |
 | [2.0.1 change inventory](docs/releases/2.0.1-changes.md) | File-by-file account of all changes since v2.0.0 |

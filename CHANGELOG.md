@@ -1,10 +1,10 @@
 # Changelog
 
-## 2.1.0 — prepared (not yet published)
+## 2.1.0 — 2026-10-25
 
 OpenRad 2.1.0 adds the Minecraft **Paper server plugin** (`clients/plugin/`, alpha) to
-the monorepo, aligns every client on 2.1.0, and includes the unpublished 2.0.2
-maintenance work below. Wire formats are unchanged. See the
+the monorepo, aligns every client on 2.1.0, and includes the 2.0.2
+maintenance work below, which was never published separately. Wire formats are unchanged. See the
 [release notes](docs/releases/2.1.0.md) and [file inventory](docs/releases/2.1.0-changes.md).
 
 - Paper plugin (Java 21, Paper 1.21.x): an in-process OpenRad client with a virtual TCP stack
