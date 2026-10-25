@@ -1,3 +1,8 @@
+> **Download (2.1.5, alpha):** [release 2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5),
+> arquivos `OpenRadClientMod-2.1.5-fabric-<versão>.jar` para Minecraft 1.21–1.21.11 (Java 21)
+> e 26.1–26.3 (Java 25). Instale **um** JAR, da versão exata do seu jogo, com a Fabric API.
+> Veja o [resumo da 2.1.5](README-2.1.5.md); as seções abaixo descrevem gerações anteriores.
+
 # OpenRad Client Mod — Minecraft Java 1.21 a 26.3
 
 **Matriz estendida:** versões Minecraft **1.21 até 1.21.11** (Java 21, builds `0.2.3-alpha`) e **26.1 até 26.3** (Java 25, builds `0.3.0-alpha`). Veja [a matriz detalhada gerada a partir dos JARs](docs/COMPATIBILITY-1.21-26.3.md) e use `build-full-range.ps1` para reconstruir e testar os alvos.
