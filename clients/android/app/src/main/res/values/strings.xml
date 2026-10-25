@@ -182,4 +182,18 @@
     <string name="name_invalid">The network name must have 1–255 characters, without control characters.</string>
     <string name="password_invalid">The password must have 6–256 characters, without control characters.</string>
     <string name="settings_outgoing_broadcasts_hint">While connected, multicast (224.0.0.0/4) and 255.255.255.255 broadcasts go through OpenRad, so LAN discovery such as Minecraft reaches your peers. Local Wi-Fi discovery (casting, games on the same Wi-Fi) pauses meanwhile.</string>
+    <string name="block_title">Stealth block</string>
+    <string name="block_hint">Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.</string>
+    <string name="block_address">VPN IP, e.g. 26.1.2.3</string>
+    <string name="block_action">Block</string>
+    <string name="block_remove">Unblock</string>
+    <string name="block_both">Incoming and outgoing</string>
+    <string name="block_incoming">Incoming only</string>
+    <string name="block_outgoing">Outgoing only</string>
+    <string name="block_empty">No blocked addresses.</string>
+    <string name="block_live_note">Saved and applied immediately, without reconnecting.</string>
+    <string name="block_invalid">Enter a peer\'s VPN IPv4 address</string>
+    <string name="block_limit">Stealth block supports at most %1$d addresses</string>
+    <string name="block_added">Stealth block applied to %1$s</string>
+    <string name="block_removed">Stealth block removed from %1$s</string>
 </resources>

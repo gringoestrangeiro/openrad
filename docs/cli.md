@@ -63,6 +63,9 @@ quotes. Administration commands use a member RID, not an IP address.
 | `ping PEER_RID` | Measure RTT through an authenticated peer channel. |
 | `rename NAME` | Save the device name while preserving its identity. |
 | `broadcast-peer [TARGET ...] [--exclude] [--all]` | Include selected outgoing broadcast recipients, exclude them, or restore all recipients. |
+| `block VPN_IP [--incoming\|--outgoing]` | Stealth-block an address: drop its traffic while the peer stays connected. |
+| `unblock VPN_IP` | Remove a stealth block. |
+| `blocked` | List stealth-blocked addresses. |
 | `force-relay true\|false` | Save or clear relay-only transport policy. |
 
 Aliases: `provision` for `init`, `public-networks` for `search`,
@@ -180,6 +183,38 @@ The client sends once through each selected eligible peer channel, using its
 direct TCP/UDP or relay transport. Received broadcasts go to the local interface
 and are not flooded to other peers. Recipients can span all networks shared by
 this profile; a broadcast does not choose a named network.
+
+## Stealth block
+
+```text
+openrad block VPN_IP [--incoming | --outgoing]
+openrad unblock VPN_IP
+openrad blocked
+```
+
+A stealth-blocked VPN address behaves as if it did not exist: packets from it
+are ignored (`--incoming`), nothing is sent to it, including ARP and broadcasts
+(`--outgoing`), or both (the default). The peer channel itself stays
+authenticated and connected: keepalives continue, `openrad ping` still measures
+RTT, and unblocking restores traffic at once without reconnecting.
+
+```sh
+openrad block 26.1.2.3              # Ignore it and send it nothing.
+openrad block 26.1.2.3 --incoming   # Only ignore packets from it.
+openrad block 26.1.2.3 --outgoing   # Only stop sending to it.
+openrad blocked                     # List addresses and directions.
+openrad unblock 26.1.2.3
+```
+
+Running `block` again on a blocked address changes its direction. Blocks are
+saved in the profile and apply to whichever device holds the address, now or
+later. They take effect live in a running service and work with the service
+stopped. The desktop shares the list under **Settings → Stealth block**. Up to
+1024 addresses; unspecified, broadcast, multicast and loopback addresses are
+rejected. Blocked traffic is not counted as dropped. The data path pays nothing
+for an outgoing block, which is compiled into the forwarding table. An incoming
+block costs one flag check per received record, and the blocked frames are never
+parsed or queued. Every record is still decrypted to keep the cipher chain.
 
 ## Private networks
 

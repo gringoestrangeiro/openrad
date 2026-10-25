@@ -174,4 +174,18 @@
     <string name="name_invalid">Имя сети должно содержать 1–255 символов без управляющих символов.</string>
     <string name="password_invalid">Пароль должен содержать 6–256 символов без управляющих символов.</string>
     <string name="settings_outgoing_broadcasts_hint">Пока подключено, multicast (224.0.0.0/4) и широковещание 255.255.255.255 идут через OpenRad, поэтому обнаружение по LAN (например, Minecraft) доходит до пиров. Обнаружение в локальной сети Wi-Fi (трансляция экрана, игры в той же Wi-Fi) в это время приостанавливается.</string>
+    <string name="block_title">Скрытая блокировка</string>
+    <string name="block_hint">Заблокированные VPN-адреса ведут себя так, будто их нет: их пакеты игнорируются, и им ничего не отправляется. Узел остаётся подключённым.</string>
+    <string name="block_address">IP в VPN, напр. 26.1.2.3</string>
+    <string name="block_action">Заблокировать</string>
+    <string name="block_remove">Разблокировать</string>
+    <string name="block_both">Входящий и исходящий</string>
+    <string name="block_incoming">Только входящий</string>
+    <string name="block_outgoing">Только исходящий</string>
+    <string name="block_empty">Нет заблокированных адресов.</string>
+    <string name="block_live_note">Сохраняется и применяется сразу, без переподключения.</string>
+    <string name="block_invalid">Введите IPv4-адрес узла в VPN</string>
+    <string name="block_limit">Скрытая блокировка поддерживает не более %1$d адресов</string>
+    <string name="block_added">Скрытая блокировка применена к %1$s</string>
+    <string name="block_removed">Скрытая блокировка снята с %1$s</string>
 </resources>

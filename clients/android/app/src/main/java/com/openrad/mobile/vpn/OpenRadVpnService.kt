@@ -344,6 +344,7 @@ class OpenRadVpnService : VpnService() {
             reconnectAttempts = s.reconnectAttempts,
             reconnectBaseDelaySeconds = s.reconnectBaseDelaySeconds,
             outgoingBroadcasts = s.outgoingBroadcasts,
+            blocked = s.blocked,
         )
 
         /**

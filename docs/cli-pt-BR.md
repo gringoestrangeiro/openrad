@@ -234,6 +234,29 @@ Também é possível informar RIDs, nomes exatos ou IPs, um por linha. Use
 restaurar a distribuição normal. Salvar outras preferências não sobrescreve a
 seleção de broadcast.
 
+## Bloqueio furtivo
+
+```sh
+openrad block 26.1.2.3              # Ignorar o endereço e não enviar nada a ele.
+openrad block 26.1.2.3 --incoming   # Só ignorar os pacotes que vêm dele.
+openrad block 26.1.2.3 --outgoing   # Só parar de enviar a ele.
+openrad blocked                     # Listar endereços e direções.
+openrad unblock 26.1.2.3
+```
+
+Um IP da VPN com bloqueio furtivo age como se não existisse: os pacotes dele são
+ignorados (`--incoming`), nada é enviado a ele, incluindo ARP e broadcasts
+(`--outgoing`), ou as duas coisas (padrão). O canal com o peer continua
+autenticado e conectado: os keepalives seguem, `openrad ping` ainda mede o RTT, e
+desbloquear restaura o tráfego na hora, sem reconectar. Repetir `block` muda a
+direção. A lista fica salva no perfil, vale para quem estiver com o endereço,
+é aplicada ao vivo com o serviço rodando e funciona com o serviço parado. O
+desktop compartilha a lista em **Configurações → Bloqueio furtivo**. Limite de
+1024 endereços; endereços não especificados, de broadcast, multicast e loopback
+são recusados. O tráfego bloqueado não é contado como descartado. O bloqueio de
+saída não tem custo por pacote; o de entrada custa uma verificação por registro
+recebido, sem analisar nem enfileirar os quadros bloqueados.
+
 ## Redes privadas e senhas
 
 As senhas são lidas de arquivos UTF-8, nunca de um argumento contendo a senha.
@@ -318,6 +341,9 @@ Os argumentos em maiúsculas são marcadores para os valores que você fornece.
 | `ping RID` | Medir RTT pelo canal autenticado de um peer. |
 | `rename NOME` | Mudar o nome do dispositivo preservando a identidade. |
 | `broadcast-peer [DESTINO ...] [--exclude] [--all]` | Consultar, incluir ou excluir peers do broadcast de saída. |
+| `block IP_VPN [--incoming\|--outgoing]` | Bloqueio furtivo: descartar o tráfego do endereço mantendo o peer conectado. |
+| `unblock IP_VPN` | Remover um bloqueio furtivo. |
+| `blocked` | Listar endereços com bloqueio furtivo. |
 | `force-relay true\|false` | Ativar ou desativar o uso exclusivo de relay. |
 
 Aliases disponíveis: `provision` para `init`, `public-networks` para `search`,

@@ -2,6 +2,7 @@ package com.openrad.mobile.data
 
 import android.content.Context
 import com.openrad.mobile.R
+import com.openrad.mobile.engine.BlockDirection
 import com.openrad.mobile.engine.CommandResult
 import com.openrad.mobile.engine.Engine
 import com.openrad.mobile.engine.EngineState
@@ -246,7 +247,8 @@ class EngineRepository(
 
     override suspend fun saveSettings(next: AppSettings) {
         val previous = _settings.value
-        val normalized = next.normalized()
+        // A draft opened before a stealth-block edit must not restore the old list.
+        val normalized = next.copy(blocked = previous.blocked).normalized()
         _settings.value = normalized
         withContext(Dispatchers.IO) { prefs.saveSettings(normalized) }
         EngineHost.updateConfig(OpenRadVpnService.engineConfig(normalized))
@@ -261,6 +263,27 @@ class EngineRepository(
             // The service restarts the engine itself, so its watcher cannot tear down the new one.
             OpenRadVpnService.send(app, OpenRadVpnService.ACTION_RECONNECT)
         }
+    }
+
+    override suspend fun setStealthBlock(address: Int, direction: BlockDirection?) {
+        val current = _settings.value
+        val text = com.openrad.mobile.engine.Ip.format(address)
+        if (!BlockDirection.validAddress(address)) {
+            push(app.getString(R.string.block_invalid), true)
+            return
+        }
+        if (direction != null && address !in current.blocked && current.blocked.size >= BlockDirection.MAX_ADDRESSES) {
+            push(app.getString(R.string.block_limit, BlockDirection.MAX_ADDRESSES), true)
+            return
+        }
+        val next = current.copy(
+            blocked = if (direction == null) current.blocked - address else current.blocked + (address to direction),
+        )
+        _settings.value = next
+        withContext(Dispatchers.IO) { prefs.saveSettings(next) }
+        // Live: the running engine only recomputes per-channel flags; nothing reconnects.
+        EngineHost.updateConfig(OpenRadVpnService.engineConfig(next))
+        push(app.getString(if (direction == null) R.string.block_removed else R.string.block_added, text))
     }
 
     override suspend fun saveJoinConfiguration(config: JoinConfiguration) {

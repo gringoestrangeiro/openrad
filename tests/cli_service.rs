@@ -51,6 +51,34 @@ impl Drop for Harness {
 }
 
 #[test]
+fn cli_edits_the_stealth_block_list_without_starting_a_service() {
+    let harness = Harness::new();
+    assert_eq!(
+        harness.ok(&["blocked"])["data"]["blocked"],
+        serde_json::json!({})
+    );
+    harness.ok(&["block", "26.1.2.3"]);
+    harness.ok(&["block", "26.1.2.4", "--incoming"]);
+    let listed = harness.ok(&["blocked"]);
+    assert_eq!(listed["data"]["blocked"]["26.1.2.3"], "both");
+    assert_eq!(listed["data"]["blocked"]["26.1.2.4"], "incoming");
+    assert_eq!(
+        harness.ok(&["block", "26.1.2.4", "--outgoing"])["data"]["blocked"]["26.1.2.4"],
+        "outgoing"
+    );
+    assert!(!harness
+        .run(&["block", "26.1.2.5", "--incoming", "--outgoing"])
+        .status
+        .success());
+    assert!(!harness.run(&["block", "0.0.0.0"]).status.success());
+    assert!(!harness.run(&["unblock", "26.9.9.9"]).status.success());
+    let removed = harness.ok(&["unblock", "26.1.2.3"]);
+    assert!(removed["data"]["blocked"].get("26.1.2.3").is_none());
+    assert!(harness.dir.join("state/service.json").exists());
+    assert!(!harness.dir.join("state/control.sock").exists());
+}
+
+#[test]
 fn cli_saves_queries_and_restores_broadcast_policy_without_starting_a_service() {
     let harness = Harness::new();
     assert!(harness.ok(&["broadcast-peer"])["data"]["broadcast_peer"].is_null());

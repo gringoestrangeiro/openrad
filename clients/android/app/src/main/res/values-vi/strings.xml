@@ -174,4 +174,18 @@
     <string name="name_invalid">Tên mạng phải có 1–255 ký tự, không chứa ký tự điều khiển.</string>
     <string name="password_invalid">Mật khẩu phải có 6–256 ký tự, không chứa ký tự điều khiển.</string>
     <string name="settings_outgoing_broadcasts_hint">Khi đang kết nối, multicast (224.0.0.0/4) và broadcast 255.255.255.255 đi qua OpenRad để tính năng tìm LAN (ví dụ Minecraft) đến được các peer. Việc tìm thiết bị trong Wi-Fi cục bộ (truyền màn hình, chơi cùng Wi-Fi) tạm dừng trong thời gian đó.</string>
+    <string name="block_title">Chặn ẩn</string>
+    <string name="block_hint">Địa chỉ VPN bị chặn hoạt động như thể không tồn tại: gói tin từ chúng bị bỏ qua và không có gì được gửi đến chúng. Máy ngang hàng vẫn được kết nối.</string>
+    <string name="block_address">IP VPN, ví dụ 26.1.2.3</string>
+    <string name="block_action">Chặn</string>
+    <string name="block_remove">Bỏ chặn</string>
+    <string name="block_both">Đến và đi</string>
+    <string name="block_incoming">Chỉ chiều đến</string>
+    <string name="block_outgoing">Chỉ chiều đi</string>
+    <string name="block_empty">Không có địa chỉ nào bị chặn.</string>
+    <string name="block_live_note">Được lưu và áp dụng ngay, không cần kết nối lại.</string>
+    <string name="block_invalid">Nhập địa chỉ IPv4 VPN của một máy ngang hàng</string>
+    <string name="block_limit">Chặn ẩn hỗ trợ tối đa %1$d địa chỉ</string>
+    <string name="block_added">Đã áp dụng chặn ẩn cho %1$s</string>
+    <string name="block_removed">Đã bỏ chặn ẩn cho %1$s</string>
 </resources>

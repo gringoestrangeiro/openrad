@@ -12,7 +12,7 @@ use crate::{
     early_log::{self, Stage},
     network::{MemberAction, NetworkPassword, NetworkRequest},
     protocol::Identity,
-    runtime::{self, BroadcastSelection, Command, Snapshot, Update},
+    runtime::{self, BlockDirection, BlockList, BroadcastSelection, Command, Snapshot, Update},
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -300,6 +300,8 @@ pub struct ServicePreferences {
     pub broadcast_peer: Option<u64>,
     /// None migrates the legacy single-recipient preference on first use.
     pub broadcast_peers: Option<BroadcastSelection>,
+    /// Stealth-blocked virtual addresses; applied live, without reconnecting.
+    pub blocked: BlockList,
 }
 impl Default for ServicePreferences {
     fn default() -> Self {
@@ -311,6 +313,7 @@ impl Default for ServicePreferences {
             traffic_peers: None,
             broadcast_peer: None,
             broadcast_peers: None,
+            blocked: BlockList::new(),
         }
     }
 }
@@ -328,7 +331,12 @@ impl ServicePreferences {
                 && self
                     .traffic_peers
                     .as_ref()
-                    .is_none_or(|peers| peers.len() <= 1024 && !peers.contains(&0)),
+                    .is_none_or(|peers| peers.len() <= 1024 && !peers.contains(&0))
+                && self.blocked.len() <= runtime::MAX_BLOCKED_ADDRESSES
+                && self
+                    .blocked
+                    .keys()
+                    .all(|address| runtime::validate_block_address(*address).is_ok()),
             "Settings are out of range"
         );
         Ok(())
@@ -394,6 +402,15 @@ pub enum Request {
         #[serde(default)]
         exclude: bool,
     },
+    /// Stealth-block a virtual address, or change its direction.
+    Block {
+        address: String,
+        direction: BlockDirection,
+    },
+    Unblock {
+        address: String,
+    },
+    BlockList,
     Configure {
         preferences: ServicePreferences,
     },
@@ -597,6 +614,70 @@ pub fn broadcast_peers(
         );
     }
     Ok(broadcast_peer_reply(preferences.broadcast_selection()))
+}
+
+/// A stealth-block edit; `None` direction removes the address.
+pub type BlockChange = (String, Option<BlockDirection>);
+
+fn parse_block_address(address: &str) -> Result<std::net::Ipv4Addr> {
+    let address = address
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("Enter a peer's VPN IPv4 address"))?;
+    runtime::validate_block_address(address)?;
+    Ok(address)
+}
+
+fn apply_block_change(blocked: &mut BlockList, (address, direction): &BlockChange) -> Result<()> {
+    let address = parse_block_address(address)?;
+    match direction {
+        Some(direction) => {
+            ensure!(
+                blocked.contains_key(&address) || blocked.len() < runtime::MAX_BLOCKED_ADDRESSES,
+                "Stealth block supports at most 1024 addresses"
+            );
+            blocked.insert(address, *direction);
+        }
+        None => {
+            ensure!(
+                blocked.remove(&address).is_some(),
+                "This address is not blocked"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn block_reply(blocked: &BlockList) -> Reply {
+    let message = if blocked.is_empty() {
+        "Stealth block: no addresses".to_owned()
+    } else {
+        format!("Stealth block: {} addresses", blocked.len())
+    };
+    Reply::ok(message, json!({ "blocked": blocked }))
+}
+
+/// Query or edit the stealth-block list. A running service applies it live;
+/// otherwise the saved preferences are edited directly.
+pub fn stealth_block(dir: &DataDir, change: Option<BlockChange>) -> Result<Reply> {
+    if dir.endpoint_exists() {
+        return request(
+            dir,
+            &match change {
+                Some((address, Some(direction))) => Request::Block { address, direction },
+                Some((address, None)) => Request::Unblock { address },
+                None => Request::BlockList,
+            },
+        );
+    }
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let mut preferences = dir.preferences()?;
+    if let Some(change) = change {
+        apply_block_change(&mut preferences.blocked, &change)?;
+        dir.save_preferences(&preferences)?;
+    }
+    Ok(block_reply(&preferences.blocked))
 }
 
 #[cfg(unix)]
@@ -808,6 +889,7 @@ struct State {
     identity: Option<Identity>,
     preferences: ServicePreferences,
     broadcast_policy: runtime::BroadcastPolicy,
+    block_policy: runtime::BlockPolicy,
     restart: bool,
     phase: &'static str,
     error: Option<String>,
@@ -835,6 +917,7 @@ impl Shared {
                 identity: Some(id.clone()),
                 preferences: ServicePreferences::default(),
                 broadcast_policy: runtime::BroadcastPolicy::default(),
+                block_policy: runtime::BlockPolicy::default(),
                 restart: false,
                 phase: "connecting",
                 error: None,
@@ -1045,6 +1128,21 @@ impl Shared {
             Err(error) => Reply::error(format!("{error:#}")),
         }
     }
+    fn edit_blocks(&self, change: BlockChange) -> Result<Reply> {
+        let _serial = self.lock_config();
+        let mut preferences = self.lock_state().preferences.clone();
+        apply_block_change(&mut preferences.blocked, &change)?;
+        self.directory
+            .as_ref()
+            .context("Profile is unavailable")?
+            .save_preferences(&preferences)?;
+        // Publish only after the save; the engine picks it up without
+        // reconnecting or touching any channel.
+        let mut state = self.lock_state();
+        state.block_policy.set_list(preferences.blocked.clone());
+        state.preferences = preferences;
+        Ok(block_reply(&state.preferences.blocked))
+    }
     fn handle_result(&self, command: Request) -> Result<Reply> {
         Ok(match command {
             Request::Status => self.status(),
@@ -1166,6 +1264,11 @@ impl Shared {
                 }
                 broadcast_peer_reply(self.lock_state().preferences.broadcast_selection())
             }
+            Request::Block { address, direction } => {
+                self.edit_blocks((address, Some(direction)))?
+            }
+            Request::Unblock { address } => self.edit_blocks((address, None))?,
+            Request::BlockList => block_reply(&self.lock_state().preferences.blocked),
             Request::Rename { node_name } => {
                 crate::protocol::validate_node_name(&node_name)?;
                 let _serial = self.lock_config();
@@ -1202,6 +1305,7 @@ impl Shared {
                     let state = self.lock_state();
                     preferences.broadcast_peer = state.preferences.broadcast_peer;
                     preferences.broadcast_peers = state.preferences.broadcast_peers.clone();
+                    preferences.blocked = state.preferences.blocked.clone();
                 }
                 preferences.validate()?;
                 self.directory
@@ -1256,19 +1360,28 @@ fn supervisor(
             state
                 .broadcast_policy
                 .set_selection(state.preferences.broadcast_selection());
+            state
+                .block_policy
+                .set_list(state.preferences.blocked.clone());
             (
                 state.identity.clone().unwrap_or_else(|| identity.clone()),
                 state.preferences.clone(),
             )
         };
         let shared_updates = shared.clone();
+        // One guard: two `lock_state()` temporaries in one expression would deadlock.
+        let (broadcast_policy, block_policy) = {
+            let state = shared.lock_state();
+            (state.broadcast_policy.clone(), state.block_policy.clone())
+        };
         let options = runtime::Options {
             helper: std::env::current_exe().ok(),
             disable_interface,
             diagnostics: diagnostics.clone(),
             force_relay: preferences.force_relay,
             traffic_peers: preferences.traffic_peers.clone(),
-            broadcast_policy: shared.lock_state().broadcast_policy.clone(),
+            broadcast_policy,
+            block_policy,
         };
         let started = Instant::now();
         // An internal panic must reconnect like any other engine failure. If it
@@ -1706,6 +1819,93 @@ mod tests {
             Some(2)
         );
     }
+    #[test]
+    fn stealth_block_is_saved_applied_live_and_preserved_by_other_frontend_settings() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-stealth-block-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let directory = DataDir::open(Some(path)).unwrap();
+        let mut shared = shared();
+        shared.directory = Some(directory.clone());
+        let address = std::net::Ipv4Addr::new(26, 1, 2, 3);
+        let block = |direction| Request::Block {
+            address: " 26.1.2.3 ".into(),
+            direction,
+        };
+        let reply = shared.handle(block(BlockDirection::Incoming));
+        assert!(reply.ok, "{}", reply.message);
+        assert_eq!(reply.data["blocked"]["26.1.2.3"], "incoming");
+        assert_eq!(
+            directory.preferences().unwrap().blocked,
+            BlockList::from([(address, BlockDirection::Incoming)])
+        );
+        {
+            let state = shared.state.lock().unwrap();
+            assert_eq!(
+                state.block_policy.snapshot().1[&address],
+                BlockDirection::Incoming
+            );
+            assert!(!state.restart, "a block never reconnects");
+        }
+        assert!(shared.handle(block(BlockDirection::Both)).ok);
+        assert!(
+            shared
+                .handle(Request::Configure {
+                    preferences: ServicePreferences::default()
+                })
+                .ok
+        );
+        assert_eq!(
+            directory.preferences().unwrap().blocked[&address],
+            BlockDirection::Both,
+            "stale frontend settings cannot clear the list"
+        );
+        for invalid in [
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "127.0.0.1",
+            "26.1.2",
+            "name",
+        ] {
+            let reply = shared.handle(Request::Block {
+                address: invalid.into(),
+                direction: BlockDirection::Both,
+            });
+            assert!(!reply.ok, "{invalid}");
+        }
+        assert!(
+            !shared
+                .handle(Request::Unblock {
+                    address: "26.9.9.9".into()
+                })
+                .ok
+        );
+        assert_eq!(
+            shared.handle(Request::BlockList).data["blocked"]["26.1.2.3"],
+            "both"
+        );
+        assert!(
+            shared
+                .handle(Request::Unblock {
+                    address: "26.1.2.3".into()
+                })
+                .ok
+        );
+        assert!(directory.preferences().unwrap().blocked.is_empty());
+        assert!(shared
+            .state
+            .lock()
+            .unwrap()
+            .block_policy
+            .snapshot()
+            .1
+            .is_empty());
+        std::fs::remove_dir_all(&directory.path).unwrap();
+    }
+
     #[test]
     fn broadcast_policy_is_saved_applied_live_and_preserved_by_other_frontend_settings() {
         let path = std::env::temp_dir().join(format!(

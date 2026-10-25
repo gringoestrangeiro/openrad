@@ -269,8 +269,11 @@ class L3Bridge(
     private val ownVip: () -> Int,
     private val peers: () -> Collection<BridgePeer>,
     private val outgoingBroadcasts: () -> Boolean = { true },
+    /** Consulted only when no peer matched: a stealth-blocked VIP is absent by design. */
+    private val blocksOutgoing: (Int) -> Boolean = { false },
 ) {
-    enum class Result { SENT, NO_ROUTE, INVALID, FILTERED, QUEUE_FULL }
+    /** [BLOCKED] is a stealth block, not a delivery failure: callers do not count it as dropped. */
+    enum class Result { SENT, NO_ROUTE, INVALID, FILTERED, QUEUE_FULL, BLOCKED }
 
     private class OwnMac(val vip: Int, val mac: ByteArray)
 
@@ -299,7 +302,8 @@ class L3Bridge(
             for (peer in peers()) if (peer.enqueue(frame)) queued++
             return if (queued > 0) Result.SENT else Result.NO_ROUTE
         }
-        val peer = peers().firstOrNull { it.vip == ip.destination } ?: return Result.NO_ROUTE
+        val peer = peers().firstOrNull { it.vip == ip.destination }
+            ?: return if (blocksOutgoing(ip.destination)) Result.BLOCKED else Result.NO_ROUTE
         return if (peer.enqueue(frame(peer.mac, ownMac, data, length))) Result.SENT else Result.QUEUE_FULL
     }
 

@@ -4119,7 +4119,6 @@
     "IP узла: {endpoint}",
     "IP máy ngang hàng: {endpoint}"
   ],
-
   "Uninstall OpenRad": [
     "Desinstalar o OpenRad",
     "Удалить OpenRad",
@@ -4149,5 +4148,80 @@
     "Não foi possível iniciar o desinstalador",
     "Не удалось запустить программу удаления",
     "Không thể khởi chạy trình gỡ cài đặt"
+  ],
+  "Stealth block": [
+    "Bloqueio furtivo",
+    "Скрытая блокировка",
+    "Chặn ẩn"
+  ],
+  "Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.": [
+    "Endereços VPN bloqueados agem como se não existissem: os pacotes deles são ignorados e nada é enviado a eles. O par continua conectado.",
+    "Заблокированные VPN-адреса ведут себя так, будто их нет: их пакеты игнорируются, и им ничего не отправляется. Узел остаётся подключённым.",
+    "Địa chỉ VPN bị chặn hoạt động như thể không tồn tại: gói tin từ chúng bị bỏ qua và không có gì được gửi đến chúng. Máy ngang hàng vẫn được kết nối."
+  ],
+  "VPN IP, e.g. 26.1.2.3": [
+    "IP da VPN, ex.: 26.1.2.3",
+    "IP в VPN, напр. 26.1.2.3",
+    "IP VPN, ví dụ 26.1.2.3"
+  ],
+  "Block": [
+    "Bloquear",
+    "Заблокировать",
+    "Chặn"
+  ],
+  "Unblock": [
+    "Desbloquear",
+    "Разблокировать",
+    "Bỏ chặn"
+  ],
+  "Incoming and outgoing": [
+    "Entrada e saída",
+    "Входящий и исходящий",
+    "Đến và đi"
+  ],
+  "Incoming only": [
+    "Somente entrada",
+    "Только входящий",
+    "Chỉ chiều đến"
+  ],
+  "Outgoing only": [
+    "Somente saída",
+    "Только исходящий",
+    "Chỉ chiều đi"
+  ],
+  "Enter a peer's VPN IPv4 address": [
+    "Digite o endereço IPv4 da VPN de um par",
+    "Введите IPv4-адрес узла в VPN",
+    "Nhập địa chỉ IPv4 VPN của một máy ngang hàng"
+  ],
+  "No blocked addresses.": [
+    "Nenhum endereço bloqueado.",
+    "Нет заблокированных адресов.",
+    "Không có địa chỉ nào bị chặn."
+  ],
+  "Saved and applied immediately, without reconnecting.": [
+    "Salvo e aplicado na hora, sem reconectar.",
+    "Сохраняется и применяется сразу, без переподключения.",
+    "Được lưu và áp dụng ngay, không cần kết nối lại."
+  ],
+  "Stealth block: no addresses": [
+    "Bloqueio furtivo: nenhum endereço",
+    "Скрытая блокировка: нет адресов",
+    "Chặn ẩn: không có địa chỉ"
+  ],
+  "Stealth block: {0} addresses": [
+    "Bloqueio furtivo: {0} endereços",
+    "Скрытая блокировка: адресов — {0}",
+    "Chặn ẩn: {0} địa chỉ"
+  ],
+  "Stealth block supports at most 1024 addresses": [
+    "O bloqueio furtivo aceita no máximo 1024 endereços",
+    "Скрытая блокировка поддерживает не более 1024 адресов",
+    "Chặn ẩn hỗ trợ tối đa 1024 địa chỉ"
+  ],
+  "This address is not blocked": [
+    "Este endereço não está bloqueado",
+    "Этот адрес не заблокирован",
+    "Địa chỉ này không bị chặn"
   ]
 }

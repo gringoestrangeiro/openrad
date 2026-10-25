@@ -62,6 +62,7 @@ pub enum Notice {
     NodeName(String),
     RelayPreference(bool),
     BroadcastPreference(runtime::BroadcastSelection),
+    BlockList(runtime::BlockList),
 }
 pub enum Action {
     Connect,
@@ -69,6 +70,7 @@ pub enum Action {
     ResetIdentity,
     Save(Settings),
     BroadcastPeers { targets: Vec<String>, exclude: bool },
+    StealthBlock(openrad::daemon::BlockChange),
     Import(PathBuf),
     Engine(runtime::Command),
     Shutdown,
@@ -266,11 +268,13 @@ fn manager(
         settings.language = language;
     }
     let mut broadcast_selection = runtime::BroadcastSelection::All;
+    let mut blocked = runtime::BlockList::new();
     if dir.path.join("service.json").exists() {
         match dir.preferences() {
             Ok(preferences) => {
                 settings.force_relay = preferences.force_relay;
                 broadcast_selection = preferences.broadcast_selection();
+                blocked = preferences.blocked.clone();
                 settings.auto_reconnect = preferences.auto_reconnect;
                 settings.reconnect_attempts = preferences.reconnect_attempts;
                 settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
@@ -336,6 +340,7 @@ fn manager(
     let mut persisted = identity.is_some();
     report(Notice::Settings(settings.clone()));
     report(Notice::BroadcastPreference(broadcast_selection.clone()));
+    report(Notice::BlockList(blocked.clone()));
     if let Err(error) = &loaded {
         report(Notice::Phase(Phase::Error, error.to_string()));
     } else if !service_running {
@@ -478,6 +483,10 @@ fn manager(
                             broadcast_selection = selection;
                             report(Notice::BroadcastPreference(broadcast_selection.clone()));
                         }
+                        if blocked != preferences.blocked {
+                            blocked = preferences.blocked;
+                            report(Notice::BlockList(blocked.clone()));
+                        }
                     }
                     let phase = match reply.data["phase"].as_str() {
                         Some("connected") => Phase::Connected,
@@ -529,6 +538,10 @@ fn manager(
                     if broadcast_selection != selection {
                         broadcast_selection = selection;
                         report(Notice::BroadcastPreference(broadcast_selection.clone()));
+                    }
+                    if blocked != preferences.blocked {
+                        blocked = preferences.blocked;
+                        report(Notice::BlockList(blocked.clone()));
                     }
                 }
             }
@@ -687,6 +700,20 @@ fn manager(
                     broadcast_selection =
                         serde_json::from_value(reply.data["broadcast_peers"].clone())?;
                     report(Notice::BroadcastPreference(broadcast_selection.clone()));
+                    report(Notice::Engine(runtime::Update::Operation {
+                        message: reply.message,
+                        error: false,
+                    }));
+                    Ok(())
+                })();
+                operation(result);
+            }
+            Ok(Action::StealthBlock(change)) => {
+                let result = (|| -> Result<()> {
+                    let reply = daemon::stealth_block(&dir, Some(change))?;
+                    ensure!(reply.ok, "{}", reply.message);
+                    blocked = serde_json::from_value(reply.data["blocked"].clone())?;
+                    report(Notice::BlockList(blocked.clone()));
                     report(Notice::Engine(runtime::Update::Operation {
                         message: reply.message,
                         error: false,

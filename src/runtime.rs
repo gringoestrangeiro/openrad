@@ -187,12 +187,87 @@ impl BroadcastPolicy {
     }
 }
 
+/// Stealth block: which directions of a virtual address's traffic are discarded.
+/// The authenticated channel stays up (keepalives, RTT); only Ethernet frames
+/// are dropped, so the address behaves as if it did not exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockDirection {
+    Incoming,
+    Outgoing,
+    Both,
+}
+impl BlockDirection {
+    pub const ALL: [Self; 3] = [Self::Both, Self::Incoming, Self::Outgoing];
+    pub fn incoming(self) -> bool {
+        self != Self::Outgoing
+    }
+    pub fn outgoing(self) -> bool {
+        self != Self::Incoming
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Incoming => "Incoming only",
+            Self::Outgoing => "Outgoing only",
+            Self::Both => "Incoming and outgoing",
+        }
+    }
+}
+/// Stealth-blocked virtual addresses. Addresses, unlike RIDs, are what the
+/// operating system and games see, so a block follows whoever holds the address.
+pub type BlockList = BTreeMap<Ipv4Addr, BlockDirection>;
+pub const MAX_BLOCKED_ADDRESSES: usize = 1024;
+
+/// Reject addresses that can never be a peer's virtual unicast address.
+pub fn validate_block_address(address: Ipv4Addr) -> Result<()> {
+    anyhow::ensure!(
+        !address.is_unspecified()
+            && !address.is_broadcast()
+            && !address.is_multicast()
+            && !address.is_loopback(),
+        "Enter a peer's VPN IPv4 address"
+    );
+    Ok(())
+}
+
+#[derive(Default)]
+struct BlockState {
+    revision: AtomicU64,
+    list: Mutex<Arc<BlockList>>,
+}
+/// Same contract as the broadcast policy: packet paths never lock or look this
+/// up. The control loop compiles it into forwarding tables and per-channel flags.
+#[derive(Clone, Default)]
+pub struct BlockPolicy(Arc<BlockState>);
+impl BlockPolicy {
+    fn revision(&self) -> u64 {
+        self.0.revision.load(Ordering::Acquire)
+    }
+    pub(crate) fn snapshot(&self) -> (u64, Arc<BlockList>) {
+        let list = self.0.list.lock().unwrap_or_else(PoisonError::into_inner);
+        (self.revision(), Arc::clone(&list))
+    }
+    pub(crate) fn set_list(&self, blocked: BlockList) {
+        let mut current = self.0.list.lock().unwrap_or_else(PoisonError::into_inner);
+        if **current != blocked {
+            *current = Arc::new(blocked);
+            self.0.revision.fetch_add(1, Ordering::Release);
+        }
+    }
+    fn blocks_incoming(&self, address: Ipv4Addr) -> bool {
+        let list = self.0.list.lock().unwrap_or_else(PoisonError::into_inner);
+        list.get(&address)
+            .is_some_and(|direction| direction.incoming())
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Options {
     /// None permits normal application traffic to all authenticated members.
     /// Some is useful for controlled interoperability testing only.
     pub traffic_peers: Option<BTreeSet<u64>>,
     pub broadcast_policy: BroadcastPolicy,
+    pub block_policy: BlockPolicy,
     /// Setup-only executable. Desktop passes the sibling CLI, never the GUI.
     pub helper: Option<std::path::PathBuf>,
     /// Permit a headless control-only session when interface setup is unavailable.
@@ -737,6 +812,8 @@ struct Worker {
     attempt: u64,
     connected_at: Option<Instant>,
     wake: Arc<Wake>,
+    /// Read by the channel's own thread once per received record.
+    block_in: Arc<AtomicBool>,
 }
 impl Worker {
     fn cancel(&self) -> bool {
@@ -756,6 +833,7 @@ struct ForwardTarget {
     stop: Arc<AtomicBool>,
     wake: Arc<Wake>,
     attempt: u64,
+    block_in: bool,
 }
 impl ForwardTarget {
     fn queue(&self, frame: &Arc<Vec<u8>>) -> Option<bool> {
@@ -780,6 +858,8 @@ struct ForwardingTable {
     broadcast: Option<Vec<usize>>,
     broadcast_by_ip: HashMap<Ipv4Addr, Vec<usize>>,
     broadcast_include: bool,
+    block_revision: u64,
+    blocked: Arc<BlockList>,
 }
 impl ForwardingTable {
     fn new(
@@ -789,6 +869,7 @@ impl ForwardingTable {
         options: &Options,
     ) -> Self {
         let mut table = Self::default();
+        (table.block_revision, table.blocked) = options.block_policy.snapshot();
         for (&rid, worker) in workers {
             if !eligible.contains(&rid) || !options.allows(rid) {
                 continue;
@@ -796,9 +877,15 @@ impl ForwardingTable {
             let (Some(mac), Some(peer)) = (worker.mac, membership.peers.get(&rid)) else {
                 continue;
             };
+            let block = table.blocked.get(&peer.vip).copied();
             let index = table.peers.len();
-            table.all.push(index);
-            table.by_ip.entry(peer.vip).or_default().push(index);
+            // Outgoing stealth block: compiled out of every destination list, so
+            // the packet path pays nothing for it. `by_rid` keeps the channel for
+            // inbound admission.
+            if !block.is_some_and(BlockDirection::outgoing) {
+                table.all.push(index);
+                table.by_ip.entry(peer.vip).or_default().push(index);
+            }
             table.by_rid.insert(rid, index);
             table.peers.push(ForwardTarget {
                 rid,
@@ -808,6 +895,7 @@ impl ForwardingTable {
                 stop: worker.stop.clone(),
                 wake: worker.wake.clone(),
                 attempt: worker.attempt,
+                block_in: block.is_some_and(BlockDirection::incoming),
             });
         }
         let (revision, selection) = options.broadcast_policy.snapshot();
@@ -820,6 +908,12 @@ impl ForwardingTable {
                 selected
                     .iter()
                     .filter_map(|rid| table.by_rid.get(rid).copied())
+                    .filter(|&index| {
+                        !table
+                            .blocked
+                            .get(&table.peers[index].vip)
+                            .is_some_and(|direction| direction.outgoing())
+                    })
                     .collect()
             } else {
                 table
@@ -861,8 +955,14 @@ impl ForwardingTable {
     fn accepts_packet(&self, rid: u64, attempt: u64) -> bool {
         self.by_rid.get(&rid).is_some_and(|&index| {
             let peer = &self.peers[index];
-            peer.attempt == attempt && !peer.stop.load(Ordering::Relaxed)
+            peer.attempt == attempt && !peer.block_in && !peer.stop.load(Ordering::Relaxed)
         })
+    }
+    /// A destination absent only because of a stealth block is not a delivery failure.
+    fn blocks_outgoing(&self, address: Ipv4Addr) -> bool {
+        self.blocked
+            .get(&address)
+            .is_some_and(|direction| direction.outgoing())
     }
     fn announcement_targets(&self) -> &[usize] {
         self.broadcast.as_deref().unwrap_or(&self.all)
@@ -875,7 +975,7 @@ fn forward_frame(frame: Vec<u8>, vip: Ipv4Addr, table: &ForwardingTable) -> u64 
     };
     let targets = table.targets(&route);
     if targets.is_empty() {
-        return 1;
+        return u64::from(route.target().is_none_or(|ip| !table.blocks_outgoing(ip)));
     }
     let peers = targets.iter().map(|&index| &table.peers[index]);
     if route.target().is_none() || table.broadcast_include && route.is_broadcast() {
@@ -1092,6 +1192,7 @@ struct PeerEvents {
     diagnostics: Diagnostics,
     attempt: u64,
     wake: Arc<Wake>,
+    block_in: Arc<AtomicBool>,
 }
 impl PeerEvents {
     fn packet(&self, rid: u64, frame: tunnel::OwnedFrame) {
@@ -1311,6 +1412,12 @@ fn forward_peer(
         }
         let data = channel.receive()?;
         activity.last_receive = Some(Instant::now());
+        // Stealth block: every record is decrypted (cipher chain, keepalives), but
+        // Ethernet records from a blocked address are discarded without parsing,
+        // validation, allocation or a queue handoff.
+        if data.starts_with(&[0, 0]) && events.block_in.load(Ordering::Relaxed) {
+            continue;
+        }
         match tunnel::decode_owned(data)? {
             tunnel::OwnedPacket::Keepalive {
                 sequence,
@@ -1775,6 +1882,7 @@ pub fn run(
             }
             if forwarding_changed
                 || forwarding_table.broadcast_revision != options.broadcast_policy.revision()
+                || forwarding_table.block_revision != options.block_policy.revision()
             {
                 forwarding_table = Arc::new(ForwardingTable::new(
                     &membership,
@@ -1782,6 +1890,17 @@ pub fn run(
                     &workers,
                     &options,
                 ));
+                // Channel threads drop blocked records before queueing them; a
+                // VIP change or a new list reaches them here, on control events only.
+                for (rid, worker) in &workers {
+                    let blocked = membership.peers.get(rid).is_some_and(|peer| {
+                        forwarding_table
+                            .blocked
+                            .get(&peer.vip)
+                            .is_some_and(|direction| direction.incoming())
+                    });
+                    worker.block_in.store(blocked, Ordering::Relaxed);
+                }
             }
             for (rid, attempt, frame) in packets.try_iter().take(512) {
                 // Bytes were validated by their channel owner. Recheck the live
@@ -1898,6 +2017,9 @@ pub fn run(
                     attempt += 1;
                     diagnostics.event("peer_connecting", json!({"rid": rid, "attempt": attempt, "incoming": is_incoming, "server": peer.server}));
                     let (id, key, cancel) = (identity.clone(), modulus.clone(), peer_stop.clone());
+                    let block_in = Arc::new(AtomicBool::new(
+                        options.block_policy.blocks_incoming(peer.vip),
+                    ));
                     let events = PeerEvents {
                         lifecycle: tx.clone(),
                         packets: packet_tx.clone(),
@@ -1906,6 +2028,7 @@ pub fn run(
                         diagnostics: diagnostics.clone(),
                         attempt,
                         wake: wake.clone(),
+                        block_in: block_in.clone(),
                     };
                     let notify = peer_wake.clone();
                     let force_relay = options.force_relay;
@@ -1965,6 +2088,7 @@ pub fn run(
                             attempt,
                             connected_at: None,
                             wake: peer_wake,
+                            block_in,
                         },
                     );
                 }
@@ -2815,6 +2939,7 @@ mod control_tests {
             diagnostics: Diagnostics::default(),
             attempt: 1,
             wake: Arc::new(Wake::new().unwrap()),
+            block_in: Arc::default(),
         };
         for rid in 1..=150 {
             let tunnel::OwnedPacket::Frames(mut packet) =
@@ -2936,6 +3061,7 @@ mod membership_tests {
             attempt: 1,
             connected_at: Some(Instant::now()),
             wake: Arc::new(Wake::new().unwrap()),
+            block_in: Arc::default(),
         }
     }
 
@@ -3215,6 +3341,85 @@ mod membership_tests {
         assert!(retries[&2].previously_connected);
         assert!(schedule_peer_retry(&mut retries, 2, None, false, false, now).is_none());
         assert!(retries.is_empty());
+    }
+
+    #[test]
+    fn stealth_block_compiles_out_routes_and_inbound_admission_without_drop_accounting() {
+        let source = Ipv4Addr::new(26, 0, 0, 1);
+        let mut members = membership();
+        let template = members.peers[&2].clone();
+        for rid in 3..=4 {
+            let mut peer = template.clone();
+            peer.rid = rid;
+            peer.vip = Ipv4Addr::new(26, 0, 0, rid as u8);
+            members.peers.insert(rid, peer);
+        }
+        let eligible: BTreeSet<_> = (2..=4).collect();
+        let mut workers = BTreeMap::new();
+        let mut receivers = BTreeMap::new();
+        for (&rid, peer) in &members.peers {
+            let (sender, receiver) = mpsc::sync_channel(8);
+            let mut w = worker();
+            w.sender = sender;
+            w.mac = Some(tunnel::mac(peer.vip));
+            workers.insert(rid, w);
+            receivers.insert(rid, receiver);
+        }
+        let options = Options::default();
+        options.block_policy.set_list(BlockList::from([
+            (Ipv4Addr::new(26, 0, 0, 2), BlockDirection::Outgoing),
+            (Ipv4Addr::new(26, 0, 0, 3), BlockDirection::Incoming),
+        ]));
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        let directed = |target: u8| {
+            let mut frame = tunnel::gratuitous_arp(source);
+            frame[21] = 1;
+            frame[38..42].copy_from_slice(&[26, 0, 0, target]);
+            frame
+        };
+        // The blocked address is simply absent: no queue, no dropped-frame count.
+        assert_eq!(forward_frame(directed(2), source, &table), 0);
+        assert_eq!(
+            forward_frame(tunnel::gratuitous_arp(source), source, &table),
+            0
+        );
+        assert!(receivers[&2].try_recv().is_err());
+        assert_eq!(
+            receivers[&3].try_iter().count(),
+            1,
+            "incoming-only still sends"
+        );
+        assert_eq!(receivers[&4].try_iter().count(), 1);
+        // Unknown destinations are still reported as undeliverable.
+        assert_eq!(forward_frame(directed(9), source, &table), 1);
+        assert!(table.accepts_packet(2, 1), "outgoing-only still receives");
+        assert!(!table.accepts_packet(3, 1));
+        assert!(table.accepts_packet(4, 1));
+
+        // An explicit broadcast inclusion cannot reach an outgoing-blocked peer.
+        options
+            .broadcast_policy
+            .set_selection(BroadcastSelection::Include(BTreeSet::from([2, 3])));
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        assert_eq!(
+            forward_frame(tunnel::gratuitous_arp(source), source, &table),
+            0
+        );
+        assert!(receivers[&2].try_recv().is_err());
+        assert_eq!(receivers[&3].try_iter().count(), 1);
+        assert!(receivers[&4].try_recv().is_err());
+
+        let revision = options.block_policy.revision();
+        options.block_policy.set_list(BlockList::new());
+        assert_ne!(
+            options.block_policy.revision(),
+            revision,
+            "tables are rebuilt"
+        );
+        let table = ForwardingTable::new(&members, &eligible, &workers, &options);
+        assert_eq!(forward_frame(directed(2), source, &table), 0);
+        assert_eq!(receivers[&2].try_iter().count(), 1);
+        assert!(table.accepts_packet(3, 1));
     }
 
     #[test]
@@ -3885,6 +4090,7 @@ mod ping_tests {
             diagnostics: Diagnostics::default(),
             attempt: 42,
             wake: wake.clone(),
+            block_in: Arc::default(),
         };
         let (_frames, frames) = mpsc::sync_channel(16);
         let (_probes, probes) = mpsc::sync_channel(1);
@@ -3936,6 +4142,7 @@ mod ping_tests {
             diagnostics: Diagnostics::default(),
             attempt: 1,
             wake: wake.clone(),
+            block_in: Arc::default(),
         };
         let (frames_tx, frames) = mpsc::sync_channel(16);
         let (probe_tx, probes) = mpsc::sync_channel(1);
@@ -3991,6 +4198,67 @@ mod ping_tests {
                 break;
             }
         }
+        stop.store(true, Ordering::Relaxed);
+        wake.notify();
+        worker.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn incoming_stealth_block_keeps_the_channel_alive_and_toggles_live() {
+        let (mut local, mut remote) = crate::peer::synthetic_pair();
+        local.stream.sustain();
+        let (lifecycle, _) = mpsc::sync_channel(16);
+        let (packets, received) = mpsc::sync_channel(16);
+        let wake = Arc::new(Wake::new().unwrap());
+        let traffic = Arc::new(TrafficCounters::default());
+        let block_in = Arc::new(AtomicBool::new(true));
+        let events = PeerEvents {
+            lifecycle,
+            packets,
+            vip: Ipv4Addr::new(26, 0, 0, 1),
+            traffic: traffic.clone(),
+            diagnostics: Diagnostics::default(),
+            attempt: 1,
+            wake: wake.clone(),
+            block_in: block_in.clone(),
+        };
+        let (_frames, frames) = mpsc::sync_channel(16);
+        let (_probes, probes) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (cancel, notify) = (stop.clone(), wake.clone());
+        let worker = thread::spawn(move || {
+            forward_peer(
+                &mut local,
+                &events,
+                frames,
+                probes,
+                &cancel,
+                &notify,
+                &mut PeerActivity::default(),
+            )
+        });
+        let frame = tunnel::gratuitous_arp(Ipv4Addr::new(26, 0, 0, 2));
+        remote.send(&tunnel::encode(&frame).unwrap()).unwrap();
+        remote.send(&tunnel::keepalive(77, false)).unwrap();
+        loop {
+            let packet = remote.receive().unwrap();
+            if let tunnel::Packet::Keepalive {
+                sequence: 77,
+                reply: true,
+            } = tunnel::decode(&packet).unwrap()
+            {
+                break;
+            }
+        }
+        assert!(
+            received.try_recv().is_err(),
+            "blocked frames never leave the channel"
+        );
+        assert_eq!(traffic.dropped.load(Ordering::Relaxed), 0);
+        block_in.store(false, Ordering::Relaxed);
+        remote.send(&tunnel::encode(&frame).unwrap()).unwrap();
+        let (_, _, delivered) = received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(&*delivered, frame.as_slice());
         stop.store(true, Ordering::Relaxed);
         wake.notify();
         worker.join().unwrap().unwrap();

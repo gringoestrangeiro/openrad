@@ -8,6 +8,7 @@ use openrad::{
     early_log::{self, Stage},
     i18n::{self, Language, LanguagePreference},
     output::ReportDirectory,
+    runtime::BlockDirection,
     session::Session,
     tap,
 };
@@ -133,6 +134,22 @@ enum Command {
         #[arg(long, conflicts_with = "targets")]
         all: bool,
     },
+    /// Stealth-block a VPN IP: drop its traffic as if it did not exist, while
+    /// keeping the peer connected. Blocks both directions unless one is chosen.
+    Block {
+        address: Ipv4Addr,
+        /// Ignore only packets coming from this address.
+        #[arg(long, conflicts_with = "outgoing")]
+        incoming: bool,
+        /// Send nothing to this address, but keep receiving from it.
+        #[arg(long)]
+        outgoing: bool,
+    },
+    /// Remove a stealth block.
+    Unblock { address: Ipv4Addr },
+    /// List stealth-blocked addresses.
+    #[command(alias = "blocks")]
+    Blocked,
     /// Use relays only, without direct UDP or TCP attempts.
     ForceRelay {
         #[arg(action = clap::ArgAction::Set)]
@@ -178,6 +195,9 @@ impl Command {
             Self::Ping { .. } => "ping",
             Self::Rename { .. } => "rename",
             Self::BroadcastPeer { .. } => "broadcast_peer",
+            Self::Block { .. } => "block",
+            Self::Unblock { .. } => "unblock",
+            Self::Blocked => "blocked",
             Self::ForceRelay { .. } => "force_relay",
             Self::__Daemon { .. } => "daemon",
             Self::TapHelper { .. } => "tap_helper",
@@ -403,6 +423,25 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
             },
             exclude,
         )?,
+        Command::Block {
+            address,
+            incoming,
+            outgoing,
+        } => daemon::stealth_block(
+            &dir,
+            Some((
+                address.to_string(),
+                Some(match (incoming, outgoing) {
+                    (true, _) => BlockDirection::Incoming,
+                    (_, true) => BlockDirection::Outgoing,
+                    _ => BlockDirection::Both,
+                }),
+            )),
+        )?,
+        Command::Unblock { address } => {
+            daemon::stealth_block(&dir, Some((address.to_string(), None)))?
+        }
+        Command::Blocked => daemon::stealth_block(&dir, None)?,
         Command::Rename { node_name } => {
             openrad::protocol::validate_node_name(&node_name)?;
             if dir.endpoint_exists() {
@@ -560,6 +599,13 @@ fn human_reply(reply: &daemon::Reply, language: Language) -> String {
         }
     } else if reply.data.get("id").is_some() {
         lines.push(language.message(&reply.message));
+    } else if let Some(blocked) = reply.data.get("blocked").and_then(Value::as_object) {
+        lines.push(language.message(&reply.message));
+        for (address, direction) in blocked {
+            let direction = serde_json::from_value::<BlockDirection>(direction.clone())
+                .map_or("?", BlockDirection::label);
+            lines.push(format!("{address}  {}", language.text(direction)));
+        }
     } else if let Some(data) = reply.data.as_object() {
         if let Some(networks) = data.get("networks").and_then(Value::as_array) {
             if networks.is_empty() {
