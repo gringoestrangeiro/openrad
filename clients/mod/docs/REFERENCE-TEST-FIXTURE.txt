@@ -1,0 +1,6 @@
+Test-only inbound TCP interoperability oracle
+Source: OpenRad Plugin (MIT), commit 8a907735b4690b4256b8440d351fb611c65c900e
+Only package/class names changed. Production reference repository unmodified.
+Source SHA256:
+4dfe858e947a312af000231ce37142271a039441b04fd2f9d68efa3b17e82684  bridge/VirtualTcpBridge.java
+5aeb88f8f3203ba4f7dd350275b4c213e553a49935a6066ad0120036d0fe956c  security/InboundFirewall.java

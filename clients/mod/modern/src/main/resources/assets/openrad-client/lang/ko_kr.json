@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "연결",
+  "openrad.menu.disconnect": "연결 끊기",
+  "openrad.menu.save": "저장",
+  "openrad.menu.saved": "저장됨. 다시 연결하세요",
+  "openrad.menu.all_networks": "모든 네트워크",
+  "openrad.menu.all_language": "모두: %s",
+  "openrad.menu.auto_connect": "자동 연결"
+}

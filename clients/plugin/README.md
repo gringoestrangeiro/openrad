@@ -5,6 +5,8 @@
 > [2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0), cujos links
 > de download aparecem abaixo.
 
+**Prepara??o para 2.1.5:** o c?digo mant?m as corre??es da 2.1.0 e as otimiza??es de CPU/RAM da branch 2.1.5. Builds separados do plugin s?o configur?veis para Paper 1.21.x (Java 21, API 1.20.6) e Paper 26.1.1, 26.1.2, 26.2 e 26.3 (Java 25). A s?rie 26.1 sem patch n?o foi certificada. Consulte [a integra??o do mod e plugin](../../docs/releases/2.1.5-minecraft-integration.md). N?o h? release ou certificado de gameplay para esses alvos.
+
 Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
 **Estado: alpha.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).

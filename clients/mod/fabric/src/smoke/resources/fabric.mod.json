@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "openrad-client-smoke",
+  "version": "1.0.0",
+  "name": "OpenRad isolated runtime smoke (development only)",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["io.github.gringoestrangeiro.openradclient.smoke.OpenRadRuntimeSmoke"]
+  },
+  "depends": {
+    "openrad-client": "*",
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

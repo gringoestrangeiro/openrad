@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "Verbinden",
+  "openrad.menu.disconnect": "Trennen",
+  "openrad.menu.save": "Speichern",
+  "openrad.menu.saved": "Gespeichert; erneut verbinden",
+  "openrad.menu.all_networks": "Alle Netzwerke",
+  "openrad.menu.all_language": "Alle: %s",
+  "openrad.menu.auto_connect": "Automatisch verbinden"
+}

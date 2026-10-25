@@ -5,3 +5,5 @@ build/
 /profiles/
 /run/
 local.properties
+
+/release/
