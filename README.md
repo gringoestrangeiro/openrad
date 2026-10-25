@@ -1,8 +1,9 @@
 # OpenRad
 
 OpenRad is an open-source Rust reimplementation of Radmin VPN. It provides a
-virtual Ethernet interface, a native desktop client, and a headless command-line
-client for joining networks and communicating with peers.
+virtual Ethernet interface, a native desktop client, a headless command-line
+client, and a Paper server plugin for joining networks and communicating with
+peers.
 
 OpenRad is an unofficial community project and is not affiliated with Radmin or
 Famatech. Linux is the established platform. Windows x64 support is experimental
@@ -11,13 +12,14 @@ development has not started.
 
 ## Clients
 
-This repository is a monorepo with three clients sharing one wire format:
+This repository is a monorepo with four clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.0.2 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.0.2 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.0.2 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.1.0 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.1.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.1.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.1.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -37,6 +39,11 @@ cargo build --workspace --release --locked
 # Python (from clients/python/, requires Python 3.10+)
 python3 -m venv .venv && .venv/bin/python -m pip install .
 .venv/bin/python run_tests.py
+
+# Paper plugin (from clients/plugin/, requires JDK 21)
+./gradlew clean check
+# Windows: .\gradlew.bat clean check
+# produces build/libs/OpenRadPlugin.jar
 ```
 
 ## Features
@@ -73,7 +80,10 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **2.0.1** includes freshly built Linux x86-64 and Windows x64 packages,
+Version **2.1.0** (Paper plugin, membership-presence fix and the 2.0.2 maintenance
+work) is prepared in source but its packages are not published yet; see the
+[2.1.0 notes](docs/releases/2.1.0.md). The latest published version,
+**2.0.1**, includes freshly built Linux x86-64 and Windows x64 packages,
 an offline Windows installer, a signed Android APK (beta), build metadata,
 dependency notices, and checksums.
 Enable **Settings → Peer IP** to show per-peer direct or relay transport addresses
@@ -153,6 +163,49 @@ and eligibility details.
 
 ![Broadcast inclusion and exclusion in Portuguese](docs/screenshots/broadcast-multiple-peers-pt.png)
 
+## Minecraft server plugin (Paper)
+
+`OpenRadPlugin.jar` puts a **Paper 1.21.x** server (Java 21) directly on a Radmin
+VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad) join the
+server at the plugin's `26.x.x.x` address; the host needs no VPN client, TAP/TUN
+driver, root access or native libraries, so it also works on shared hosting.
+The plugin is **alpha**: full multiplayer gameplay through the official Radmin
+client has not been measured yet.
+
+1. Build the JAR (JDK 21) — or take it from a release that includes it:
+
+   ```sh
+   cd clients/plugin
+   ./gradlew clean check        # Windows: .\gradlew.bat clean check
+   # -> build/libs/OpenRadPlugin.jar
+   ```
+
+2. Copy `OpenRadPlugin.jar` into the server's `plugins/` folder and start the server.
+3. In the **server console**, join your network (quote names with spaces):
+
+   ```text
+   orb join "My Network" networkPassword     # private network
+   orb join "My Public Network"              # public network, no password
+   orb public all-ptbr                       # or: public Minecraft networks from the catalog
+   ```
+
+4. Run `orb status`. It prints the address players use, for example
+   `26.12.34.56`. Players join the same Radmin network and add that IP in
+   Minecraft (port 25565 is the default and can be omitted).
+
+The commands write `plugins/OpenRadPlugin/config.yml`, keep the password in the
+owner-only `secrets.properties` (never in the YAML), enable the VPN, and apply
+the change without restarting Paper. Passwords are refused when typed by a
+player, because Paper logs player commands. Other useful commands:
+`/orb help`, `/orb leave <network>`, `/orb enable|disable`, `/orb peers`,
+`/orb minecraft options`, `/orb reload`. All require `openradplugin.admin`
+(operators by default). The Minecraft backend is the server's own port on
+`127.0.0.1`; `online-mode` is not changed, and the plugin refuses public
+networks on `online-mode=false` servers unless explicitly acknowledged.
+
+See the [plugin guide (Portuguese)](clients/plugin/README.md) for manual
+configuration, ACLs, LAN advertisements, identity recovery and limits.
+
 ## Build from source
 
 OpenRad requires Rust 1.95 or newer. On Debian or Ubuntu, install the native
@@ -195,9 +248,12 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Desktop usage](docs/desktop.md) | Desktop operation, profiles, identities, and connection logs |
 | [CLI em português](docs/cli-pt-BR.md) | Guia completo do CLI, serviço e destino de broadcast |
 | [CLI usage](docs/cli.md) | Commands, persistent service, profiles, and network administration |
+| [Paper plugin](clients/plugin/README.md) | Minecraft server plugin: install, `/orb join` setup, commands, configuration, and validation scope |
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
+| [2.1.0 notes](docs/releases/2.1.0.md) | Prepared 2.1.0: Paper plugin, presence fix, validation, and limitations |
+| [2.1.0 change inventory](docs/releases/2.1.0-changes.md) | File-by-file account of all changes since v2.0.1 |
 | [2.0.1 release](docs/releases/2.0.1.md) | Packages, upgrading, verification, and limitations |
 | [2.0.1 change inventory](docs/releases/2.0.1-changes.md) | File-by-file account of all changes since v2.0.0 |
 | [2.0.0 release](docs/releases/2.0.0.md) | Monorepo with Android and Python clients |
