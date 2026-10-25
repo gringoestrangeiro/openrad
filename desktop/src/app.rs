@@ -611,6 +611,9 @@ pub struct App {
     broadcast_exclude: bool,
     broadcast_dirty: bool,
     broadcast_input: String,
+    blocked: runtime::BlockList,
+    block_input: String,
+    block_direction: runtime::BlockDirection,
     system_language: Language,
     snapshot: Snapshot,
     peer_list: PeerListCache,
@@ -712,6 +715,9 @@ impl App {
             broadcast_exclude: false,
             broadcast_dirty: false,
             broadcast_input: String::new(),
+            blocked: runtime::BlockList::new(),
+            block_input: String::new(),
+            block_direction: runtime::BlockDirection::Both,
             settings,
             system_language: Language::system(),
             snapshot: Snapshot::default(),
@@ -845,6 +851,7 @@ impl App {
                     }
                     self.broadcast_selection = selection;
                 }
+                Notice::BlockList(blocked) => self.blocked = blocked,
                 Notice::Release(release) => {
                     if !self.dismissed_releases.contains(&release.version) {
                         self.release = Some(release);
@@ -2842,6 +2849,75 @@ impl App {
             ui.label(RichText::new(language.text("Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.")).size(11.).color(MUTED));
         });
     }
+    fn stealth_block_settings(&mut self, ui: &mut egui::Ui) {
+        let language = self.language();
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new(language.text("Stealth block")).size(18.).strong());
+            ui.add_space(8.);
+            ui.label(RichText::new(language.text("Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.")).size(11.).color(MUTED));
+            ui.add_space(8.);
+            let address = self.block_input.trim().parse::<std::net::Ipv4Addr>().ok()
+                .filter(|address| runtime::validate_block_address(*address).is_ok());
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.block_input)
+                    .hint_text(language.text("VPN IP, e.g. 26.1.2.3"))
+                    .char_limit(15).desired_width(160.));
+                egui::ComboBox::from_id_salt("block_direction")
+                    .selected_text(language.text(self.block_direction.label()))
+                    .show_ui(ui, |ui| {
+                        for direction in runtime::BlockDirection::ALL {
+                            ui.selectable_value(&mut self.block_direction, direction, language.text(direction.label()));
+                        }
+                    });
+                if ui.add_enabled(address.is_some(), primary(language.text("Block"))).clicked() {
+                    if let Some(address) = address {
+                        self.backend.send(Action::StealthBlock((address.to_string(), Some(self.block_direction))));
+                        self.block_input.clear();
+                    }
+                }
+            });
+            if address.is_none() && !self.block_input.trim().is_empty() {
+                ui.label(RichText::new(language.text("Enter a peer's VPN IPv4 address")).size(11.).color(RED));
+            }
+            ui.add_space(6.);
+            if self.blocked.is_empty() {
+                ui.label(RichText::new(language.text("No blocked addresses.")).color(MUTED));
+            } else {
+                // Rows are virtualized; only visible rows look up a peer name.
+                let rows: Vec<_> = self.blocked.iter().map(|(address, direction)| (*address, *direction)).collect();
+                egui::ScrollArea::vertical().id_salt("blocked_addresses").max_height(160.)
+                    .show_rows(ui, ui.spacing().interact_size.y, rows.len(), |ui, range| {
+                        for (address, direction) in &rows[range] {
+                            let (address, mut selected) = (*address, *direction);
+                            ui.push_id(address, |ui| ui.horizontal(|ui| {
+                                let name = self.snapshot.peers.values()
+                                    .find(|view| view.peer.vip == address)
+                                    .map(|view| view.peer.name.as_str());
+                                ui.label(RichText::new(address.to_string()).monospace());
+                                if let Some(name) = name {
+                                    ui.label(RichText::new(name).color(MUTED));
+                                }
+                                egui::ComboBox::from_id_salt("direction")
+                                    .selected_text(language.text(selected.label()))
+                                    .show_ui(ui, |ui| {
+                                        for option in runtime::BlockDirection::ALL {
+                                            ui.selectable_value(&mut selected, option, language.text(option.label()));
+                                        }
+                                    });
+                                if selected != *direction {
+                                    self.backend.send(Action::StealthBlock((address.to_string(), Some(selected))));
+                                }
+                                if ui.small_button(language.text("Unblock")).clicked() {
+                                    self.backend.send(Action::StealthBlock((address.to_string(), None)));
+                                }
+                            }));
+                        }
+                    });
+            }
+            ui.label(RichText::new(language.text("Saved and applied immediately, without reconnecting.")).size(11.).color(MUTED));
+        });
+    }
     /// Render the Settings page, including Windows-only uninstall confirmation.
     fn settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -3110,6 +3186,9 @@ impl App {
             .size(11.)
             .color(MUTED),
         );
+        ui.add_space(16.);
+        // Applied immediately, so it sits outside the Save preferences group.
+        self.stealth_block_settings(ui);
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -5188,7 +5267,7 @@ mod tests {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    Vec2::new(780., 2600.),
+                    Vec2::new(780., 4000.),
                 )),
                 events,
                 ..Default::default()
@@ -5945,6 +6024,55 @@ mod tests {
             ));
             app.consume(&ctx);
             assert_eq!(app.broadcast_input, "unsaved peer");
+        }
+    }
+
+    #[test]
+    fn stealth_block_controls_block_and_unblock_in_every_language() {
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            let (backend, actions) = Backend::recording_fixture();
+            app.backend = backend;
+            app.page = Page::Settings;
+            app.settings.language = preference;
+            let language = app.language();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            app.block_input = " 26.0.0.9 ".into();
+            click_button(&ctx, app, language.text("Block"));
+            assert!(matches!(actions.try_recv().unwrap(),
+                Action::StealthBlock((address, Some(runtime::BlockDirection::Both))) if address == "26.0.0.9"));
+            assert!(app.block_input.is_empty());
+            let address = std::net::Ipv4Addr::new(26, 0, 0, 9);
+            app.snapshot
+                .peers
+                .insert(9, cached_peer(9, "Synthetic nine", &[]));
+            app.backend
+                .notices
+                .send(Notice::BlockList(runtime::BlockList::from([(
+                    address,
+                    runtime::BlockDirection::Incoming,
+                )])));
+            app.consume(&ctx);
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            assert!(
+                text.contains(&"Synthetic nine".to_owned()),
+                "blocked rows name their peer"
+            );
+            click_button(&ctx, app, language.text("Unblock"));
+            assert!(matches!(actions.try_recv().unwrap(),
+                Action::StealthBlock((address, None)) if address == "26.0.0.9"));
+            app.block_input = "26.0.0".into();
+            tall_frame(&ctx, app, vec![]);
+            let text = labels(&tall_frame(&ctx, app, vec![]));
+            assert!(text.contains(&language.text("Enter a peer's VPN IPv4 address").to_owned()));
         }
     }
 

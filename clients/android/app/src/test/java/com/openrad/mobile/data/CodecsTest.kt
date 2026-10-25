@@ -50,6 +50,23 @@ class CodecsTest {
     }
 
     @Test
+    fun stealthBlockListRoundTripsAndSkipsInvalidEntries() {
+        val s = AppSettings(
+            blocked = mapOf(
+                Ip.parse("26.1.2.3") to com.openrad.mobile.engine.BlockDirection.BOTH,
+                Ip.parse("26.1.2.4") to com.openrad.mobile.engine.BlockDirection.INCOMING,
+            ),
+        )
+        val text = Codecs.encodeSettings(s)
+        assertTrue(text.contains("\"26.1.2.4\":\"incoming\""))
+        assertEquals(s, Codecs.decodeSettings(text))
+        val wild = Codecs.decodeSettings(
+            """{"blocked":{"26.1.2.5":"outgoing","0.0.0.0":"both","224.0.0.1":"both","26.1":"both","26.1.2.6":"sideways"}}""",
+        )
+        assertEquals(mapOf(Ip.parse("26.1.2.5") to com.openrad.mobile.engine.BlockDirection.OUTGOING), wild.blocked)
+    }
+
+    @Test
     fun configurationsPersistWithoutPasswordsAndRejectInvalidLists() {
         val configs = listOf(JoinConfiguration("weekend", listOf(JoinNetwork("lan", false), JoinNetwork("secret", true))))
         val text = Codecs.encodeConfigurations(configs)

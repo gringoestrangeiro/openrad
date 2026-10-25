@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "اتصال",
+  "openrad.menu.disconnect": "قطع الاتصال",
+  "openrad.menu.save": "حفظ",
+  "openrad.menu.saved": "تم الحفظ؛ أعد الاتصال",
+  "openrad.menu.all_networks": "جميع الشبكات",
+  "openrad.menu.all_language": "الكل: %s",
+  "openrad.menu.auto_connect": "اتصال تلقائي"
+}

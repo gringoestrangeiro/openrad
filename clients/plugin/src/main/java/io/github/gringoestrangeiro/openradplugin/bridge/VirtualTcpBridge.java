@@ -147,6 +147,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
     private record Key(long rid, int port) {}
 
     private static final int RECEIVE_RING = 65536;
+    private static final long IDLE_SELECT_MILLIS = 1000;
     private static final byte[] EMPTY = new byte[0];
     private static final byte[] MSS_OPTION = {2, 4, 5, (byte) 0xb4};
     private final int localIp, exposedPort;
@@ -170,6 +171,9 @@ public final class VirtualTcpBridge implements AutoCloseable {
     private final LongAdder accepted = new LongAdder(), rejected = new LongAdder();
     private volatile int connectionCount;
     private volatile long bufferedBytes, resets, retransmissions, backendFailures;
+    // Selector-thread scratch: backend reads land here and only the bytes read are queued.
+    private final ByteBuffer readScratch = ByteBuffer.allocate(16 * 1024);
+    private final List<Connection> tickList = new ArrayList<>();
 
     public VirtualTcpBridge(
             int localIp,
@@ -212,6 +216,18 @@ public final class VirtualTcpBridge implements AutoCloseable {
 
     /** Returns false for queue pressure, shutdown, invalid frame length, or ineligible peers. */
     public boolean accept(InboundFirewall.PeerGrant grant, byte[] frame) {
+        return admit(grant, frame, false);
+    }
+
+    /**
+     * {@link #accept}, transferring ownership of {@code frame}: the caller holds the only
+     * reference and never touches it again, so the defensive copy is skipped.
+     */
+    public boolean acceptOwned(InboundFirewall.PeerGrant grant, byte[] frame) {
+        return admit(grant, frame, true);
+    }
+
+    private boolean admit(InboundFirewall.PeerGrant grant, byte[] frame, boolean owned) {
         Objects.requireNonNull(grant);
         Objects.requireNonNull(frame);
         synchronized (admission) {
@@ -224,7 +240,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
             }
             // Epochs invalidate frames queued before a membership/transport revocation.
             long epoch = epochs.getOrDefault(grant.rid(), 0L);
-            boolean queued = incoming.offer(new Input(grant, frame.clone(), epoch));
+            boolean queued =
+                    incoming.offer(new Input(grant, owned ? frame : frame.clone(), epoch));
             if (queued) selector.wakeup();
             else rejected.increment();
             return queued;
@@ -286,10 +303,13 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 synchronized (admission) {
                     // Once every queued input and revocation was consumed, epoch tombstones
                     // can be discarded. Otherwise a long-lived attachment would retain every RID.
-                    if (incoming.isEmpty() && revocations.isEmpty())
+                    if (incoming.isEmpty() && revocations.isEmpty() && !epochs.isEmpty())
                         epochs.keySet().removeIf(rid -> !perPeer.containsKey(rid));
                 }
-                selector.select(incoming.isEmpty() ? 10 : 1);
+                // Without connections there is no timer to run: every input, revocation and
+                // close wakes the selector, so idle bridges need not poll at 100 Hz.
+                selector.select(
+                        !incoming.isEmpty() ? 1 : connections.isEmpty() ? IDLE_SELECT_MILLIS : 10);
                 Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
                 while (keys.hasNext()) {
                     SelectionKey selected = keys.next();
@@ -305,13 +325,20 @@ public final class VirtualTcpBridge implements AutoCloseable {
                     }
                 }
                 long now = System.nanoTime();
-                for (Connection connection : List.copyOf(connections.values())) {
-                    connection.tick(now);
-                    if (!connection.closed) connection.interests();
+                tickList.addAll(connections.values());
+                try {
+                    for (Connection connection : tickList) {
+                        connection.tick(now);
+                        if (!connection.closed) connection.interests();
+                    }
+                } finally {
+                    tickList.clear();
                 }
-                Map<Key, TcpState> states = new HashMap<>();
-                connections.forEach((key, connection) -> states.put(key, connection.state()));
-                publishedStates = Map.copyOf(states);
+                if (statesChanged()) {
+                    Map<Key, TcpState> states = new HashMap<>();
+                    connections.forEach((key, connection) -> states.put(key, connection.state()));
+                    publishedStates = Map.copyOf(states);
+                }
             }
         } catch (IOException e) {
             backendFailures++;
@@ -327,6 +354,15 @@ public final class VirtualTcpBridge implements AutoCloseable {
             } catch (IOException ignored) {
             }
         }
+    }
+
+    /** Whether the published immutable view differs from the live connection states. */
+    private boolean statesChanged() {
+        Map<Key, TcpState> published = publishedStates;
+        if (published.size() != connections.size()) return true;
+        for (Map.Entry<Key, Connection> entry : connections.entrySet())
+            if (published.get(entry.getKey()) != entry.getValue().state()) return true;
+        return false;
     }
 
     private void revokePending() {
@@ -360,7 +396,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
         }
         if (connection != null) {
             if (connection.peerIp != input.grant().sourceIp()
-                    || !Arrays.equals(connection.peerMac, input.grant().sourceMac())) {
+                    || !input.grant().sourceMacEquals(connection.peerMac)) {
                 rejected.increment();
                 return;
             }
@@ -422,7 +458,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
         long ack =
                 wire(
                         segment.sequence()
-                                + segment.payload().length
+                                + segment.payloadLength()
                                 + ((segment.flags() & SYN) != 0 ? 1 : 0)
                                 + ((segment.flags() & FIN) != 0 ? 1 : 0));
         int flags = (segment.flags() & ACK) != 0 ? RST : RST | ACK;
@@ -461,8 +497,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
                         window,
                         options,
                         payload);
-        byte[] ip = new Ipv4Packet(localIp, peerIp, 64, tcp.encode(localIp, peerIp)).encode();
-        emit(rid, new EthernetFrame(peerMac, localMac, EthernetFrame.IPV4, ip).encode());
+        // Same bytes as EthernetFrame(Ipv4Packet(tcp.encode())).encode(), in a single array.
+        emit(rid, tcp.encodeIpv4Frame(peerMac, localMac, localIp, peerIp, 64));
     }
 
     private void emit(long rid, byte[] frame) {
@@ -522,8 +558,11 @@ public final class VirtualTcpBridge implements AutoCloseable {
         final int peerIp, mss;
         final byte[] peerMac;
         final long peerSyn, ourSyn, createdAt = System.nanoTime();
-        final byte[] receiveRing = new byte[RECEIVE_RING];
-        final BitSet present = new BitSet(RECEIVE_RING);
+        // Reorder buffer, allocated only when a segment arrives out of order and released once
+        // FIN is received (no byte can enter the stream afterwards). The RECEIVE_RING quota is
+        // still accounted for the whole connection lifetime, exactly as before.
+        byte[] receiveRing;
+        BitSet present;
         final ArrayDeque<ByteBuffer> toBackend = new ArrayDeque<>(), toPeer = new ArrayDeque<>();
         final ArrayDeque<Flight> flights = new ArrayDeque<>();
         SocketChannel channel;
@@ -623,7 +662,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
             if (closed) return;
             long seq = unwrap(tcp.sequence(), receiveNext);
             if (timeWaitUntil != 0) {
-                if ((tcp.flags() & FIN) != 0 && seq + tcp.payload().length == receiveNext - 1) {
+                if ((tcp.flags() & FIN) != 0 && seq + tcp.payloadLength() == receiveNext - 1) {
                     ack();
                     timeWaitUntil = System.nanoTime() + limits.timeWait().toNanos();
                 }
@@ -641,7 +680,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 return;
             }
             if (connecting || (tcp.flags() & ACK) == 0) return;
-            int length = tcp.payload().length + ((tcp.flags() & FIN) != 0 ? 1 : 0);
+            int length = tcp.payloadLength() + ((tcp.flags() & FIN) != 0 ? 1 : 0);
             if (!acceptable(seq, length)) {
                 ack();
                 return;
@@ -691,44 +730,62 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 ack();
                 return;
             }
-            byte[] bytes = tcp.payload();
+            int payloadLength = tcp.payloadLength();
             int window = receiveWindow();
             long right = receiveNext + window;
             if (pendingFin >= 0) right = Math.min(right, pendingFin);
             int from = (int) Math.max(0, receiveNext - seq);
-            int end = (int) Math.min(bytes.length, Math.max(0, right - seq));
-            for (int i = from; i < end; i++) {
-                int index = (int) (seq + i) & 65535;
-                if (!present.get(index)) {
-                    receiveRing[index] = bytes[i];
-                    present.set(index);
-                    reordered++;
-                    bufferedBytes++;
+            int end = (int) Math.min(payloadLength, Math.max(0, right - seq));
+            long finSequence = seq + payloadLength;
+            if (reordered == 0 && seq <= receiveNext) {
+                // In-order fast path. With nothing buffered out of order (reordered counts the
+                // present bits), the slow path would mark [from, end) and then drain exactly
+                // those bytes; deliver them directly instead of through the ring.
+                markFin(tcp, finSequence, window);
+                if (end > from) {
+                    int contiguous = end - from;
+                    bufferedBytes += contiguous;
+                    toBackend.add(ByteBuffer.wrap(tcp.copyPayload(from, end)));
+                    backendQueued += contiguous;
+                    receiveNext += contiguous;
+                    lastProgress = System.nanoTime();
                 }
-            }
-            long finSequence = seq + bytes.length;
-            if ((tcp.flags() & FIN) != 0
-                    && finSequence >= receiveNext
-                    && finSequence < receiveNext + window) {
-                if (pendingFin < 0) pendingFin = finSequence;
-            }
-            // Drain contiguous bytes once, without retaining overlapping retransmissions.
-            int contiguous = 0;
-            while (contiguous < RECEIVE_RING
-                    && present.get((int) (receiveNext + contiguous) & 65535)
-                    && (pendingFin < 0 || receiveNext + contiguous < pendingFin)) contiguous++;
-            if (contiguous > 0) {
-                byte[] data = new byte[contiguous];
-                for (int i = 0; i < contiguous; i++) {
-                    int index = (int) (receiveNext + i) & 65535;
-                    data[i] = receiveRing[index];
-                    present.clear(index);
+            } else {
+                if (receiveRing == null) {
+                    receiveRing = new byte[RECEIVE_RING];
+                    present = new BitSet(RECEIVE_RING);
                 }
-                toBackend.add(ByteBuffer.wrap(data));
-                backendQueued += contiguous;
-                reordered -= contiguous;
-                receiveNext += contiguous;
-                lastProgress = System.nanoTime();
+                byte[] bytes = tcp.payload();
+                int added = 0;
+                for (int i = from; i < end; i++) {
+                    int index = (int) (seq + i) & 65535;
+                    if (!present.get(index)) {
+                        receiveRing[index] = bytes[i];
+                        present.set(index);
+                        added++;
+                    }
+                }
+                reordered += added;
+                bufferedBytes += added;
+                markFin(tcp, finSequence, window);
+                // Drain contiguous bytes once, without retaining overlapping retransmissions.
+                int contiguous = 0;
+                while (contiguous < RECEIVE_RING
+                        && present.get((int) (receiveNext + contiguous) & 65535)
+                        && (pendingFin < 0 || receiveNext + contiguous < pendingFin)) contiguous++;
+                if (contiguous > 0) {
+                    byte[] data = new byte[contiguous];
+                    for (int i = 0; i < contiguous; i++) {
+                        int index = (int) (receiveNext + i) & 65535;
+                        data[i] = receiveRing[index];
+                        present.clear(index);
+                    }
+                    toBackend.add(ByteBuffer.wrap(data));
+                    backendQueued += contiguous;
+                    reordered -= contiguous;
+                    receiveNext += contiguous;
+                    lastProgress = System.nanoTime();
+                }
             }
             if (pendingFin == receiveNext) {
                 peerClosedFirst = !finSent;
@@ -738,9 +795,22 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 // Discard speculative bytes beyond FIN, which can never enter the byte stream.
                 bufferedBytes -= reordered;
                 reordered = 0;
-                present.clear();
+                releaseRing();
             }
             ack();
+        }
+
+        void markFin(TcpSegment tcp, long finSequence, int window) {
+            if ((tcp.flags() & FIN) != 0
+                    && finSequence >= receiveNext
+                    && finSequence < receiveNext + window) {
+                if (pendingFin < 0) pendingFin = finSequence;
+            }
+        }
+
+        void releaseRing() {
+            receiveRing = null;
+            present = null;
         }
 
         void acknowledge(long acknowledgement, boolean duplicateCandidate) {
@@ -844,14 +914,14 @@ public final class VirtualTcpBridge implements AutoCloseable {
             if (!established || backendEof || closed) return;
             int free = readCapacity();
             if (free == 0) return;
-            ByteBuffer bytes = ByteBuffer.allocate(free);
-            int read = channel.read(bytes);
+            ByteBuffer scratch = readScratch.clear().limit(free);
+            int read = channel.read(scratch);
             if (read < 0) {
                 backendEof = true;
                 if (halfCloseAt == 0) halfCloseAt = System.nanoTime();
             } else if (read > 0) {
-                bytes.flip();
-                toPeer.add(bytes);
+                // Queue exactly the bytes read instead of retaining a 16 KiB buffer per read.
+                toPeer.add(ByteBuffer.wrap(Arrays.copyOf(readScratch.array(), read)));
                 unsentBytes += read;
                 outboundBuffered += read;
                 bufferedBytes += read;
@@ -1052,7 +1122,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
             toPeer.clear();
             toBackend.clear();
             flights.clear();
-            present.clear();
+            releaseRing();
         }
 
         void releaseQuota() {

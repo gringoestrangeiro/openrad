@@ -20,6 +20,9 @@ use std::{
 };
 
 pub const MODULUS: &[u8] = openrad::SERVER_MODULUS;
+/// How often the desktop returns freed heap pages to the operating system.
+#[cfg(unix)]
+const MEMORY_TRIM_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Loading,
@@ -59,6 +62,7 @@ pub enum Notice {
     NodeName(String),
     RelayPreference(bool),
     BroadcastPreference(runtime::BroadcastSelection),
+    BlockList(runtime::BlockList),
 }
 pub enum Action {
     Connect,
@@ -66,6 +70,7 @@ pub enum Action {
     ResetIdentity,
     Save(Settings),
     BroadcastPeers { targets: Vec<String>, exclude: bool },
+    StealthBlock(openrad::daemon::BlockChange),
     Import(PathBuf),
     Engine(runtime::Command),
     Shutdown,
@@ -263,11 +268,13 @@ fn manager(
         settings.language = language;
     }
     let mut broadcast_selection = runtime::BroadcastSelection::All;
+    let mut blocked = runtime::BlockList::new();
     if dir.path.join("service.json").exists() {
         match dir.preferences() {
             Ok(preferences) => {
                 settings.force_relay = preferences.force_relay;
                 broadcast_selection = preferences.broadcast_selection();
+                blocked = preferences.blocked.clone();
                 settings.auto_reconnect = preferences.auto_reconnect;
                 settings.reconnect_attempts = preferences.reconnect_attempts;
                 settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
@@ -333,6 +340,7 @@ fn manager(
     let mut persisted = identity.is_some();
     report(Notice::Settings(settings.clone()));
     report(Notice::BroadcastPreference(broadcast_selection.clone()));
+    report(Notice::BlockList(blocked.clone()));
     if let Err(error) = &loaded {
         report(Notice::Phase(Phase::Error, error.to_string()));
     } else if !service_running {
@@ -369,6 +377,8 @@ fn manager(
     };
     let mut connect = settings.auto_connect && loaded.is_ok() && !service_running;
     let mut next_status = Instant::now();
+    #[cfg(unix)]
+    let mut next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
     let mut last_phase = None;
     let mut last_identity: Option<(u64, String)> = None;
     let mut reset_failed = false;
@@ -473,6 +483,10 @@ fn manager(
                             broadcast_selection = selection;
                             report(Notice::BroadcastPreference(broadcast_selection.clone()));
                         }
+                        if blocked != preferences.blocked {
+                            blocked = preferences.blocked;
+                            report(Notice::BlockList(blocked.clone()));
+                        }
                     }
                     let phase = match reply.data["phase"].as_str() {
                         Some("connected") => Phase::Connected,
@@ -525,8 +539,19 @@ fn manager(
                         broadcast_selection = selection;
                         report(Notice::BroadcastPreference(broadcast_selection.clone()));
                     }
+                    if blocked != preferences.blocked {
+                        blocked = preferences.blocked;
+                        report(Notice::BlockList(blocked.clone()));
+                    }
                 }
             }
+        }
+        // Full-roster status replies are parsed and dropped every poll; give the
+        // freed pages back instead of holding the largest roster ever seen.
+        #[cfg(unix)]
+        if Instant::now() >= next_trim {
+            next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
+            openrad::resource_limits::release_free_memory();
         }
         match actions.recv_timeout(Duration::from_millis(50)) {
             Ok(Action::Connect) if !replacement.is_pending() => {
@@ -675,6 +700,20 @@ fn manager(
                     broadcast_selection =
                         serde_json::from_value(reply.data["broadcast_peers"].clone())?;
                     report(Notice::BroadcastPreference(broadcast_selection.clone()));
+                    report(Notice::Engine(runtime::Update::Operation {
+                        message: reply.message,
+                        error: false,
+                    }));
+                    Ok(())
+                })();
+                operation(result);
+            }
+            Ok(Action::StealthBlock(change)) => {
+                let result = (|| -> Result<()> {
+                    let reply = daemon::stealth_block(&dir, Some(change))?;
+                    ensure!(reply.ok, "{}", reply.message);
+                    blocked = serde_json::from_value(reply.data["blocked"].clone())?;
+                    report(Notice::BlockList(blocked.clone()));
                     report(Notice::Engine(runtime::Update::Operation {
                         message: reply.message,
                         error: false,

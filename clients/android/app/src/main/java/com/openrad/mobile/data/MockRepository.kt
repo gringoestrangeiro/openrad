@@ -229,8 +229,16 @@ class MockRepository(
         }
     }
 
+    override suspend fun setStealthBlock(address: Int, direction: com.openrad.mobile.engine.BlockDirection?) {
+        _settings.update { s ->
+            s.copy(blocked = if (direction == null) s.blocked - address else s.blocked + (address to direction))
+        }
+        pushActivity("stealth block updated: ${com.openrad.mobile.engine.Ip.format(address)}")
+    }
+
     override suspend fun saveSettings(next: AppSettings) {
         _settings.value = next.copy(
+            blocked = _settings.value.blocked,
             reconnectAttempts = next.reconnectAttempts.coerceIn(1, 10),
             reconnectBaseDelaySeconds = next.reconnectBaseDelaySeconds.coerceIn(1, 30),
             recentActivityCount = next.recentActivityCount.coerceIn(5, 40),

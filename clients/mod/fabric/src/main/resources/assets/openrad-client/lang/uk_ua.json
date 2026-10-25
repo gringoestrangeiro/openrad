@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "Підключитися",
+  "openrad.menu.disconnect": "Відключитися",
+  "openrad.menu.save": "Зберегти",
+  "openrad.menu.saved": "Збережено; перепідключіться",
+  "openrad.menu.all_networks": "Усі мережі",
+  "openrad.menu.all_language": "Усі: %s",
+  "openrad.menu.auto_connect": "Автопідключення"
+}

@@ -83,6 +83,7 @@ class Engine(
         ownVip = { identity?.vip ?: 0 },
         peers = { connectedPeers() },
         outgoingBroadcasts = { this.config.outgoingBroadcasts },
+        blocksOutgoing = { ip -> this.config.blocked[ip]?.outgoing == true },
     )
 
     private class PendingOffer(val offer: Protocol.ConnectionOffer, val created: Long, val records: MutableList<ByteArray>) {
@@ -148,6 +149,8 @@ class Engine(
 
     fun updateConfig(next: EngineConfig) {
         config = next
+        // Stealth block applies live: only cached per-channel flags change, no channel restarts.
+        synchronized(lock) { workers.values.forEach { it.applyBlock(next.blocked) } }
         applyTransportPolicy()
         dirty.set(true)
     }
@@ -234,7 +237,7 @@ class Engine(
     /** IPv4 packet read from the TUN. */
     fun sendIp(packet: ByteArray, length: Int): L3Bridge.Result {
         val result = bridge.outbound(packet, length)
-        if (result != L3Bridge.Result.SENT) dropped.incrementAndGet()
+        if (result != L3Bridge.Result.SENT && result != L3Bridge.Result.BLOCKED) dropped.incrementAndGet()
         return result
     }
 
@@ -652,7 +655,8 @@ class Engine(
 
     private fun connectedPeers(): List<BridgePeer> = synchronized(lock) {
         refreshPermitted()
-        permittedWorkers.filter { it.link == LinkState.CONNECTED && !it.stop.get() }
+        // Outgoing stealth block: the VIP has no route, so neither unicast nor group traffic reaches it.
+        permittedWorkers.filter { it.link == LinkState.CONNECTED && !it.stop.get() && !it.blockOut }
     }
 
     private fun applyForceRelay(enabled: Boolean) = synchronized(lock) {
@@ -680,9 +684,10 @@ class Engine(
         receivedBytes.addAndGet(frame.size.toLong())
         when (val r = bridge.inbound(worker, frame)) {
             is L3Bridge.Inbound.Deliver -> {
-                if (tunAttached) listener.onPacket(r.packet) else echoReply(worker, r.packet, id)
+                if (tunAttached) listener.onPacket(r.packet) else if (!worker.blockOut) echoReply(worker, r.packet, id)
             }
-            is L3Bridge.Inbound.Reply -> worker.enqueue(r.frame)
+            // Locally synthesized ARP replies are outgoing traffic too.
+            is L3Bridge.Inbound.Reply -> if (!worker.blockOut) worker.enqueue(r.frame)
             L3Bridge.Inbound.Drop -> Unit
         }
     }
@@ -734,8 +739,21 @@ class Engine(
         @Volatile var channel: PeerChannel? = null
         @Volatile private var connectedAt = 0L
         @Volatile private var lastRx = now()
+        /** Stealth block flags, recomputed only when the config changes; read once per record/frame. */
+        @Volatile var blockIn = false
+        @Volatile var blockOut = false
         private var coordinator: Control? = null
         val thread = Thread({ run() }, "openrad-peer-${peer.rid}").apply { isDaemon = true }
+
+        init {
+            applyBlock(config.blocked)
+        }
+
+        fun applyBlock(blocked: Map<Int, BlockDirection>) {
+            val direction = blocked[peer.vip]
+            blockIn = direction?.incoming == true
+            blockOut = direction?.outgoing == true
+        }
 
         /** Engine-initiated stop: records no failure, so the peer may be queued again at once. */
         fun cancel() {
@@ -861,6 +879,9 @@ class Engine(
                 while (!stop.get() && running.get()) {
                     val data = ch.poll(500) ?: continue
                     lastRx = now()
+                    // Stealth block: every record is decrypted (cipher chain, keepalives), but
+                    // Ethernet records (kind 0) are discarded without decoding or copying.
+                    if (blockIn && data.size >= 2 && data[0] == 0.toByte() && data[1] == 0.toByte()) continue
                     when (val packet = Tunnel.decode(data)) {
                         is Tunnel.Packet.Keepalive -> if (!packet.reply) {
                             ch.send(Tunnel.keepalive(packet.sequence, true))

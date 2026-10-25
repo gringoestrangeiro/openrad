@@ -1,6 +1,6 @@
 [package]
 name = "openrad-client"
-version = "2.1.0"
+version = "2.1.5"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -10,6 +10,13 @@ description = "Open-source Rust reimplementation of Radmin VPN"
 members = ["desktop"]
 default-members = [".", "desktop"]
 resolver = "2"
+
+# Whole-program optimization removes duplicated generic code across crates.
+# Smaller binaries map fewer resident code pages in the service, CLI and
+# desktop. Unwinding stays enabled: engine workers contain panics.
+[profile.release]
+lto = "fat"
+codegen-units = 1
 
 [lib]
 name = "openrad"

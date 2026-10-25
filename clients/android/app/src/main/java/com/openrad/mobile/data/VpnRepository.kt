@@ -1,5 +1,6 @@
 package com.openrad.mobile.data
 
+import com.openrad.mobile.engine.BlockDirection
 import com.openrad.mobile.model.ActivityEvent
 import com.openrad.mobile.model.AppSettings
 import com.openrad.mobile.model.BatchProgress
@@ -40,7 +41,10 @@ interface VpnRepository {
     suspend fun leaveNetwork(networkId: String)
     suspend fun deleteNetwork(networkId: String)
     suspend fun toggleFavorite(name: String)
+    /** The draft-based [saveSettings] never changes the stealth-block list; this applies it live. */
     suspend fun saveSettings(next: AppSettings)
+    /** Stealth-block [address] (IPv4 as Int), change its direction, or unblock it with `null`. */
+    suspend fun setStealthBlock(address: Int, direction: BlockDirection?)
     suspend fun saveJoinConfiguration(config: JoinConfiguration)
     suspend fun deleteJoinConfiguration(name: String)
     /** Passwords live only in memory for the duration of the batch and are zeroed afterwards. */

@@ -1,4 +1,4 @@
-//! Per-process Unix resource limits for the desktop and VPN service.
+//! Per-process Unix resource limits and allocator tuning for the desktop and VPN service.
 use crate::early_log;
 use std::io;
 
@@ -59,5 +59,37 @@ pub fn configure_open_file_limit() {
             early_log::event(format_args!("Could not raise open-file limit: {error}"));
             eprintln!("OpenRad: could not raise open-file limit: {error}");
         }
+    }
+}
+
+/// glibc gives every thread that contends on `malloc` its own arena, up to
+/// eight per CPU. The service runs one thread per peer, so idle arenas each
+/// retain freed pages and the resident set grows with the peer count instead
+/// of with live data. A small fixed pool keeps allocation concurrent for the
+/// busy TAP/forwarding/peer threads while bounding that retention.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const MALLOC_ARENAS: libc::c_int = 4;
+
+/// Limit allocator arenas before any worker thread starts. An explicit
+/// `MALLOC_ARENA_MAX` from the environment keeps precedence.
+pub fn configure_allocator() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        // SAFETY: mallopt only adjusts glibc allocator tuning; it is called
+        // before this process creates additional threads.
+        if unsafe { libc::mallopt(libc::M_ARENA_MAX, MALLOC_ARENAS) } != 1 {
+            early_log::event(format_args!("Could not limit allocator arenas"));
+        }
+    }
+}
+
+/// Return freed heap pages to the operating system after large transient
+/// allocations (session teardown, full-roster snapshots). Purely advisory:
+/// live allocations are untouched.
+pub fn release_free_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only releases free pages and is thread-safe.
+    unsafe {
+        libc::malloc_trim(0);
     }
 }

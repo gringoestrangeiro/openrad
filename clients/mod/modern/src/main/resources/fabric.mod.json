@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "openrad-client",
+  "version": "${version}",
+  "name": "OpenRad Client Mod",
+  "description": "Opt-in OpenRad VPN transport, virtual outbound Minecraft TCP and authenticated LAN discovery for Fabric Minecraft ${minecraftVersion}.",
+  "authors": ["OpenRad Plugin contributors"],
+  "license": "MIT",
+  "environment": "client",
+  "mixins": ["openrad-client.mixins.json"],
+  "entrypoints": {
+    "client": ["io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "${minecraftVersion}",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

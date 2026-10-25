@@ -1,12 +1,15 @@
 package com.openrad.mobile.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -18,6 +21,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,9 +30,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.openrad.mobile.R
+import com.openrad.mobile.engine.BlockDirection
+import com.openrad.mobile.engine.Ip
 import com.openrad.mobile.engine.Protocol
 import com.openrad.mobile.model.PeerSort
 import com.openrad.mobile.model.StartPage
@@ -43,7 +51,15 @@ import java.util.Locale
 fun SettingsScreen(vm: OpenRadViewModel) {
     val current by vm.settings.collectAsStateWithLifecycle()
     val snapshot by vm.snapshot.collectAsStateWithLifecycle()
-    var draft by remember(current) { mutableStateOf(current) }
+    // Stealth-block edits apply live; they must not reset (or be reverted by) the settings draft.
+    var draft by remember(current.copy(blocked = emptyMap())) { mutableStateOf(current) }
+    val draftChanged = draft.copy(blocked = current.blocked) != current
+    val blockedRows = remember(current.blocked) {
+        current.blocked.entries.sortedBy { it.key.toLong() and 0xffffffffL }.map { it.key to it.value }
+    }
+    val peerNames = remember(snapshot.peers, blockedRows.isEmpty()) {
+        if (blockedRows.isEmpty()) emptyMap() else snapshot.peers.associate { it.vip to it.name }
+    }
     var langMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var pageMenu by remember { mutableStateOf(false) }
@@ -178,9 +194,25 @@ fun SettingsScreen(vm: OpenRadViewModel) {
             Toggle(stringResource(R.string.settings_diagnostics), draft.showDiagnostics) { draft = draft.copy(showDiagnostics = it) }
         }
         item {
-            Button(enabled = nameValid && draft != current, onClick = { vm.saveSettings(draft) }) {
+            Button(enabled = nameValid && draftChanged, onClick = { vm.saveSettings(draft) }) {
                 Text(stringResource(R.string.settings_save))
             }
+        }
+        item { Section(stringResource(R.string.block_title)) }
+        item { StealthBlockForm(blockedRows.isEmpty(), vm::setStealthBlock) }
+        items(blockedRows, key = { "blocked-${it.first}" }) { (ip, direction) ->
+            val address = Ip.format(ip)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(address, fontFamily = FontFamily.Monospace)
+                    peerNames[address]?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Muted) }
+                }
+                DirectionPicker(direction) { if (it != direction) vm.setStealthBlock(ip, it) }
+                TextButton(onClick = { vm.setStealthBlock(ip, null) }) { Text(stringResource(R.string.block_remove), color = Red) }
+            }
+        }
+        item {
+            Text(stringResource(R.string.block_live_note), style = MaterialTheme.typography.bodySmall, color = Muted)
         }
         item { Section(stringResource(R.string.settings_identity)) }
         item {
@@ -215,6 +247,61 @@ fun SettingsScreen(vm: OpenRadViewModel) {
             onDismiss = { confirmReset = false },
         )
     }
+}
+
+@Composable
+private fun StealthBlockForm(empty: Boolean, onBlock: (Int, BlockDirection) -> Unit) {
+    var input by remember { mutableStateOf("") }
+    var direction by remember { mutableStateOf(BlockDirection.BOTH) }
+    val address = runCatching { Ip.parse(input.trim()) }.getOrNull()?.takeIf(BlockDirection::validAddress)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(stringResource(R.string.block_hint), style = MaterialTheme.typography.bodySmall, color = Muted)
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it.take(15) },
+            label = { Text(stringResource(R.string.block_address)) },
+            singleLine = true,
+            isError = input.isNotBlank() && address == null,
+            supportingText = if (input.isNotBlank() && address == null) {
+                { Text(stringResource(R.string.block_invalid)) }
+            } else {
+                null
+            },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DirectionPicker(direction) { direction = it }
+            Button(enabled = address != null, onClick = {
+                address?.let { onBlock(it, direction) }
+                input = ""
+            }) { Text(stringResource(R.string.block_action)) }
+        }
+        if (empty) Text(stringResource(R.string.block_empty), style = MaterialTheme.typography.bodySmall, color = Muted)
+    }
+}
+
+@Composable
+private fun DirectionPicker(value: BlockDirection, onPick: (BlockDirection) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }) { Text(directionLabel(value)) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            BlockDirection.entries.forEach { option ->
+                DropdownMenuItem(text = { Text(directionLabel(option)) }, onClick = {
+                    open = false
+                    onPick(option)
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun directionLabel(direction: BlockDirection) = when (direction) {
+    BlockDirection.BOTH -> stringResource(R.string.block_both)
+    BlockDirection.INCOMING -> stringResource(R.string.block_incoming)
+    BlockDirection.OUTGOING -> stringResource(R.string.block_outgoing)
 }
 
 @Composable

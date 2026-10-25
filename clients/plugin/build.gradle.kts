@@ -6,7 +6,12 @@ plugins {
 }
 
 group = "io.github.gringoestrangeiro"
-version = "2.1.0"
+version = "2.1.5"
+
+// Shared runtime includes the 2.1.5 CPU/RAM and peer-presence fixes.
+// Only the Paper API and Java target vary by build.
+val paperApi = providers.gradleProperty("openradPaperApi").orElse("1.20.6-R0.1-SNAPSHOT").get()
+val bytecodeJava = if (paperApi.startsWith("26.")) 25 else 21
 
 repositories {
     mavenCentral()
@@ -14,8 +19,8 @@ repositories {
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
-    testImplementation("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:$paperApi")
+    testImplementation("io.papermc.paper:paper-api:$paperApi")
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -23,10 +28,11 @@ dependencies {
 
 java {
     withSourcesJar()
+    toolchain.languageVersion.set(JavaLanguageVersion.of(bytecodeJava))
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
+    options.release.set(bytecodeJava)
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-processing"))
 }
@@ -62,13 +68,13 @@ tasks.register("verifyJar") {
                     DataInputStream(jar.getInputStream(entry)).use { input ->
                         check(input.readInt() == 0xCAFEBABE.toInt())
                         input.readUnsignedShort()
-                        check(input.readUnsignedShort() == 65) { "Class is not Java 21 bytecode" }
+                        check(input.readUnsignedShort() == bytecodeJava + 44) { "Class version differs from Java $bytecodeJava target" }
                     }
                     classes++
                 }
             }
             check(classes > 0)
-            println("Verified $classes Java 21 classes; plugin metadata/license; no native/runtime dependencies.")
+            println("Verified $classes Java $bytecodeJava classes; plugin metadata/license; no native/runtime dependencies.")
         }
     }
 }

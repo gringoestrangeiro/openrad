@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "Se connecter",
+  "openrad.menu.disconnect": "Se déconnecter",
+  "openrad.menu.save": "Enregistrer",
+  "openrad.menu.saved": "Enregistré ; reconnectez-vous",
+  "openrad.menu.all_networks": "Tous les réseaux",
+  "openrad.menu.all_language": "Tous : %s",
+  "openrad.menu.auto_connect": "Connexion automatique"
+}

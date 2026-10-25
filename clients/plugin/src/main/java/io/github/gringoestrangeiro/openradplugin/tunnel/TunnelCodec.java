@@ -89,27 +89,71 @@ public final class TunnelCodec {
     }
 
     public static byte[] encodeFrame(byte[] frame) {
-        if (frame.length < 14 || frame.length > 65535)
+        byte[] header = frameHeader(frame.length);
+        byte[] out = Arrays.copyOf(header, header.length + frame.length);
+        System.arraycopy(frame, 0, out, header.length, frame.length);
+        return out;
+    }
+
+    /** The ten envelope bytes that {@link #encodeFrame} places before a frame of this length. */
+    public static byte[] frameHeader(int frameLength) {
+        if (frameLength < 14 || frameLength > 65535)
             throw new IllegalArgumentException("invalid Ethernet length");
-        return ByteBuffer.allocate(frame.length + 10)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .putShort((short) 0)
-                .putInt(0)
-                .putInt(frame.length)
-                .put(frame)
-                .array();
+        // kind u16 0, flags u32 0, then the little-endian u32 length.
+        byte[] header = new byte[10];
+        header[6] = (byte) frameLength;
+        header[7] = (byte) (frameLength >>> 8);
+        return header;
     }
 
     public sealed interface Packet permits Frames, Keepalive, Other {}
 
-    public record Frames(List<byte[]> frames) implements Packet {
-        public Frames {
-            frames = frames.stream().map(byte[]::clone).toList();
+    /**
+     * Decoded Ethernet frames. Public construction and {@link #frames()} copy defensively; the
+     * decoder hands over freshly parsed arrays without the extra copies.
+     */
+    public static final class Frames implements Packet {
+        private final List<byte[]> frames;
+
+        public Frames(List<byte[]> frames) {
+            this.frames = copy(frames);
+        }
+
+        private Frames(List<byte[]> owned, boolean adopt) {
+            frames = Collections.unmodifiableList(owned);
+        }
+
+        private static List<byte[]> copy(List<byte[]> frames) {
+            List<byte[]> copy = new ArrayList<>(frames.size());
+            for (byte[] frame : frames) copy.add(frame.clone());
+            return Collections.unmodifiableList(copy);
+        }
+
+        public List<byte[]> frames() {
+            return copy(frames);
+        }
+
+        /**
+         * Read-only view of the decoded frames without copying. The caller takes ownership of
+         * the arrays (no other reference exists) and must not expose them to other consumers.
+         */
+        public List<byte[]> ownedFrames() {
+            return frames;
         }
 
         @Override
-        public List<byte[]> frames() {
-            return frames.stream().map(byte[]::clone).toList();
+        public boolean equals(Object other) {
+            return other instanceof Frames f && frames.equals(f.frames);
+        }
+
+        @Override
+        public int hashCode() {
+            return frames.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "Frames[frames=" + frames + "]";
         }
     }
 
@@ -119,16 +163,21 @@ public final class TunnelCodec {
 
     /** Validates every envelope before exposing the first frame. */
     public static Packet decode(byte[] data) {
-        if (data.length < 2) throw new IllegalArgumentException("truncated tunnel packet");
-        ByteBuffer b = ByteBuffer.wrap(data);
+        return decode(data, data.length);
+    }
+
+    /** {@link #decode(byte[])} of data[0, length); frames are copied out of {@code data}. */
+    public static Packet decode(byte[] data, int length) {
+        if (length < 2) throw new IllegalArgumentException("truncated tunnel packet");
+        ByteBuffer b = ByteBuffer.wrap(data, 0, length);
         int kind = Short.toUnsignedInt(b.getShort());
         if (kind == 3 || kind == 7) {
-            if (data.length != 6) throw new IllegalArgumentException("invalid keepalive length");
+            if (length != 6) throw new IllegalArgumentException("invalid keepalive length");
             return new Keepalive(b.getInt(), kind == 7);
         }
         if (kind != 0) return new Other(kind);
         b.order(ByteOrder.LITTLE_ENDIAN);
-        List<byte[]> frames = new ArrayList<>();
+        List<byte[]> frames = new ArrayList<>(2);
         while (b.hasRemaining()) {
             if (b.remaining() < 22)
                 throw new IllegalArgumentException("truncated Ethernet envelope");
@@ -141,7 +190,7 @@ public final class TunnelCodec {
             frames.add(frame);
         }
         if (frames.isEmpty()) throw new IllegalArgumentException("empty Ethernet packet");
-        return new Frames(frames);
+        return new Frames(frames, true);
     }
 
     public static byte[] keepalive(int sequence, boolean reply) {

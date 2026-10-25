@@ -55,6 +55,15 @@ class BridgeTest {
     }
 
     @Test
+    fun stealthBlockedDestinationIsBlockedNotUnrouted() {
+        val blocked = Ip.parse("26.0.0.99")
+        val bridge = L3Bridge({ own }, { listOf(a, b) }, { true }, { it == blocked })
+        assertEquals(L3Bridge.Result.BLOCKED, bridge.outbound(ipv4(own, blocked)))
+        assertEquals(L3Bridge.Result.NO_ROUTE, bridge.outbound(ipv4(own, Ip.parse("26.0.0.98"))))
+        assertEquals(L3Bridge.Result.SENT, bridge.outbound(ipv4(own, a.vip)))
+    }
+
+    @Test
     fun rejectsForeignSourceBadChecksumUnknownPeerAndFullQueue() {
         assertEquals(L3Bridge.Result.INVALID, bridge().outbound(ipv4(Ip.parse("26.9.9.9"), a.vip)))
         val corrupt = ipv4(own, a.vip).also { it[10] = (it[10].toInt() xor 1).toByte() }

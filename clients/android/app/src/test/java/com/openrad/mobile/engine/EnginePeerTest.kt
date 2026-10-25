@@ -3,6 +3,7 @@ package com.openrad.mobile.engine
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigInteger
@@ -318,6 +319,39 @@ class EnginePeerTest {
         val result = rtt.get(5, TimeUnit.SECONDS)
         assertTrue("rtt: $result", result is CommandResult.Rtt && result.millis < Engine.PING_TIMEOUT_MS)
         assertTrue(a.snapshot().traffic.sentFrames >= 1)
+    }
+
+    @Test
+    fun stealthBlockDropsTrafficLiveWhileTheChannelAndRttStayUp() {
+        start()
+        val ca = Capture()
+        val cb = Capture()
+        val a = engine(100, false, ca)
+        val b = engine(200, false, cb)
+        waitFor { connected(a) && connected(b) }
+        val vipA = peers.getValue(100)
+        val vipB = peers.getValue(200)
+        val toB = udp(vipA, vipB, "to b".toByteArray())
+        val toA = udp(vipB, vipA, "to a".toByteArray())
+
+        a.updateConfig(a.config.copy(blocked = mapOf(vipB to BlockDirection.OUTGOING)))
+        val dropped = a.snapshot().traffic.dropped
+        assertEquals(L3Bridge.Result.BLOCKED, a.sendIp(toB, toB.size))
+        assertEquals("a stealth block is not a delivery failure", dropped, a.snapshot().traffic.dropped)
+        assertNull(cb.packets.poll(300, TimeUnit.MILLISECONDS))
+        assertEquals(L3Bridge.Result.SENT, b.sendIp(toA, toA.size))
+        assertArrayEquals("outgoing-only still receives", toA, ca.packets.poll(10, TimeUnit.SECONDS))
+
+        a.updateConfig(a.config.copy(blocked = mapOf(vipB to BlockDirection.INCOMING)))
+        assertEquals(L3Bridge.Result.SENT, b.sendIp(toA, toA.size))
+        assertNull(ca.packets.poll(500, TimeUnit.MILLISECONDS))
+        val rtt = CompletableFuture<CommandResult>()
+        a.ping(200) { rtt.complete(it) }
+        assertTrue("keepalives still flow", rtt.get(5, TimeUnit.SECONDS) is CommandResult.Rtt)
+        assertTrue(connected(a) && connected(b))
+
+        a.updateConfig(a.config.copy(blocked = emptyMap()))
+        exchange(a, ca, b, cb)
     }
 
     @Test

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openrad-python"
-version = "2.1.0"
+version = "2.1.5"
 description = "Linux Radmin client with asyncio memory channels and a localhost UDP API"
 readme = "README.md"
 requires-python = ">=3.10"

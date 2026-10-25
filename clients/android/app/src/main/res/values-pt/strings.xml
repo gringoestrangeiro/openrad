@@ -174,4 +174,18 @@
     <string name="name_invalid">O nome da rede deve ter 1–255 caracteres, sem caracteres de controle.</string>
     <string name="password_invalid">A senha deve ter 6–256 caracteres, sem caracteres de controle.</string>
     <string name="settings_outgoing_broadcasts_hint">Enquanto conectado, multicast (224.0.0.0/4) e broadcasts 255.255.255.255 passam pelo OpenRad, para a descoberta de LAN (ex.: Minecraft) chegar aos peers. A descoberta no Wi-Fi local (transmissão de tela, jogos no mesmo Wi-Fi) fica pausada nesse período.</string>
+    <string name="block_title">Bloqueio furtivo</string>
+    <string name="block_hint">Endereços VPN bloqueados agem como se não existissem: os pacotes deles são ignorados e nada é enviado a eles. O par continua conectado.</string>
+    <string name="block_address">IP da VPN, ex.: 26.1.2.3</string>
+    <string name="block_action">Bloquear</string>
+    <string name="block_remove">Desbloquear</string>
+    <string name="block_both">Entrada e saída</string>
+    <string name="block_incoming">Somente entrada</string>
+    <string name="block_outgoing">Somente saída</string>
+    <string name="block_empty">Nenhum endereço bloqueado.</string>
+    <string name="block_live_note">Salvo e aplicado na hora, sem reconectar.</string>
+    <string name="block_invalid">Digite o endereço IPv4 da VPN de um par</string>
+    <string name="block_limit">O bloqueio furtivo aceita no máximo %1$d endereços</string>
+    <string name="block_added">Bloqueio furtivo aplicado a %1$s</string>
+    <string name="block_removed">Bloqueio furtivo removido de %1$s</string>
 </resources>

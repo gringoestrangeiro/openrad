@@ -1,5 +1,6 @@
 package com.openrad.mobile.model
 
+import com.openrad.mobile.engine.BlockDirection
 import java.net.Inet4Address
 
 /** Mirrors `runtime.rs::PeerState`. Labels come from strings.xml in the UI. */
@@ -145,6 +146,8 @@ data class AppSettings(
     val showDiagnostics: Boolean = false,
     val forceRelay: Boolean = false,
     val outgoingBroadcasts: Boolean = true,
+    /** Stealth-blocked VIPs (IPv4 as Int). Edited live, never through the settings draft. */
+    val blocked: Map<Int, BlockDirection> = emptyMap(),
     val scale: Float = 1.0f,
 ) {
     /** Ranges preserved from `storage.rs::Settings`. */
@@ -155,6 +158,12 @@ data class AppSettings(
         scale = if (scale.isNaN()) 1.0f else scale.coerceIn(0.8f, 1.5f),
         language = if (language in LANGUAGES) language else "system",
         nodeName = nodeName.trim().ifEmpty { "openrad-android" },
+        blocked = if (blocked.size <= BlockDirection.MAX_ADDRESSES && blocked.keys.all(BlockDirection::validAddress)) {
+            blocked
+        } else {
+            blocked.filterKeys(BlockDirection::validAddress).entries.take(BlockDirection.MAX_ADDRESSES)
+                .associate { it.key to it.value }
+        },
     )
 
     companion object {

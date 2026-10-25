@@ -1,0 +1,155 @@
+[
+  {
+    "minecraft": "1.21",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.jar",
+    "sha256": "37e40ca1bb5ee21f868416dcc18333b2c47793aaad5b1130d7b8a6d7d6338dad",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.1",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.1.jar",
+    "sha256": "a79962064e09498c11c4d41ec08fbc5854f2b4ae5269dbefc22d4a0ad2beb1cb",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.2",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.2.jar",
+    "sha256": "caa8fc93480d6e44195905117015bd1cb4738222ca7579e096c5b4ed38fd6d3d",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.3",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.3.jar",
+    "sha256": "83b4a2096ff9556932b3c6a10721cea6014df67ea0bcc6145a96c13d35ac1278",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.4",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.4.jar",
+    "sha256": "289791f1cd85d6493ff4ef7e430248b944f436fbebbdb389838aaf8e0d4e58d9",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.5",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.5.jar",
+    "sha256": "213dcb51da151714f94ce2e7fd2774c5d4e5ad6f74514f453709836b3cfd914f",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.6",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.6.jar",
+    "sha256": "9286e6b49b11ee89f55e9223b272d767e0638f5ef31df0635c822a375332b884",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.7",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.7.jar",
+    "sha256": "d642e9ccc8e49e01ef1c33fb6b18f881b7b1a859a12d5cb95d78bd1f03ca5cb5",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.8",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.8.jar",
+    "sha256": "b71253f2bf1fbf117f3a7df66af9507f7be619133906a178ea1b52cd5572919d",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.9",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.9.jar",
+    "sha256": "7e53572376dc7417f6286361174116698eed12cb3c73d9ba374c63f16cf70b0b",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.10",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.10.jar",
+    "sha256": "4174715ad308ef672644b0d3cadf9afcf1bb166bd4350848102b65bfa83847ea",
+    "note": ""
+  },
+  {
+    "minecraft": "1.21.11",
+    "java": 21,
+    "mod": "0.2.3-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.2.3-alpha-fabric-1.21.11.jar",
+    "sha256": "2b140b2897a6c0b3669c9ed9150bf44380f97af980e00aaa9af1aa2300a1a045",
+    "note": ""
+  },
+  {
+    "minecraft": "26.1",
+    "java": 25,
+    "mod": "0.3.0-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.3.0-alpha-fabric-26.1.jar",
+    "sha256": "fb4336f7f4c7857af761c5e01d4b62044124cc4acfec548620268e13d6a35ed3",
+    "note": ""
+  },
+  {
+    "minecraft": "26.1.1",
+    "java": 25,
+    "mod": "0.3.0-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.3.0-alpha-fabric-26.1.1.jar",
+    "sha256": "925465c8024a8bd4f6f7196f1ab530f33e9f845feb62a1a144378558f35af0bd",
+    "note": ""
+  },
+  {
+    "minecraft": "26.1.2",
+    "java": 25,
+    "mod": "0.3.0-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.3.0-alpha-fabric-26.1.2.jar",
+    "sha256": "ef403a7be991c4c844f6d59184d5eebfe3b647c1717f46d879c79d7d314ba8c9",
+    "note": ""
+  },
+  {
+    "minecraft": "26.2",
+    "java": 25,
+    "mod": "0.3.0-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.3.0-alpha-fabric-26.2.jar",
+    "sha256": "7bc693f7b78da5722eb7895806c85bd6fc2022c0268d9cca9e9b79764a9eacad",
+    "note": ""
+  },
+  {
+    "minecraft": "26.3",
+    "java": 25,
+    "mod": "0.3.0-alpha",
+    "status": "BUILD VERIFICADO",
+    "jar": "OpenRadClientMod-0.3.0-alpha-fabric-26.3.jar",
+    "sha256": "90010f52d5954c5983c6a99e604114cb923a1dd145137d9e7093b05d3c8f098c",
+    "note": ""
+  }
+]

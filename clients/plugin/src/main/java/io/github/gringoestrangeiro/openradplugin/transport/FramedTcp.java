@@ -5,7 +5,6 @@ import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -35,6 +34,10 @@ public final class FramedTcp implements RecordTransport {
     private long deadline;
     private int records;
     private long received;
+    /** Receive-side scratch for length prefixes; only the receiving owner touches it. */
+    private final byte[] header = new byte[4];
+    private static final long RECEIVE_SLICE = Duration.ofSeconds(10).toNanos();
+    private static final int COALESCE_LIMIT = 128 * 1024;
 
     public FramedTcp(Socket socket, Duration timeout) throws IOException {
         this.socket = socket;
@@ -90,11 +93,14 @@ public final class FramedTcp implements RecordTransport {
     }
 
     private long until() {
-        return Math.min(deadline, System.nanoTime() + Duration.ofSeconds(10).toNanos());
+        return Math.min(deadline, System.nanoTime() + RECEIVE_SLICE);
     }
 
     private byte[] read(int count, long until) throws IOException {
-        byte[] bytes = new byte[count];
+        return read(new byte[count], count, until);
+    }
+
+    private byte[] read(byte[] bytes, int count, long until) throws IOException {
         int at = 0;
         while (at < count) {
             if (Thread.currentThread().isInterrupted() || System.nanoTime() >= until)
@@ -122,8 +128,20 @@ public final class FramedTcp implements RecordTransport {
         checkDeadline();
         if (data.length == 0 || data.length > 4 * 1024 * 1024)
             throw new IOException("TCP frame size");
-        byte[] header = ByteBuffer.allocate(4).putInt(data.length).array();
-        writeRaw(header, data);
+        if (data.length > COALESCE_LIMIT) {
+            // Large (control) records keep two writes rather than duplicating megabytes.
+            writeRaw(ByteBuffer.allocate(4).putInt(data.length).array(), data);
+            return;
+        }
+        // One write per record: the byte stream is unchanged, but the four-byte prefix no
+        // longer leaves as its own TCP_NODELAY segment and system call.
+        byte[] record = new byte[4 + data.length];
+        record[0] = (byte) (data.length >>> 24);
+        record[1] = (byte) (data.length >>> 16);
+        record[2] = (byte) (data.length >>> 8);
+        record[3] = (byte) data.length;
+        System.arraycopy(data, 0, record, 4, data.length);
+        writeRaw(record);
     }
 
     private void writeRaw(byte[]... parts) throws IOException {
@@ -158,7 +176,7 @@ public final class FramedTcp implements RecordTransport {
         if (maximum < 1 || (deadline != Long.MAX_VALUE && records >= 4096))
             throw new IOException("TCP record budget");
         long until = until();
-        long length = Integer.toUnsignedLong(ByteBuffer.wrap(read(4, until)).getInt());
+        long length = Integer.toUnsignedLong(ByteBuffer.wrap(read(header, 4, until)).getInt());
         if (length == 0
                 || length > maximum
                 || (deadline != Long.MAX_VALUE && received + length > 32 * 1024 * 1024))
@@ -194,8 +212,12 @@ public final class FramedTcp implements RecordTransport {
         if (ownRid == 0 || cid == 0 || serverId == 0)
             throw new IllegalArgumentException("zero rendezvous identity");
         byte[] body = ByteBuffer.allocate(20).putLong(ownRid).putLong(cid).putInt(serverId).array();
-        writeRaw(new byte[] {0, 20, 0, 1}, body);
-        if (ByteBuffer.wrap(read(4, until())).getInt() != WireChecksum.checksum(body))
+        byte[] record = new byte[24];
+        record[1] = 20;
+        record[3] = 1;
+        System.arraycopy(body, 0, record, 4, 20);
+        writeRaw(record);
+        if (ByteBuffer.wrap(read(header, 4, until())).getInt() != WireChecksum.checksum(body))
             throw new IOException("TCP rendezvous checksum mismatch");
     }
 
@@ -210,7 +232,7 @@ public final class FramedTcp implements RecordTransport {
                 || body.getInt() == 0) throw new IOException("TCP rendezvous identity mismatch");
         writeRaw(
                 ByteBuffer.allocate(4)
-                        .putInt(WireChecksum.checksum(Arrays.copyOfRange(data, 4, 24)))
+                        .putInt(WireChecksum.checksum(data, 4, 20))
                         .array());
     }
 

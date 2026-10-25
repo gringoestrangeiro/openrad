@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewModelScope
 import com.openrad.mobile.data.EngineRepository
 import com.openrad.mobile.data.VpnRepository
+import com.openrad.mobile.engine.BlockDirection
 import com.openrad.mobile.model.AppSettings
 import com.openrad.mobile.model.ConnectionPhase
 import com.openrad.mobile.model.JoinConfiguration
@@ -68,6 +69,8 @@ class OpenRadViewModel(val repo: VpnRepository) : ViewModel() {
     fun leaveNetwork(id: String) = viewModelScope.launch { repo.leaveNetwork(id) }
     fun deleteNetwork(id: String) = viewModelScope.launch { repo.deleteNetwork(id) }
     fun saveSettings(s: AppSettings) = viewModelScope.launch { repo.saveSettings(s) }
+    fun setStealthBlock(address: Int, direction: BlockDirection?) =
+        viewModelScope.launch { repo.setStealthBlock(address, direction) }
     fun saveJoinConfiguration(c: JoinConfiguration) = viewModelScope.launch { repo.saveJoinConfiguration(c) }
     fun deleteJoinConfiguration(name: String) = viewModelScope.launch { repo.deleteJoinConfiguration(name) }
     fun runBatchJoin(nets: List<JoinNetwork>, passwords: Map<String, CharArray>) =

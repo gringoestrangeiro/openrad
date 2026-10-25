@@ -57,9 +57,35 @@ data class EngineConfig(
     val reconnectAttempts: Int = 3,
     val reconnectBaseDelaySeconds: Int = 2,
     val outgoingBroadcasts: Boolean = true,
+    /** Stealth-blocked virtual addresses (IPv4 as Int); applied live by [Engine.updateConfig]. */
+    val blocked: Map<Int, BlockDirection> = emptyMap(),
     /** Public RSA modulus of the coordination service; overridden only by tests. */
     val modulus: ByteArray = Protocol.SERVER_MODULUS,
 )
+
+/**
+ * Stealth block: which directions of a virtual address's traffic are discarded while the
+ * authenticated channel (keepalives, RTT) stays up. Mirrors `runtime.rs::BlockDirection`.
+ */
+enum class BlockDirection(val wire: String) {
+    BOTH("both"),
+    INCOMING("incoming"),
+    OUTGOING("outgoing"),
+    ;
+
+    val incoming: Boolean get() = this != OUTGOING
+    val outgoing: Boolean get() = this != INCOMING
+
+    companion object {
+        const val MAX_ADDRESSES = 1024
+
+        fun fromWire(value: String): BlockDirection? = entries.firstOrNull { it.wire == value }
+
+        /** Same rule as `runtime.rs::validate_block_address`: only a possible peer unicast VIP. */
+        fun validAddress(ip: Int): Boolean =
+            ip != 0 && ip != -1 && !Ip.isMulticast(ip) && (ip ushr 24) != 127
+    }
+}
 
 /** Durable identity storage. Android uses an encrypted store; tests use memory. */
 interface IdentityStore {

@@ -1,8 +1,8 @@
 name: OpenRadPlugin
 prefix: 'OpenRad Plugin'
-version: '2.1.0'
+version: '2.1.5'
 main: io.github.gringoestrangeiro.openradplugin.OpenRadPlugin
-api-version: '1.21'
+api-version: '1.20.6'
 description: Cliente OpenRad Java e ponte TCP virtual para Paper (alpha).
 author: gringoestrangeiro
 commands:

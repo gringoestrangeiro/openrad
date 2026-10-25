@@ -1,5 +1,7 @@
 package io.github.gringoestrangeiro.openradplugin.crypto;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -40,18 +42,44 @@ public final class Crypto {
     }
 
     public static byte[] auth8(byte[] region) {
+        byte[] out = new byte[8];
+        auth8(region, 0, region.length, out, 0);
+        return out;
+    }
+
+    private static final VarHandle LE64 =
+            MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+
+    /** Writes auth8(region[offset, offset + length)) to out[outOffset, outOffset + 8). */
+    static void auth8(byte[] region, int offset, int length, byte[] out, int outOffset) {
+        if (offset < 0 || length < 0 || offset > region.length - length)
+            throw new ArrayIndexOutOfBoundsException("auth8 bounds");
         long sum = 0;
-        for (int offset = 0; offset < region.length; offset += 8) {
+        int end = offset + length, at = offset;
+        for (; end - at >= 8; at += 8) sum += (long) LE64.get(region, at);
+        if (at < end) {
             long word = 0;
-            for (int i = 0; i < Math.min(8, region.length - offset); i++) {
-                word |= (region[offset + i] & 255L) << (i * 8);
-            }
+            for (int i = 0; at + i < end; i++) word |= (region[at + i] & 255L) << (i * 8);
             sum += word;
         }
-        byte[] digest = Md4.digest(le64(sum));
-        byte[] out = new byte[8];
-        for (int i = 0; i < 8; i++) out[i] = (byte) (digest[i] + digest[i + 8]);
-        return out;
+        int[] state = Md4.digestLong(sum);
+        // digest[i] + digest[i + 8], where the digest is the little-endian state words.
+        for (int i = 0; i < 8; i++) {
+            int shift = (i & 3) * 8;
+            out[outOffset + i] =
+                    (byte) ((state[i >> 2] >>> shift) + (state[2 + (i >> 2)] >>> shift));
+        }
+        Arrays.fill(state, 0);
+    }
+
+    /** Constant-time comparison of auth8(region) with the eight bytes at tag[tagOffset]. */
+    static boolean auth8Matches(
+            byte[] region, int offset, int length, byte[] tag, int tagOffset) {
+        byte[] expected = new byte[8];
+        auth8(region, offset, length, expected, 0);
+        int difference = 0;
+        for (int i = 0; i < 8; i++) difference |= expected[i] ^ tag[tagOffset + i];
+        return difference == 0;
     }
 
     static BigInteger number(byte[] bytes) {

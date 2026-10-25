@@ -8,6 +8,8 @@ on:
       - 'clients/android/app/src/test/resources/fixtures/**'
       - 'clients/android/app/src/main/res/values*/**'
       - 'clients/python/fixtures/**'
+      - 'clients/mod/core/src/**'
+      - 'clients/plugin/src/main/java/**'
       - 'scripts/check-sync.py'
       - '.github/workflows/sync-check.yml'
   pull_request:
@@ -17,6 +19,8 @@ on:
       - 'clients/android/app/src/test/resources/fixtures/**'
       - 'clients/android/app/src/main/res/values*/**'
       - 'clients/python/fixtures/**'
+      - 'clients/mod/core/src/**'
+      - 'clients/plugin/src/main/java/**'
       - 'scripts/check-sync.py'
       - '.github/workflows/sync-check.yml'
 

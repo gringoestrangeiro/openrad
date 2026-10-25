@@ -1,5 +1,6 @@
 package com.openrad.mobile.data
 
+import com.openrad.mobile.engine.BlockDirection
 import com.openrad.mobile.engine.Identity
 import com.openrad.mobile.engine.Ip
 import com.openrad.mobile.engine.hexToBytes
@@ -63,6 +64,7 @@ object Codecs {
         .put("show_diagnostics", s.showDiagnostics)
         .put("force_relay", s.forceRelay)
         .put("outgoing_broadcasts", s.outgoingBroadcasts)
+        .put("blocked", JSONObject().apply { s.blocked.forEach { (ip, d) -> put(Ip.format(ip), d.wire) } })
         .put("scale", s.scale.toDouble())
         .toString()
 
@@ -90,8 +92,22 @@ object Codecs {
             showDiagnostics = o.optBoolean("show_diagnostics", d.showDiagnostics),
             forceRelay = o.optBoolean("force_relay", d.forceRelay),
             outgoingBroadcasts = o.optBoolean("outgoing_broadcasts", d.outgoingBroadcasts),
+            blocked = decodeBlocked(o.optJSONObject("blocked")),
             scale = o.optDouble("scale", d.scale.toDouble()).toFloat(),
         ).normalized()
+    }
+
+    /** Same shape as the daemon's `service.json` "blocked" map; invalid entries are skipped. */
+    private fun decodeBlocked(o: JSONObject?): Map<Int, BlockDirection> {
+        if (o == null) return emptyMap()
+        val out = LinkedHashMap<Int, BlockDirection>()
+        for (key in o.keys()) {
+            if (out.size >= BlockDirection.MAX_ADDRESSES) break
+            val ip = runCatching { Ip.parse(key) }.getOrNull() ?: continue
+            val direction = BlockDirection.fromWire(o.optString(key)) ?: continue
+            if (BlockDirection.validAddress(ip)) out[ip] = direction
+        }
+        return out
     }
 
     private inline fun <reified T : Enum<T>> enumOr(name: String, default: T): T =

@@ -7,29 +7,36 @@ public final class Checksum {
         if (offset < 0 || length < 0 || offset > bytes.length - length) {
             throw new IllegalArgumentException("invalid checksum bounds");
         }
-        long sum = 0;
-        for (int i = offset; i < offset + length; i += 2) {
-            int high = bytes[i] & 0xff;
-            int low = i + 1 < offset + length ? bytes[i + 1] & 0xff : 0;
-            sum += (high << 8) | low;
-        }
-        return finish(sum);
+        return finish(sum16(bytes, offset, length));
     }
 
     public static int tcpChecksum(int sourceIp, int destinationIp, byte[] segment) {
+        return tcpChecksum(sourceIp, destinationIp, segment, 0, segment.length);
+    }
+
+    /** TCP checksum of segment bytes[offset, offset + length) with the IPv4 pseudo-header. */
+    public static int tcpChecksum(
+            int sourceIp, int destinationIp, byte[] bytes, int offset, int length) {
+        if (offset < 0 || length < 0 || offset > bytes.length - length) {
+            throw new IllegalArgumentException("invalid checksum bounds");
+        }
         long sum =
                 ((sourceIp >>> 16) & 0xffff)
                         + (sourceIp & 0xffffL)
                         + ((destinationIp >>> 16) & 0xffff)
                         + (destinationIp & 0xffffL)
                         + 6
-                        + segment.length;
-        for (int i = 0; i < segment.length; i += 2) {
-            int high = segment[i] & 0xff;
-            int low = i + 1 < segment.length ? segment[i + 1] & 0xff : 0;
-            sum += (high << 8) | low;
-        }
-        return finish(sum);
+                        + length;
+        return finish(sum + sum16(bytes, offset, length));
+    }
+
+    /** Sum of big-endian 16-bit words; an odd final byte is padded with zero. */
+    private static long sum16(byte[] bytes, int offset, int length) {
+        long sum = 0;
+        int end = offset + length, i = offset;
+        for (; end - i >= 2; i += 2) sum += ((bytes[i] & 0xff) << 8) | (bytes[i + 1] & 0xff);
+        if (i < end) sum += (bytes[i] & 0xff) << 8;
+        return sum;
     }
 
     private static int finish(long sum) {

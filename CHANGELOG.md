@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.1.5 — in development (not released)
+
+OpenRad 2.1.5 is still in development, so there is no 2.1.5 release yet; the latest
+published release is 2.1.0. Wire formats are unchanged and the Paper plugin stays
+byte-exact on the wire.
+
+- Rust client memory: on Linux/glibc the CLI service and desktop cap allocator arenas at
+  4 (an explicit `MALLOC_ARENA_MAX` still wins), so per-peer threads no longer each retain
+  freed heap pages. The service returns freed pages to the OS every 30 s and after each
+  engine session; the desktop does so every 30 s. The embedded translation catalog is
+  borrowed from the binary instead of copied to the heap (about 260 KB less per process).
+  The release profile uses fat LTO and one codegen unit: `openrad` 9.0 → 6.2 MB,
+  `openrad-desktop` 32.1 → 22.7 MB, resident CLI code about 1.1 MB smaller.
+- Paper plugin CPU/RAM: a table-driven ENET checksum, reused AES ciphers per direction
+  (still re-initialized with the chained IV for every record), static MD4 tables, in-place
+  receive/send buffers in reliable UDP, a single write per framed TCP record, and far fewer
+  copies per frame: about 11 → 4 copies inbound and about 13 → 5 outbound. Virtual TCP
+  connections allocate the 64 KB reorder ring only when segments arrive out of order and
+  free it after FIN. An idle bridge with no connections waits up to 1 s instead of polling
+  at 100 Hz; every input, revocation and close still wakes it at once. New equivalence
+  tests compare the old and new code byte for byte.
+- Stealth block (Rust CLI/desktop and Android): stealth-block a peer's VPN IP for incoming
+  traffic, outgoing traffic, or both. The address behaves as if it did not exist: its frames
+  are ignored and nothing is sent to it, including ARP and broadcasts, while the peer channel
+  stays connected (keepalives, RTT) and unblocking restores traffic without reconnecting.
+  CLI: `openrad block VPN_IP [--incoming|--outgoing]`, `openrad unblock`, `openrad blocked`;
+  desktop and Android: **Settings → Stealth block**. Outgoing blocks are compiled into the
+  forwarding table, so they cost nothing per packet. Incoming blocks cost one flag check per
+  received record and skip parsing, validation and queueing. The list is saved per profile
+  (up to 1024 addresses), applied live, and not counted as dropped traffic.
+- Versions: Rust workspace, Android (`versionCode` 6), Python and the plugin are 2.1.5.
+
 ## 2.1.0 — 2026-10-25
 
 OpenRad 2.1.0 adds the Minecraft **Paper server plugin** (`clients/plugin/`, alpha) to

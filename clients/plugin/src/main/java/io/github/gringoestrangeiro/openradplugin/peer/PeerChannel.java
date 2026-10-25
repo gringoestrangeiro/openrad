@@ -137,11 +137,17 @@ public final class PeerChannel implements AutoCloseable {
     }
 
     public boolean sendFrame(byte[] frame) throws IOException {
-        return send(TunnelCodec.encodeFrame(frame));
+        // Same record as send(encodeFrame(frame)); the envelope is encrypted without a copy.
+        byte[] header = TunnelCodec.frameHeader(frame.length);
+        int plain = header.length + frame.length;
+        int padded = Math.multiplyExact(Math.floorDiv(Math.addExact(plain, 24), 16), 16);
+        if (!stream.hasRoom(padded)) return false;
+        stream.send(cipher.encrypt(header, frame));
+        return true;
     }
 
     public TunnelCodec.Packet receivePacket() throws IOException {
-        return TunnelCodec.decode(receive());
+        return cipher.decrypt(stream.receive(65536), TunnelCodec::decode);
     }
 
     public boolean ready(Duration timeout) throws IOException {
