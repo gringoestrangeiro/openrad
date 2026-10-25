@@ -29,7 +29,7 @@ maintenance work below. Wire formats are unchanged. See the
   `gradlew clean check` pass. Live Radmin interoperability of the plugin with real players,
   native Windows TAP/UAC and on-device Android behavior remain unmeasured.
 
-## 2.0.2 — folded into 2.1.0 (not published separately)
+## 2.0.2 — release candidate, folded into 2.1.0 (no stable 2.0.2 release)
 
 OpenRad 2.0.2 is a maintenance update. Wire formats are unchanged.
 

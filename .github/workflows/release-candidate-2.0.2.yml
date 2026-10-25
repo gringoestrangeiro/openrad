@@ -1,0 +1,116 @@
+name: release-candidate-2.0.2
+
+on:
+  push:
+    branches:
+      - release/2.0.2-candidates
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+          components: rust-docs, rustfmt
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libx11-dev libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Build Linux release binaries
+        run: cargo build --workspace --release --locked
+      - name: Package Linux release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          source_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          rustc = subprocess.check_output(['rustc', '--version'], text=True).strip()
+          Path('dist').mkdir(exist_ok=True)
+          Path('dist/linux-builder.json').write_text(json.dumps({
+              'source_commit': source_commit,
+              'rustc': rustc,
+              'builder_os': 'GitHub Actions ubuntu-22.04',
+              'windows_runtime_tested': False,
+              'linux_runtime_tested': False
+          }, indent=2), encoding='utf-8')
+          PY
+          python3 scripts/package-linux.py \
+            --binaries target/release \
+            --build-info dist/linux-builder.json \
+            --rust-notice "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html" \
+            --build-date 2026-10-24
+          cd dist
+          sha256sum -c openrad-v2.0.2-linux-x86_64.tar.gz.sha256
+      - name: Upload Linux candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.0.2-linux-candidate
+          path: |
+            dist/openrad-v2.0.2-linux-x86_64.tar.gz
+            dist/openrad-v2.0.2-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-x86_64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+          components: rust-docs, rustfmt
+          targets: x86_64-pc-windows-gnu
+      - name: Install Windows cross-build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+      - name: Cross-build Windows release binaries
+        shell: bash
+        run: |
+          export CARGO_PROFILE_RELEASE_STRIP=symbols
+          export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$HOME/.rustup=/rustup --remap-path-prefix=$PWD=/openrad"
+          cargo build --workspace --release --target x86_64-pc-windows-gnu --locked
+      - name: Package portable binaries and offline installer
+        shell: bash
+        run: |
+          python3 scripts/package-windows.py --build-date 2026-10-24
+          docker run --rm --volume "$PWD:/workspace" --volume "$HOME/.cargo:/root/.cargo" --volume "$HOME/.rustup:/root/.rustup" --workdir /workspace debian:trixie /bin/bash -euc '
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git python3 nsis 7zip binutils-mingw-w64
+              version="$(makensis -VERSION)"
+              echo "NSIS version: $version"
+              dpkg --compare-versions "$(makensis -VERSION | tr -d v)" ge 3.11
+              export PATH="/root/.cargo/bin:$PATH"
+              export RUSTUP_TOOLCHAIN=1.95.0
+              git config --global --add safe.directory /workspace
+              python3 scripts/package-windows-installer.py --build-date 2026-10-24
+            '
+          cp dist/OpenRad-Setup.exe dist/OpenRad-Setup-2.0.2.exe
+          (cd dist && sha256sum -c openrad-2.0.2-windows-x86_64-test.zip.sha256)
+          (cd dist && sha256sum -c openrad-2.0.2-windows-x86_64-setup.zip.sha256)
+          (cd dist && sha256sum OpenRad-Setup-2.0.2.exe > OpenRad-Setup-2.0.2.exe.sha256)
+      - name: Upload Windows candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.0.2-windows-candidate
+          path: |
+            dist/OpenRad-Setup-2.0.2.exe
+            dist/OpenRad-Setup-2.0.2.exe.sha256
+            dist/openrad-2.0.2-windows-x86_64-test.zip
+            dist/openrad-2.0.2-windows-x86_64-test.zip.sha256
+            dist/openrad-2.0.2-windows-x86_64-setup.zip
+            dist/openrad-2.0.2-windows-x86_64-setup.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
