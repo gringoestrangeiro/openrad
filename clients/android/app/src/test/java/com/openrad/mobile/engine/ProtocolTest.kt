@@ -109,6 +109,42 @@ class ProtocolTest {
         assertEquals("192.0.2.9", e.host)
     }
 
+    @Test
+    fun freshJoinEventUsesAuthenticatedCoordinatorPresenceWithoutOverridingExplicitOffline() {
+        val members = Membership(1)
+        val networkId = ByteArray(16) { 10 }
+        members.snapshot(Tlv.tlv(0x1316, Tlv.tlv(
+            0x1315, Tlv.text(0x03000306, "Private") +
+                Tlv.tlv(0x0d000309, networkId) + Tlv.u32(0x0100030a, 2),
+        )))
+        fun announce(rid: Long, includeServer: Boolean, state: Long?): ByteArray {
+            val payload = concat(
+                Tlv.u64(0x020001e1, rid),
+                Tlv.tlv(0x0d000309, networkId),
+                Tlv.u32(0x01000305, 0x1a000001 + rid),
+                Tlv.text(0x03000304, "new-device"),
+                Tlv.u32(0x0100030a, 1),
+                if (includeServer) Tlv.text(0x030001c9, "192.0.2.10") else byteArrayOf(),
+                if (state != null) Tlv.u32(0x010003a0, state) else byteArrayOf(),
+            )
+            return Tlv.u32(Protocol.SERVER_OP, 41) + Tlv.tlv(0x131f, Tlv.tlv(0x131e, payload))
+        }
+        members.changes(announce(7, true, null))
+        assertEquals(1L, members.peers[7]?.state)
+        assertTrue(7L in members.eligible())
+        members.changes(announce(8, true, 0))
+        members.changes(announce(9, false, null))
+        assertEquals(0L, members.peers[8]?.state)
+        assertEquals(0L, members.peers[9]?.state)
+        assertFalse(8L in members.eligible())
+        members.changes(
+            Tlv.u32(Protocol.SERVER_OP, 41) + Tlv.tlv(
+                0x131f, Tlv.tlv(0x1366, Tlv.u64(0x020001e1, 7) + Tlv.u32(0x010003a0, 0))
+            )
+        )
+        assertFalse(7L in members.eligible())
+    }
+
     private fun peerRecord(rid: Long, vip: Int, state: Long = 1) = concat(
         Tlv.u64(0x020001e1, rid), Tlv.text(0x03000304, "owned"), Tlv.u32(0x01000305, vip.toLong() and 0xffffffffL),
         Tlv.text(0x030001c9, "192.0.2.1"), Tlv.u32(0x010003a0, state),

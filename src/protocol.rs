@@ -766,7 +766,7 @@ impl Membership {
         let state = optional(&f, 0x010003a0)?
             .map(int32)
             .transpose()?
-            .unwrap_or(0);
+            .unwrap_or_else(|| self.peers.get(&rid).map_or(0, |known| known.state));
         match self.peers.entry(rid) {
             Entry::Occupied(entry) => {
                 let peer = entry.into_mut();
@@ -828,22 +828,32 @@ impl Membership {
                 let name = display_text(field(&f, 0x03000304)?)?;
                 let vip = Ipv4Addr::from(int32(vip)?);
                 let server = optional(&f, 0x030001c9)?.map(text).transpose()?;
+                let explicit_state = optional(&f, 0x010003a0)?.map(int32).transpose()?;
                 self.read_role(&f, rid)?;
                 match self.peers.entry(rid) {
                     Entry::Occupied(entry) => {
                         let peer = entry.into_mut();
                         peer.name = name;
                         peer.vip = vip;
-                        peer.server = server;
+                        if let Some(server) = server {
+                            peer.server = Some(server);
+                        }
+                        if let Some(state) = explicit_state {
+                            peer.state = state;
+                        }
                         peer.network_ids.insert(id);
                     }
                     Entry::Vacant(entry) => {
+                        // A new member announced by the authenticated service is
+                        // live when its coordinator is known, unless the service
+                        // explicitly reports otherwise.
+                        let state = explicit_state.unwrap_or(u32::from(server.is_some()));
                         entry.insert(Peer {
                             rid,
                             name,
                             vip,
                             server,
-                            state: 0,
+                            state,
                             network_ids: BTreeSet::from([id]),
                         });
                     }
@@ -1053,7 +1063,53 @@ mod tests {
         assert_eq!(after.vip, Ipv4Addr::from(0x1a000099));
         assert_eq!(after.network_ids.len(), 2);
         assert_eq!(after.state, 1);
-        assert_eq!(after.server, None);
+        assert_eq!(after.server.as_deref(), Some("192.0.2.1"));
+    }
+
+    #[test]
+    fn live_member_announcement_without_presence_can_connect_but_explicit_offline_cannot() {
+        let mut membership = Membership {
+            own_rid: 1,
+            ..Membership::default()
+        };
+        membership
+            .snapshot(&snapshot_of(vec![network_entry(0xa, "Private", Some(2))]))
+            .unwrap();
+        let announcement = |rid: u64, server: bool, state: Option<u32>| {
+            let mut fields = vec![
+                u64v(0x020001e1, rid),
+                tlv(0x0d000309, &[0xa; 16]),
+                u32v(0x01000305, 0x1a000000 + rid as u32),
+                textv(0x03000304, "new-device").unwrap(),
+                u32v(0x0100030a, 1),
+            ];
+            if server {
+                fields.push(textv(0x030001c9, "192.0.2.10").unwrap());
+            }
+            if let Some(state) = state {
+                fields.push(u32v(0x010003a0, state));
+            }
+            [
+                u32v(SERVER_OP, 41),
+                tlv(0x131f, &tlv(0x131e, &fields.concat())),
+            ]
+            .concat()
+        };
+        membership.changes(&announcement(7, true, None)).unwrap();
+        assert_eq!(membership.peers[&7].state, 1);
+        assert_eq!(membership.eligible(1, &[]).unwrap().len(), 1);
+        membership.changes(&announcement(8, true, Some(0))).unwrap();
+        membership.changes(&announcement(9, false, None)).unwrap();
+        assert_eq!(membership.peers[&8].state, 0);
+        assert_eq!(membership.peers[&9].state, 0);
+        assert_eq!(membership.eligible(1, &[]).unwrap().len(), 1);
+        // Presence events still revoke dial eligibility immediately.
+        let offline = tlv(0x1366, &[u64v(0x020001e1, 7), u32v(0x010003a0, 0)].concat());
+        membership
+            .changes(&[u32v(SERVER_OP, 41), tlv(0x131f, &offline)].concat())
+            .unwrap();
+        assert_eq!(membership.peers[&7].state, 0);
+        assert!(membership.eligible(1, &[]).unwrap().is_empty());
     }
 
     #[test]
