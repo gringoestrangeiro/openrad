@@ -284,7 +284,7 @@ class ControlSessionTest {
                                     }));
             assertArrayEquals(CREDENTIAL, issued.password());
         }
-        assertEquals(3, attempts.get());
+        assertEquals(Provisioner.SAVE_ATTEMPTS, attempts.get());
         assertTrue(Files.exists(intent));
         assertThrows(
                 IOException.class,

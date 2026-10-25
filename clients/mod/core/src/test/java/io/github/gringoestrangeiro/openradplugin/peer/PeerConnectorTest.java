@@ -53,21 +53,20 @@ class PeerConnectorTest {
     }
 
     @Test
-    void coordinatorCandidateAddressesRejectInternalNetworks() throws Exception {
+    void candidateAddressesMatchCurrentCanonicalPeerPolicy() throws Exception {
         InetAddress publicRoute = ip("148.113.190.78");
-        assertEquals(ip("8.8.8.8"),
-                PeerConnector.candidateAddress("8.8.8.8", publicRoute));
-        for (String denied : List.of("10.0.0.1", "192.168.1.7", "172.16.2.3",
-                "169.254.1.1", "100.64.0.1", "127.0.0.1",
-                "198.18.0.1", "192.0.2.1", "224.0.0.1", "255.255.255.255")) {
+        // Authenticated peers can advertise NAT/LAN endpoints; connectivity policy
+        // and peer authentication apply independently of this address filter.
+        for (String allowed : List.of("8.8.8.8", "10.0.0.1", "10.3.4.5",
+                "169.254.1.2", "100.64.0.1", "192.168.1.7")) {
+            assertEquals(ip(allowed),
+                    PeerConnector.candidateAddress(allowed, publicRoute), allowed);
+        }
+        for (String denied : List.of("127.0.0.1", "224.0.0.1",
+                "255.255.255.255", "0.1.2.3", "fe80::1")) {
             assertThrows(IllegalArgumentException.class,
                     () -> PeerConnector.candidateAddress(denied, publicRoute), denied);
         }
-        InetAddress lan = ip("192.168.1.10");
-        assertEquals(ip("192.168.1.20"),
-                PeerConnector.candidateAddress("192.168.1.20", lan));
-        assertThrows(IllegalArgumentException.class,
-                () -> PeerConnector.candidateAddress("192.168.2.20", lan));
         assertEquals(ip("127.0.0.1"),
                 PeerConnector.candidateAddress("127.0.0.1", ip("127.0.0.1")));
     }
