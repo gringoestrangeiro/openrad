@@ -13,6 +13,8 @@ import java.util.function.LongSupplier;
 final class LanServerRegistry {
     static final long TTL_MILLIS = 10_000;
     static final int MAX_SERVERS = 256;
+    /** One authenticated member may not crowd every other server out of the list. */
+    static final int MAX_SERVERS_PER_PEER = 8;
     private static final byte[] MULTICAST_MAC = {1, 0, 0x5e, 0, 2, 0x3c};
     private final LongSupplier clock;
     private final LongSupplier monotonic;
@@ -57,7 +59,14 @@ final class LanServerRegistry {
             expire(receivedNanos);
             String address = authenticatedVip.getHostAddress();
             String key = address + ":" + advertisement.port();
-            if (!servers.containsKey(key) && servers.size() >= MAX_SERVERS) return false;
+            if (!servers.containsKey(key)) {
+                List<String> own = servers.entrySet().stream()
+                        .filter(entry -> entry.getValue().server().address().equals(address))
+                        .sorted(Comparator.comparingLong(entry -> entry.getValue().receivedNanos()))
+                        .map(Map.Entry::getKey).toList();
+                if (own.size() >= MAX_SERVERS_PER_PEER) servers.remove(own.getFirst());
+                else if (servers.size() >= MAX_SERVERS) return false;
+            }
             servers.put(key, new Entry(new ClientVpnRuntime.LanServer(
                     advertisement.motd(), address, advertisement.port(), now), receivedNanos));
             return true;

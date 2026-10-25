@@ -66,15 +66,15 @@ public final class OpenRadAdvancedScreen extends Screen {
     }
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
-        graphics.centeredText(font, title, width / 2, 10, 0xFFFFFF);
+        graphics.centeredText(font, title, width / 2, 10, 0xFFFFFFFF);
         for (var item : List.of(new Object[]{peers, "openrad.menu.max_peers"}, new Object[]{connections, "openrad.menu.max_connections"},
                 new Object[]{timeout, "openrad.menu.timeout"}, new Object[]{maxNetworks, "openrad.menu.max_networks"},
                 new Object[]{names, "openrad.menu.exact_networks"}, new Object[]{selectors, "openrad.menu.selectors_technical"})) {
             EditBox box = (EditBox) item[0];
             graphics.text(font, font.plainSubstrByWidth(Component.translatable((String) item[1]).getString(), box.getWidth()),
-                    box.getX(), box.getY() - 11, 0xD2E6E1);
+                    box.getX(), box.getY() - 11, 0xFFD2E6E1);
         }
-        if (invalid) graphics.centeredText(font, OpenRadI18n.tr("openrad.menu.config_error"), width / 2, height - 42, 0xFF8585);
+        if (invalid) graphics.centeredText(font, OpenRadI18n.tr("openrad.menu.config_error"), width / 2, height - 42, 0xFFFF8585);
     }
     @Override public void onClose() { minecraft.setScreenAndShow(parent); }
     @Override public boolean isPauseScreen() { return false; }

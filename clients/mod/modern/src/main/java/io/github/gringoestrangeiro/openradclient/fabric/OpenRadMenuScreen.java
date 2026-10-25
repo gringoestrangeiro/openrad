@@ -82,17 +82,17 @@ public final class OpenRadMenuScreen extends Screen {
     @Override public void tick() { updateButtons(); }
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
-        graphics.centeredText(font, title, width / 2, 12, 0xFFFFFF);
+        graphics.centeredText(font, title, width / 2, 12, 0xFFFFFFFF);
         var status = controller.status();
         Component phase = OpenRadI18n.tr("openrad.phase." + status.phase().toLowerCase(Locale.ROOT));
-        graphics.centeredText(font, OpenRadI18n.tr("openrad.menu.status", phase), width / 2, 32, 0xD2E6E1);
+        graphics.centeredText(font, OpenRadI18n.tr("openrad.menu.status", phase), width / 2, 32, 0xFFD2E6E1);
         graphics.centeredText(font, OpenRadI18n.tr("openrad.menu.summary",
-                status.vip().isBlank() ? "—" : status.vip(), status.networks().size(), status.peers()), width / 2, 46, 0xA5B8B3);
+                status.vip().isBlank() ? "—" : status.vip(), status.networks().size(), status.peers()), width / 2, 46, 0xFFA5B8B3);
         String feedback = controller.messageKey();
         if (feedback.isBlank() && draft.selectors.isEmpty() && draft.networks.isEmpty()) feedback = "openrad.menu.no_networks";
-        if (!feedback.isBlank()) graphics.centeredText(font, Component.translatable(feedback), width / 2, height - 44, 0xFFD37F);
+        if (!feedback.isBlank()) graphics.centeredText(font, Component.translatable(feedback), width / 2, height - 44, 0xFFFFD37F);
         else if (controller.active()) graphics.centeredText(font,
-                font.plainSubstrByWidth(OpenRadI18n.tr("openrad.menu.reconnect_note").getString(), width - 24), width / 2, height - 44, 0xA5B8B3);
+                font.plainSubstrByWidth(OpenRadI18n.tr("openrad.menu.reconnect_note").getString(), width - 24), width / 2, height - 44, 0xFFA5B8B3);
     }
     @Override public void onClose() { minecraft.setScreenAndShow(parent); }
     @Override public boolean isPauseScreen() { return false; }

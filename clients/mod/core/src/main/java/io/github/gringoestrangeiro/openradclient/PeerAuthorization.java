@@ -32,4 +32,19 @@ final class PeerAuthorization {
         result.values().removeIf(grant -> ambiguous.contains(grant.peer().vip()));
         return Map.copyOf(result);
     }
+
+    /**
+     * Same rule as the plugin's VpnRuntime.stillBound: the identity keeps its address, server and
+     * an online state, and every network it was admitted through. A rename, a 1/5 presence
+     * refresh or an additional shared network must not disconnect Minecraft players.
+     */
+    static boolean stillBound(Grant bound, Grant current) {
+        if (bound == null || current == null) return false;
+        Membership.Peer was = bound.peer(), now = current.peer();
+        return now.rid() == was.rid()
+                && now.vip().equals(was.vip())
+                && Objects.equals(now.server(), was.server())
+                && (now.state() == 1 || now.state() == 5)
+                && current.networkIds().containsAll(bound.networkIds());
+    }
 }

@@ -47,9 +47,9 @@ final class OpenRadNetworkSelection {
     }
 
     void language(String value) {
+        // Saved or catalog groups outside the built-in list are valid; they only resolve
+        // against the authenticated catalog.
         String clean = MinecraftNetworks.validateSelector(value);
-        if (!MinecraftNetworks.knownLanguageGroups().contains(clean) && !clean.equals("other"))
-            throw new IllegalArgumentException("unknown language group");
         language = clean;
         mode = Mode.LANGUAGE;
         selectors.clear();

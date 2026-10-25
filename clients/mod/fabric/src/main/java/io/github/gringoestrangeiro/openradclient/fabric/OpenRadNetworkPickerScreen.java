@@ -135,18 +135,18 @@ public final class OpenRadNetworkPickerScreen extends Screen {
 
     @Override public void render(GuiGraphics graphics, int mx, int my, float dt) {
         super.render(graphics, mx, my, dt);
-        graphics.drawCenteredString(font, title, width / 2, 9, 0xFFFFFF);
+        graphics.drawCenteredString(font, title, width / 2, 9, 0xFFFFFFFF);
         graphics.drawCenteredString(font,
                 OpenRadI18n.tr(languages ? "openrad.network.pick.language"
-                        : "openrad.network.pick.specific"), width / 2, 25, 0xC2D6DB);
+                        : "openrad.network.pick.specific"), width / 2, 25, 0xFFC2D6DB);
         if (!languages && items.isEmpty()) {
             graphics.drawCenteredString(font, font.plainSubstrByWidth(
                     OpenRadI18n.tr("openrad.network.catalog.none").getString(), width - 24),
-                    width / 2, 75, 0xFFCF8A);
+                    width / 2, 75, 0xFFFFCF8A);
         }
         graphics.drawCenteredString(font, OpenRadI18n.tr("openrad.network.pagination",
                 page + 1, Math.max(1, (items.size() + rows() - 1) / rows())),
-                width / 2, height - 47, 0xB5D6D0);
+                width / 2, height - 47, 0xFFB5D6D0);
     }
 
     @Override public void onClose() { goBack(); }

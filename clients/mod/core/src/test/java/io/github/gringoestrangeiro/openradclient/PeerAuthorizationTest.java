@@ -56,4 +56,20 @@ class PeerAuthorizationTest {
                 peer(300, 0x1a000002, 1), member(200, 1, 1), member(300, 1, 1));
         assertTrue(PeerAuthorization.select(duplicate, Set.of("Selected")).isEmpty());
     }
+
+    @Test void presenceRenameAndNewSharedNetworksKeepTheChannelBound() {
+        Membership before = membership(network(1, "Selected", 1), network(2, "Also", 1),
+                peer(200, 0x1a000002, 1), member(200, 1, 1));
+        var bound = PeerAuthorization.select(before, Set.of("Selected", "Also")).get(200L);
+        Membership after = membership(network(1, "Selected", 1), network(2, "Also", 1),
+                peer(200, 0x1a000002, 5), member(200, 1, 1), member(200, 2, 1));
+        var current = PeerAuthorization.select(after, Set.of("Selected", "Also")).get(200L);
+        assertNotEquals(bound, current);
+        assertTrue(PeerAuthorization.stillBound(bound, current), "1/5 presence and an extra network");
+        assertFalse(PeerAuthorization.stillBound(current, bound), "losing an admitted network revokes");
+        Membership moved = membership(network(1, "Selected", 1), peer(200, 0x1a000003, 1), member(200, 1, 1));
+        assertFalse(PeerAuthorization.stillBound(bound,
+                PeerAuthorization.select(moved, Set.of("Selected")).get(200L)), "a new VIP revokes");
+        assertFalse(PeerAuthorization.stillBound(bound, null));
+    }
 }

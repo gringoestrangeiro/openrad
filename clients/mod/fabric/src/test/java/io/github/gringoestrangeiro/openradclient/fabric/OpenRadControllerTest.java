@@ -41,7 +41,8 @@ class OpenRadControllerTest {
             controller.initialize();
             idle(controller);
             var target = new InetSocketAddress(InetAddress.getByAddress(new byte[]{26, 4, 5, 6}), 25565);
-            var pending = controller.route(target);
+            assertSame(target, controller.route(target), "offline: 26.x keeps the normal path");
+            var pending = controller.bridgeRoute(target);
             assertTrue(controller.save(controller.config()));
             idle(controller);
             try (Socket socket = new Socket()) {
@@ -49,7 +50,7 @@ class OpenRadControllerTest {
                 socket.setSoTimeout(1_000);
                 assertEquals(-1, socket.getInputStream().read());
             }
-            var closing = controller.route(target);
+            var closing = controller.bridgeRoute(target);
             assertTrue(controller.save(new ClientConfig(false, List.of(), 128, 8, 20, List.of("all"), 256)));
             idle(controller);
             assertThrows(IOException.class, () -> {

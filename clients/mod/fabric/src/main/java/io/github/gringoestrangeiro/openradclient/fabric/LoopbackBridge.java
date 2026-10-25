@@ -34,6 +34,8 @@ public final class LoopbackBridge implements AutoCloseable {
         try { LOOPBACK = InetAddress.getByAddress(new byte[]{127, 0, 0, 1}); }
         catch (IOException impossible) { throw new ExceptionInInitializerError(impossible); }
     }
+    /** Port 0 cannot accept connections: a connect attempt fails immediately, on loopback only. */
+    public static final InetSocketAddress UNREACHABLE = new InetSocketAddress(LOOPBACK, 0);
     private final TunnelOpener opener;
     private final Semaphore capacity;
     private final Set<Lease> leases = ConcurrentHashMap.newKeySet();

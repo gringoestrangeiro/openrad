@@ -10,7 +10,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Locale files load without executing Minecraft; Minecraft-native fallback covers other locales. */
+/** Locale files load without executing Minecraft; Minecraft shows en_us for any missing key. */
 class OpenRadLanguageResourcesTest {
     private JsonObject load(String locale) throws Exception {
         String resource = "assets/openrad-client/lang/" + locale + ".json";
@@ -45,5 +45,13 @@ class OpenRadLanguageResourcesTest {
                 assertFalse(actual.isBlank(), language + ": " + key);
             }
         }
+    }
+
+    @Test void everyLocaleKeyExistsInEnglish() throws Exception {
+        JsonObject base = load("en_us");
+        for (String language : Set.of("pt_br", "ja_jp", "de_de", "fr_fr", "es_es", "it_it", "ko_kr",
+                "pl_pl", "ru_ru", "tr_tr", "uk_ua", "ar_sa", "zh_cn"))
+            for (String key : load(language).keySet())
+                assertTrue(base.has(key), language + ": " + key);
     }
 }

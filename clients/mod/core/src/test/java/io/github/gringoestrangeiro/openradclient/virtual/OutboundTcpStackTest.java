@@ -253,6 +253,44 @@ class OutboundTcpStackTest {
         }
     }
 
+    @Test void passiveCloseReleasesTheTupleOnceOurFinIsAcknowledged() throws Exception {
+        try (Harness h = new Harness()) {
+            h.connected(65535, 1460);
+            h.inject(h.remoteSequence, h.localSequence, ACK | FIN, 65535, EMPTY, EMPTY);
+            h.remoteSequence++;
+            assertEquals(-1, h.connection.input().read());
+            h.connection.shutdownOutput();
+            assertEquals(ACK | FIN, h.take().getLast().flags());
+            h.inject(h.remoteSequence, ++h.localSequence, ACK, 65535, EMPTY, EMPTY);
+            assertEquals(0, h.stack.connectionCount(), "LAST-ACK needs no TIME_WAIT");
+        }
+    }
+
+    @Test void timeWaitKeepsItsPortButNotAConnectionSlot() throws Exception {
+        try (Harness h = new Harness()) {
+            h.connected(65535, 1460);
+            h.connection.shutdownOutput();
+            assertEquals(ACK | FIN, h.take().getLast().flags());
+            h.inject(h.remoteSequence, ++h.localSequence, ACK | FIN, 65535, EMPTY, EMPTY);
+            h.remoteSequence++;
+            assertEquals(1, h.stack.connectionCount(), "the active closer keeps TIME_WAIT");
+            h.take();
+            int closedPort = h.syn.sourcePort();
+            h.start(); // maxConnections is 1: a closed status ping must not block the next join
+            assertNotEquals(closedPort, h.syn.sourcePort());
+            assertEquals(2, h.stack.connectionCount());
+        }
+    }
+
+    @Test void flushReturnsWithoutWaitingForAcknowledgement() throws Exception {
+        try (Harness h = new Harness()) {
+            h.connected(65535, 1460);
+            h.connection.output().write(new byte[] {1, 2, 3});
+            assertTimeoutPreemptively(Duration.ofSeconds(1), () -> h.connection.output().flush());
+            assertArrayEquals(new byte[] {1, 2, 3}, h.take().getFirst().payload());
+        }
+    }
+
     @Test void neverAcceptsPhysicalOrInvalidDestinations() throws Exception {
         try (Harness h = new Harness()) {
             for (String value : List.of("127.0.0.1", "192.168.0.1", "1.1.1.1", "26.0.0.0", "26.255.255.255"))

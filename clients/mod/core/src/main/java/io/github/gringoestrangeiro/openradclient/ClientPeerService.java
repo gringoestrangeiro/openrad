@@ -59,7 +59,7 @@ final class ClientPeerService implements AutoCloseable {
         authorized = next;
         attempts.keySet().retainAll(next.keySet());
         for (PeerWorker worker : List.copyOf(workers.values())) {
-            if (!Objects.equals(next.get(worker.grant.peer().rid()), worker.grant)) {
+            if (!PeerAuthorization.stillBound(worker.grant, next.get(worker.grant.peer().rid()))) {
                 if (workers.remove(worker.grant.peer().rid(), worker)) {
                     worker.close();
                     incoming.finish(worker.grant.peer().rid());
@@ -100,14 +100,25 @@ final class ClientPeerService implements AutoCloseable {
             }
         }
         int connecting = (int) workers.values().stream().filter(w -> w.channel == null).count();
-        int slots = Math.max(0, Math.min(Math.min(8, maxPeers) - connecting, maxPeers - workers.size()));
+        int free = Math.max(0, maxPeers - workers.size());
         long now = System.nanoTime();
-        List<Long> candidates = next.keySet().stream().filter(rid -> !workers.containsKey(rid))
+        // A destination the player is waiting for skips failure backoff (at most one attempt per
+        // second) and the background negotiation cap: otherwise a join times out behind
+        // discovery-only peers. Requests are bounded by the bridge's connection limit and free
+        // capacity was made above by eviction.
+        List<Long> wanted = next.keySet().stream()
+                .filter(rid -> !workers.containsKey(rid) && requested.containsKey(rid))
+                .filter(rid -> now - attempts.getOrDefault(rid, new Attempt(0, 0, 0)).lastStarted()
+                        >= TimeUnit.SECONDS.toNanos(1))
+                .sorted(Long::compareUnsigned).limit(free).toList();
+        int slots = Math.max(0, Math.min(Math.min(8, maxPeers) - connecting, free - wanted.size()));
+        List<Long> candidates = new ArrayList<>(wanted);
+        next.keySet().stream().filter(rid -> !workers.containsKey(rid) && !requested.containsKey(rid))
                 .filter(rid -> offers.contains(rid) || now >= attempts.getOrDefault(rid, new Attempt(0, 0, 0)).retryAt())
-                .sorted(Comparator.<Long>comparingInt(rid -> requested.containsKey(rid) ? 0 : offers.contains(rid) ? 1 : 2)
+                .sorted(Comparator.<Long>comparingInt(rid -> offers.contains(rid) ? 0 : 1)
                         .thenComparingLong(rid -> attempts.getOrDefault(rid, new Attempt(0, 0, 0)).lastStarted())
                         .thenComparing(Long::compareUnsigned))
-                .limit(slots).toList();
+                .limit(slots).forEach(candidates::add);
         for (long rid : candidates) {
             AsyncResourceCloser.Lease cleanup = resourceCloser.reserve();
             if (cleanup == null) break;
@@ -144,7 +155,7 @@ final class ClientPeerService implements AutoCloseable {
                 requested.merge(rid, 1, Integer::sum);
                 while (true) {
                     if (closed.get()) throw new IOException("OpenRad session closed");
-                    if (!Objects.equals(authorized.get(rid), grant)) throw new IOException("OpenRad peer authorization revoked");
+                    if (!PeerAuthorization.stillBound(grant, authorized.get(rid))) throw new IOException("OpenRad peer authorization revoked");
                     PeerWorker worker = workers.get(rid);
                     PeerChannel candidate = worker == null ? null : worker.channel;
                     if (candidate != null) {
@@ -166,7 +177,7 @@ final class ClientPeerService implements AutoCloseable {
             // Revocation may close the old tuples just before connect creates a new one. Bind
             // application admission to the same authenticated channel, even if a VIP/MAC is reused.
             PeerWorker current = workers.get(rid);
-            if (closed.get() || !Objects.equals(authorized.get(rid), grant)
+            if (closed.get() || !PeerAuthorization.stillBound(grant, authorized.get(rid))
                     || current == null || current.channel != selectedChannel) {
                 connection.close();
                 throw new IOException("OpenRad peer authorization or channel changed during TCP admission");
@@ -216,7 +227,7 @@ final class ClientPeerService implements AutoCloseable {
         }
         synchronized boolean offer(byte[] frame) { return !stopped && frames.offer(frame.clone()); }
         synchronized boolean stopped() { return stopped; }
-        boolean authorized() { return Objects.equals(authorized.get(grant.peer().rid()), grant); }
+        boolean authorized() { return PeerAuthorization.stillBound(grant, authorized.get(grant.peer().rid())); }
 
         @Override public void run() {
             long rid = grant.peer().rid();

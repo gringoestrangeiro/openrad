@@ -46,6 +46,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private final Consumer<String> logger;
     private final AtomicBoolean stopped = new AtomicBoolean();
     private final AtomicBoolean shutdown = new AtomicBoolean();
+    /** Set while Provisioner may hold registration.pending; disconnect must not tear it down. */
+    private final AtomicBoolean provisioning = new AtomicBoolean();
     private final AtomicReference<ControlSession> active = new AtomicReference<>();
     private volatile Snapshot state = new Snapshot("OFFLINE", "", List.of(), 0, "");
     private volatile Thread thread;
@@ -78,7 +80,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
 
     private void own(ControlSession session) {
         active.set(session);
-        if (stopped.get()) {
+        if (stopped.get() && !provisioning.get()) {
             active.compareAndSet(session, null);
             try { session.close(); } catch (IOException ignored) { }
         }
@@ -133,9 +135,25 @@ public final class ClientVpnRuntime implements AutoCloseable {
         while (!stopped.get()) {
             try {
                 Files.createDirectories(dataDirectory);
-                try (Identity identity = Provisioner.loadOrRegister(
-                        dataDirectory, "OpenRad Minecraft", ServiceConfig.BOOTSTRAP,
-                        ServiceConfig.PORT, this::own);
+                // Closing or interrupting a registration after registration.pending is written
+                // would discard an issued identity and block this profile for good. Disconnect
+                // only flags it; the worker stops once the bounded registration has finished.
+                Identity provisioned;
+                provisioning.set(true);
+                try {
+                    if (stopped.get()) break;
+                    provisioned = Provisioner.loadOrRegister(
+                            dataDirectory, "OpenRad Minecraft", ServiceConfig.BOOTSTRAP,
+                            ServiceConfig.PORT, this::own);
+                } finally {
+                    provisioning.set(false);
+                    active.set(null);
+                }
+                if (stopped.get()) {
+                    provisioned.close();
+                    break;
+                }
+                try (Identity identity = provisioned;
                      Attachment connection = Attachment.connect(
                         identity, ServiceConfig.PORT, identity.nodeName(), this::own)) {
                     own(connection.session());
@@ -340,6 +358,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
         Thread running = thread;
         if (running == null) return;
         stopped.set(true);
+        state = new Snapshot("STOPPED", "", List.of(), 0, "");
+        if (provisioning.get()) return;
         ClientPeerService current = peers;
         if (current != null) current.close();
         ControlSession session = active.getAndSet(null);
@@ -347,7 +367,6 @@ public final class ClientVpnRuntime implements AutoCloseable {
             try { session.close(); } catch (IOException ignored) { }
         }
         running.interrupt();
-        state = new Snapshot("STOPPED", "", List.of(), 0, "");
     }
 
     @Override

@@ -16,7 +16,6 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.network.chat.Component;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Locale;
@@ -27,15 +26,22 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.lit
 /** Fabric UI adapter; disk, runtime handover and network shutdown belong to the controller worker. */
 public final class OpenRadClientMod implements ClientModInitializer {
     private static final Logger LOG = Logger.getLogger("OpenRad Client Mod");
-    private static final LoopbackBridge UNINITIALIZED = new LoopbackBridge((address, port) -> {
-        throw new IOException("OpenRad not initialized");
-    });
     private static volatile OpenRadController controller;
 
     public static OpenRadController controller() { return controller; }
+    /** Without an OpenRad session, 26.x addresses keep the normal path (e.g. official Radmin VPN). */
     public static InetSocketAddress route(InetSocketAddress destination) {
         OpenRadController current = controller;
-        return current == null ? UNINITIALIZED.route(destination) : current.route(destination);
+        return current == null ? destination : current.route(destination);
+    }
+    /**
+     * The legacy ping runs on the render thread, where an exception crashes the game. If the
+     * bridge cannot take the connection, fail fast on a loopback port nothing can accept rather
+     * than leaving the VPN.
+     */
+    public static InetSocketAddress routeLegacyPing(InetSocketAddress destination) {
+        try { return route(destination); }
+        catch (RuntimeException unavailable) { return LoopbackBridge.UNREACHABLE; }
     }
     public static List<ClientVpnRuntime.LanServer> lanServers() {
         OpenRadController current = controller;
@@ -55,10 +61,7 @@ public final class OpenRadClientMod implements ClientModInitializer {
     @Override public void onInitializeClient() {
         controller = new OpenRadController(FabricLoader.getInstance().getConfigDir().resolve("openrad-client"), LOG);
         controller.initialize();
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
-            UNINITIALIZED.close();
-            controller.close();
-        });
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> controller.close());
         ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
             if (!(screen instanceof JoinMultiplayerScreen || screen instanceof TitleScreen || screen instanceof PauseScreen)) return;
             Button button = Button.builder(Component.literal("OpenRad"), clicked -> openMenu(screen))

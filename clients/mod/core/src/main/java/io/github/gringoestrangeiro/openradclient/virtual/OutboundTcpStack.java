@@ -30,7 +30,7 @@ public final class OutboundTcpStack implements AutoCloseable {
     private record Frame(Inet4Address destination, byte[] bytes) {}
     private static final byte[] EMPTY = new byte[0];
     private static final byte[] MSS_OPTION = {2, 4, 5, (byte) 0xb4};
-    private static final int CAPACITY = 65536, WIRE_WINDOW = 65535;
+    private static final int CAPACITY = 65536, WIRE_WINDOW = 65535, MAX_TIME_WAIT = 64;
     private static final long SECOND = 1_000_000_000L;
     private final Inet4Address localVip;
     private final int localIp, maxConnections;
@@ -101,8 +101,17 @@ public final class OutboundTcpStack implements AutoCloseable {
         Connection connection;
         synchronized (admission) {
             if (closed) throw new SocketException("OpenRad TCP stack is closed");
-            if (connections.size() >= maxConnections)
+            // TIME_WAIT tuples only reserve their port: closed server-list pings must not keep
+            // a player from joining. They are bounded separately and the oldest is reused.
+            List<Connection> timeWait = connections.values().stream()
+                    .filter(c -> c.timeWaitUntil != 0).toList();
+            if (connections.size() - timeWait.size() >= maxConnections)
                 throw new SocketException("OpenRad connection capacity reached");
+            if (timeWait.size() >= MAX_TIME_WAIT) {
+                Connection oldest = timeWait.stream()
+                        .min(Comparator.comparingLong(c -> c.timeWaitUntil)).orElseThrow();
+                synchronized (oldest) { oldest.dispose(); }
+            }
             int localPort = allocatePort();
             Key key = new Key(ip(destination), port, localPort);
             connection = new Connection(key, destination, timeout.toNanos());
@@ -325,12 +334,14 @@ public final class OutboundTcpStack implements AutoCloseable {
         private final ArrayDeque<Flight> flights = new ArrayDeque<>();
         private final long initialSequence, createdAt, handshakeTimeout;
         private long sendUna, sendNext, receiveNext, readSequence, remoteSyn;
-        private long windowSequence, windowAck, pendingFin = -1, lastProgress, closeAt, timeWaitUntil;
+        private long windowSequence, windowAck, pendingFin = -1, lastProgress, closeAt;
+        private volatile long timeWaitUntil;
         private long rto = SECOND, lastProbe;
         private int peerWindow, peerMss = 536, bufferedSend, unsentBytes, duplicateAcks;
         private int congestionWindow = 5360, slowStartThreshold = 65535;
         private double smoothedRtt, rttVariance;
         private boolean established, receivedFin, outputClosed, applicationClosed, finSent, finAcked, disposed;
+        private boolean peerClosedFirst;
         private IOException failure;
         private final InputStream input = new TcpInput();
         private final OutputStream output = new TcpOutput();
@@ -483,6 +494,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                     && present.get((int) receiveNext & 65535)) receiveNext++;
             if (pendingFin == receiveNext) {
                 receivedFin = true;
+                peerClosedFirst = !finSent;
                 receiveNext++;
                 if (closeAt == 0) closeAt = clock.getAsLong();
             }
@@ -629,8 +641,11 @@ public final class OutboundTcpStack implements AutoCloseable {
         }
 
         private void maybeTimeWait() {
-            if (receivedFin && finAcked && timeWaitUntil == 0)
-                timeWaitUntil = clock.getAsLong() + 30 * SECOND;
+            if (!receivedFin || !finAcked || timeWaitUntil != 0) return;
+            // Passive close (LAST-ACK acknowledged) ends the connection; only the active closer
+            // keeps the tuple to answer a retransmitted FIN.
+            if (peerClosedFirst) dispose();
+            else timeWaitUntil = clock.getAsLong() + 30 * SECOND;
         }
 
         private void fail(IOException error, boolean reset) {
@@ -717,13 +732,11 @@ public final class OutboundTcpStack implements AutoCloseable {
                 checkOpen();
                 if (outputClosed) throw new SocketException("OpenRad TCP output is closed");
             }
+            /** Like a socket: written bytes are already queued for sending; never waits for ACKs. */
             @Override public void flush() throws IOException {
                 synchronized (Connection.this) {
                     checkWritable();
-                    while (bufferedSend > 0) {
-                        await(SECOND);
-                        checkWritable();
-                    }
+                    flushPending();
                 }
             }
             @Override public void close() throws IOException { shutdownOutput(); }

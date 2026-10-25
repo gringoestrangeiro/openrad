@@ -69,12 +69,32 @@ class LanServerRegistryTest {
 
     @Test void authenticatedPeerCannotAllocateUnboundedLanEntries() {
         LanServerRegistry registry = new LanServerRegistry();
-        var vip = ipv4(0x1a000002);
-        for (int port = 1; port <= LanServerRegistry.MAX_SERVERS; port++)
+        int perPeer = LanServerRegistry.MAX_SERVERS_PER_PEER;
+        for (int index = 0; index < LanServerRegistry.MAX_SERVERS; index++) {
+            var vip = ipv4(0x1a000002 + index / perPeer);
+            int port = 1 + index % perPeer;
             assertTrue(registry.accept(vip, TunnelCodec.mac(vip), new LanAdvertisement("Server", port).frame(vip, port, port)));
-        assertFalse(registry.accept(vip, TunnelCodec.mac(vip), new LanAdvertisement("Overflow", 999).frame(vip, 999, 1)));
+        }
+        var late = ipv4(0x1a000002 + LanServerRegistry.MAX_SERVERS / perPeer);
+        assertFalse(registry.accept(late, TunnelCodec.mac(late), new LanAdvertisement("Overflow", 999).frame(late, 999, 1)));
         assertEquals(LanServerRegistry.MAX_SERVERS, registry.snapshot().size());
         registry.clear();
         assertTrue(registry.snapshot().isEmpty());
+    }
+
+    @Test void onePeerCannotFillTheServerList() {
+        AtomicLong clock = new AtomicLong(1000);
+        LanServerRegistry registry = new LanServerRegistry(clock::get);
+        var flooding = ipv4(0x1a000002);
+        for (int port = 1; port <= 300; port++) {
+            clock.incrementAndGet();
+            assertTrue(registry.accept(flooding, TunnelCodec.mac(flooding),
+                    new LanAdvertisement("Spam", 25565).frame(flooding, 20000 + port, port)));
+        }
+        assertEquals(LanServerRegistry.MAX_SERVERS_PER_PEER, registry.snapshot().size());
+        assertEquals(20300, registry.snapshot().getLast().port(), "the newest advertisement is kept");
+        var honest = ipv4(0x1a000003);
+        assertTrue(registry.accept(honest, TunnelCodec.mac(honest),
+                new LanAdvertisement("Real", 25565).frame(honest, 25565, 1)));
     }
 }

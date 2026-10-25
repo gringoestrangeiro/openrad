@@ -81,9 +81,9 @@ public final class OpenRadNetworkScreen extends Screen {
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int x, int y, float partialTick) {
         super.extractRenderState(graphics, x, y, partialTick);
-        graphics.centeredText(font, title, width / 2, 10, 0xffffff);
+        graphics.centeredText(font, title, width / 2, 10, 0xFFffffff);
         graphics.centeredText(font, OpenRadI18n.tr("openrad.network.subtitle"),
-                width / 2, 28, 0xC2D6DB);
+                width / 2, 28, 0xFFC2D6DB);
         String hint = switch (choice.mode()) {
             case NONE -> "openrad.network.summary.none";
             case ALL -> "openrad.network.summary.all";
@@ -98,7 +98,7 @@ public final class OpenRadNetworkScreen extends Screen {
         };
         if (!warning.isEmpty()) detail = OpenRadI18n.tr(warning);
         graphics.centeredText(font, font.plainSubstrByWidth(detail.getString(),
-                width - 24), width / 2, height - 43, 0xFFCF8A);
+                width - 24), width / 2, height - 43, 0xFFFFCF8A);
     }
 
     @Override public void onClose() { minecraft.setScreenAndShow(parent); }

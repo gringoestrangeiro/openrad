@@ -6,6 +6,8 @@ import io.github.gringoestrangeiro.openradclient.ClientVpnRuntime;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -29,6 +31,7 @@ public final class OpenRadController implements AutoCloseable {
     private volatile String message = "openrad.menu.loading";
     private volatile ClientVpnRuntime.CatalogSnapshot previousCatalog;
     private volatile boolean initialized;
+    private volatile boolean invalidConfig;
 
     public OpenRadController(Path directory, Logger logger) {
         this.directory = directory;
@@ -38,7 +41,9 @@ public final class OpenRadController implements AutoCloseable {
     public void initialize() {
         submit(() -> {
             try {
-                ClientConfig loaded = ClientConfig.load(directory);
+                ClientConfig loaded;
+                try { loaded = ClientConfig.load(directory); }
+                catch (IOException invalid) { invalidConfig = true; throw invalid; }
                 if (closed.get()) return;
                 config = loaded;
                 replaceBridge(loaded);
@@ -76,7 +81,10 @@ public final class OpenRadController implements AutoCloseable {
         ClientVpnRuntime current = runtime;
         return current == null ? List.of() : current.lanServers();
     }
-    public InetSocketAddress route(InetSocketAddress destination) { return bridge.route(destination); }
+    public InetSocketAddress route(InetSocketAddress destination) {
+        return active() ? bridgeRoute(destination) : destination;
+    }
+    InetSocketAddress bridgeRoute(InetSocketAddress destination) { return bridge.route(destination); }
     public boolean active() { return active(status().phase()); }
     public static boolean active(String phase) {
         return !List.of("OFFLINE", "STOPPED", "FAILED").contains(phase);
@@ -114,6 +122,7 @@ public final class OpenRadController implements AutoCloseable {
 
     private void apply(ClientConfig desired) throws IOException, InterruptedException {
         if (desired.equals(config) && runtime != null) return;
+        if (invalidConfig) preserveInvalidConfig();
         desired.save(directory); // A failed write leaves the current working session intact.
         ClientVpnRuntime old = runtime;
         if (old != null) {
@@ -128,6 +137,17 @@ public final class OpenRadController implements AutoCloseable {
         replaceBridge(desired);
         // Never open the same persisted identity until its previous owner has fully stopped.
         runtime = new ClientVpnRuntime(desired, directory.resolve("state"), logger::info);
+    }
+
+    /** Corrupt preferences remain available for repair; the first save never destroys them. */
+    private void preserveInvalidConfig() throws IOException {
+        Path file = directory.resolve("openrad-client.properties");
+        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
+            Path backup = directory.resolve("openrad-client.properties.invalid-" + System.currentTimeMillis());
+            Files.move(file, backup);
+            logger.warning("OpenRad kept the invalid configuration as " + backup.getFileName());
+        }
+        invalidConfig = false;
     }
 
     private void replaceBridge(ClientConfig desired) {
