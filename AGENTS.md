@@ -2,22 +2,30 @@
 
 ## Monorepo map (read this first)
 
-Three clients share one wire format. Work in the client's own directory and
+Four clients share one wire format. Work in the client's own directory and
 read its own guide:
 
-- **Rust (stable, canonical, v2.0.1):** `src/`, `desktop/`, `tests/`,
+- **Rust (stable, canonical, v2.1.0):** `src/`, `desktop/`, `tests/`,
   `locales/`, `docs/`, `scripts/`, `packaging/` — rules below in this file.
 - **Android (beta):** `clients/android/` — read
   [`clients/android/AGENTS.md`](clients/android/AGENTS.md) before touching it.
-- **Python (research, 2.0.1):** `clients/python/` — read
+- **Python (research, 2.1.0):** `clients/python/` — read
   [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
+- **Java Paper plugin (alpha, 2.1.0):** `clients/plugin/` — read
+  [`clients/plugin/README.md`](clients/plugin/README.md) before touching it.
 
 | Area | Command (run in that directory) |
 | --- | --- |
 | Repo root (Rust) | `cargo fmt --all -- --check`, `cargo test --workspace --locked`, `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | `clients/android/` | `./scripts/build.sh`, `./gradlew :app:testDebugUnitTest` |
 | `clients/python/` | `python3 run_tests.py` |
+| `clients/plugin/` | `./gradlew clean check` (JDK 21; Windows: `.\gradlew.bat clean check`) |
 | Repo root (sync) | `python3 scripts/check-sync.py` |
+
+The Paper plugin build produces `clients/plugin/build/libs/OpenRadPlugin.jar`;
+`check` also runs its `verifyJar` metadata/bytecode validation. Protocol
+behavior changes in the Rust client (for example membership presence) must be
+ported to the plugin's Java engine as well, even though it has no fixture mirror.
 
 Sync rule: `tests/fixtures/*.json` and `locales/messages.json` are owned by
 the Rust client. Any wire-format, fixture, or locale change must update the

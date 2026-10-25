@@ -1340,10 +1340,18 @@ class Membership:
             ids.add(nid)
         server = unique(fields, 0x030001c9, required=False)
         state = unique(fields, 0x010003a0, required=False)
+        server = decode_text(server) if server else old.get('server')
+        if state:
+            state = state.u32()
+        elif old:
+            state = old.get('state', 0)
+        else:
+            # A new member announced by the authenticated server is live when it
+            # includes a coordinator; full snapshots without presence stay offline.
+            state = 1 if nid and server else 0
         self.peers[rid] = dict(rid=rid, name=decode_text(unique(fields, 0x03000304)),
             vip=str(IPv4Address(unique(fields, 0x01000305).u32())),
-            server=decode_text(server) if server else old.get('server'),
-            state=state.u32() if state else old.get('state', 0), network_ids=sorted(ids))
+            server=server, state=state, network_ids=sorted(ids))
 
     def snapshot(self, data):
         root = unique(parse_records(data), 0x1316, required=False)

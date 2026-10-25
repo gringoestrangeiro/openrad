@@ -1,0 +1,76 @@
+# OpenRad Plugin - inicio rapido (sem editar este arquivo):
+#   /orb join "Nome da rede" senha   (no console; rede publica: sem senha)
+#   /orb public all-ptbr             (redes publicas Minecraft do catalogo)
+#   /orb status                      (mostra o IP 26.x.x.x para os jogadores)
+# Os comandos acima atualizam este arquivo e aplicam a configuracao.
+bridge:
+  # Enable after adding your networks below. No OS VPN or TAP is used.
+  enabled: false
+  backend-host: "127.0.0.1"
+  # 0 = automatic: the port this Paper server listens on (server.properties server-port).
+  backend-port: 0
+  # Port players use on the VPN IP. 25565 lets them type only the 26.x.x.x address.
+  listen-virtual-port: 25565
+  max-players-through-vpn: 30
+  max-pending-tcp: 60
+  connection-timeout-seconds: 15
+  lan-discovery:
+    # Forward local Minecraft Java advertisements (e.g. LANBroadcaster) through the VPN.
+    # Captures 224.0.2.60:4445 only for backend-port; rewrites to the VPN IP/virtual port.
+    # Requires IPv4 multicast on at least one local interface; no OS VPN is needed.
+    enabled: true
+
+vpn:
+  device-name: "OpenRad Plugin"
+  bootstrap-host: "148.113.190.78"
+  control-port: 17301
+  # Passwords belong in secrets.properties, keyed by the secret reference.
+  # Empty secret means public network. Only configured networks may reach Minecraft.
+  networks: []
+  minecraft-networks:
+    # Discover real public Minecraft networks on attachment; list with /orb minecraft.
+    enabled: true
+    # [] only lists. Examples: [all], [all-ptbr], [ptbr-1, ptbr-2, ptbr-3],
+    # [all-english], [english-2], [all-russian], [all-vietnamese], etc.
+    # All language/number aliases are generated from the current service catalog.
+    # Complete options: /orb minecraft options or minecraft-network-options.yml.
+    select: []
+    max-networks: 256
+  # networks:
+  #   - name: "My private network"
+  #     secret: "minecraft-network"
+  #     allow-rids: []
+  #     deny-rids: []
+  # 0 = attempt every eligible member of selected networks (bounded roster: 4096).
+  # Connections are established gradually, with up to 16 negotiations at once.
+  # A positive value limits simultaneous channels; it does not limit Minecraft players.
+  max-peers: 0
+  # 0 (padrao): nao imprimir os resumos VPN discovery no console.
+  # Defina 1, 5, 10, etc. para receber o resumo periodicamente em minutos.
+  # Estatisticas continuam disponiveis em /orb status.
+  discovery-log-interval-minutes: 0
+  transports:
+    direct-tcp: true
+    direct-udp: true
+    relay: true
+  acl:
+    # Empty allow list permits authenticated configured-network members.
+    # Deny takes precedence. Quote unsigned RID values in YAML.
+    allow-rids: []
+    deny-rids: []
+  reconnect:
+    base-seconds: 3
+    max-seconds: 60
+
+security:
+  # Fail closed if offline-mode users would be exposed to automatic PUBLIC VPN networks.
+  # Minecraft usernames are not verified by Mojang in online-mode=false.
+  # Never enable this override on a public server with privileged names.
+  allow-insecure-offline-public-networks: false
+
+diagnostics:
+  tcp-egress-host: ""
+  tcp-egress-port: 0
+  udp-egress-host: ""
+  udp-egress-port: 0
+  timeout-millis: 2000

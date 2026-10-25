@@ -1,6 +1,39 @@
 # Changelog
 
-## 2.0.2 ? release candidate (not yet a signed official release)
+## 2.1.0 — prepared (not yet published)
+
+OpenRad 2.1.0 adds the Minecraft **Paper server plugin** (`clients/plugin/`, alpha) to
+the monorepo, aligns every client on 2.1.0, and includes the unpublished 2.0.2
+maintenance work below. Wire formats are unchanged. See the
+[release notes](docs/releases/2.1.0.md) and [file inventory](docs/releases/2.1.0-changes.md).
+
+- Paper plugin (Java 21, Paper 1.21.x): an in-process OpenRad client with a virtual TCP stack
+  that lets Radmin VPN players join a Minecraft server at its `26.x.x.x` address without a
+  host VPN, TAP/TUN or native code. New setup commands `/orb join`, `/orb leave`,
+  `/orb public`, `/orb enable|disable` and `/orb help` edit and apply the configuration
+  without touching files; the backend port is detected automatically, and errors name what
+  to fix. Fixes from review: op 44 refusals and malformed offers no longer drop the session,
+  renames/presence refreshes no longer disconnect players, reconnect backoff resets after a
+  healthy session, incoming offers no longer cause coordinator login loops, a refused
+  configured network no longer takes the others down, rosters above 4096 members no longer
+  break every login, unroutable UDP candidates no longer abort direct UDP, and virtual TCP
+  restarts its retransmission timer on new ACKs. See
+  [plugin notes](clients/plugin/docs/changes-2.1.0.md).
+- Membership presence (PR #10): a newly announced member with a coordinator is treated as
+  online unless the service says otherwise, and partial updates keep the known coordinator
+  and presence. The Python client and the Paper plugin now match the Rust and Android
+  behavior.
+- Release tooling (PR #11): GitHub Actions workflows build Linux/Windows release candidates
+  (Windows installer with NSIS 3.11 or newer), an Android debug preview, and a manual Android
+  production-signing job that refuses to publish an APK whose certificate differs from the
+  official 2.0.1 APK. The workflows read the version from the source instead of hardcoding it.
+- Versions: Rust workspace, Android (`versionCode` 5) and Python 2.1.0.
+- Validation: Linux workspace tests, formatting, Linux/Windows Clippy, Windows test
+  compilation, `scripts/check-sync.py`, Android unit tests, Python suites and the plugin
+  `gradlew clean check` pass. Live Radmin interoperability of the plugin with real players,
+  native Windows TAP/UAC and on-device Android behavior remain unmeasured.
+
+## 2.0.2 — release candidate, folded into 2.1.0 (no stable 2.0.2 release)
 
 OpenRad 2.0.2 is a maintenance update. Wire formats are unchanged.
 

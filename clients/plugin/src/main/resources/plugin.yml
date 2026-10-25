@@ -1,0 +1,22 @@
+name: OpenRadPlugin
+prefix: 'OpenRad Plugin'
+version: '2.1.0'
+main: io.github.gringoestrangeiro.openradplugin.OpenRadPlugin
+api-version: '1.21'
+description: Cliente OpenRad Java e ponte TCP virtual para Paper (alpha).
+author: gringoestrangeiro
+commands:
+  orb:
+    description: Administração e diagnóstico do OpenRad Plugin
+    usage: /orb <help|status|join|leave|public|enable|disable|networks|minecraft|peers|reconnect|reload|diagnose>
+    permission: openradplugin.admin
+permissions:
+  openradplugin.admin:
+    description: Administrar o OpenRad Plugin
+    default: op
+
+  openradbridge.admin:
+    description: Alias de compatibilidade para administradores da versao antiga
+    default: false
+    children:
+      openradplugin.admin: true
