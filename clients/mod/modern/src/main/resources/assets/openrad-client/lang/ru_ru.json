@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "Подключиться",
+  "openrad.menu.disconnect": "Отключиться",
+  "openrad.menu.save": "Сохранить",
+  "openrad.menu.saved": "Сохранено; переподключитесь",
+  "openrad.menu.all_networks": "Все сети",
+  "openrad.menu.all_language": "Все: %s",
+  "openrad.menu.auto_connect": "Автоподключение"
+}

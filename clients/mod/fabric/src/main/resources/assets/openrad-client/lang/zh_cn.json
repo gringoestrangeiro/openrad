@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "连接",
+  "openrad.menu.disconnect": "断开连接",
+  "openrad.menu.save": "保存",
+  "openrad.menu.saved": "已保存，请重新连接",
+  "openrad.menu.all_networks": "所有网络",
+  "openrad.menu.all_language": "全部：%s",
+  "openrad.menu.auto_connect": "自动连接"
+}

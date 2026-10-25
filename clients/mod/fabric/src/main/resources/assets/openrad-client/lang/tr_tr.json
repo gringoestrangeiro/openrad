@@ -1,0 +1,9 @@
+{
+  "openrad.menu.connect": "Bağlan",
+  "openrad.menu.disconnect": "Bağlantıyı kes",
+  "openrad.menu.save": "Kaydet",
+  "openrad.menu.saved": "Kaydedildi; yeniden bağlan",
+  "openrad.menu.all_networks": "Tüm ağlar",
+  "openrad.menu.all_language": "Tümü: %s",
+  "openrad.menu.auto_connect": "Otomatik bağlan"
+}

@@ -2,12 +2,14 @@
 """Cross-client sync check for the OpenRad monorepo.
 
 Compares the canonical Rust sources of truth against the mirrored copies
-in clients/android/ and clients/python/:
+in clients/android/, clients/python/ and clients/mod/:
 
 1. Fixtures: tests/fixtures/*.json vs the per-client copies (sha256).
 2. Locales: locales/messages.json coverage vs Android res/values*/strings.xml,
    plus mutual consistency (keys + %N$s placeholders) across the four
    Android locales.
+3. Minecraft mod: every class under clients/mod/core/.../openradplugin/ must
+   be a byte-identical copy of the Paper plugin's class of the same path.
 
 Exit 0 when everything matches, exit 1 on any divergence.
 Run from the repository root:  python3 scripts/check-sync.py
@@ -35,6 +37,7 @@ FIXTURE_GROUPS = [
         [
             "clients/android/app/src/test/resources/fixtures/reference.json",
             "clients/python/fixtures/reference.json",
+            "clients/mod/core/src/test/resources/crypto/reference.json",
         ],
     ),
     (
@@ -42,12 +45,14 @@ FIXTURE_GROUPS = [
         [
             "clients/android/app/src/test/resources/fixtures/network-verifier.json",
             "clients/python/fixtures/network-verifier.json",
+            "clients/mod/core/src/test/resources/crypto/network-verifier.json",
         ],
     ),
     (
         "tests/fixtures/incoming-sh.json",
         [
             "clients/android/app/src/test/resources/fixtures/incoming-sh.json",
+            "clients/mod/core/src/test/resources/crypto/incoming-sh.json",
         ],
     ),
 ]
@@ -165,9 +170,33 @@ def check_locales() -> None:
     )
 
 
+# ---------------------------------------------------------------- mod copies
+
+PLUGIN_JAVA = "clients/plugin/src/main/java/io/github/gringoestrangeiro/openradplugin"
+MOD_PLUGIN_JAVA = "clients/mod/core/src/main/java/io/github/gringoestrangeiro/openradplugin"
+
+
+def check_mod_copies() -> None:
+    print("== minecraft mod copies of plugin classes ==")
+    mod_root = ROOT / MOD_PLUGIN_JAVA
+    if not mod_root.is_dir():
+        warnings.append(f"mod copies not present (skipped): {MOD_PLUGIN_JAVA}")
+        return
+    copies = sorted(mod_root.rglob("*.java"))
+    for copy in copies:
+        rel = copy.relative_to(mod_root)
+        original = ROOT / PLUGIN_JAVA / rel
+        if not original.is_file():
+            errors.append(f"mod class has no plugin original: {MOD_PLUGIN_JAVA}/{rel}")
+        elif sha256(original) != sha256(copy):
+            errors.append(f"mod class diverges from plugin: {MOD_PLUGIN_JAVA}/{rel}")
+    print(f"{MOD_PLUGIN_JAVA}: {len(copies)} classes checked")
+
+
 def main() -> int:
     check_fixtures()
     check_locales()
+    check_mod_copies()
     print()
     for w in warnings:
         print(f"WARNING: {w}")

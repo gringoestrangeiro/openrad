@@ -2,7 +2,7 @@
 
 ## Monorepo map (read this first)
 
-Four clients share one wire format. Work in the client's own directory and
+Five clients share one wire format. Work in the client's own directory and
 read its own guide:
 
 - **Rust (stable, canonical, v2.1.5):** `src/`, `desktop/`, `tests/`,
@@ -13,6 +13,10 @@ read its own guide:
   [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
 - **Java Paper plugin (alpha, 2.1.5):** `clients/plugin/` — read
   [`clients/plugin/README.md`](clients/plugin/README.md) before touching it.
+- **Fabric client mod (alpha, 2.1.5):** `clients/mod/` — read
+  [`clients/mod/README.md`](clients/mod/README.md) before touching it. 1.21.x
+  builds from `clients/mod/` (JDK 21); 26.x builds from `clients/mod/modern/`
+  (JDK 25). One JAR per Minecraft version.
 
 | Area | Command (run in that directory) |
 | --- | --- |
@@ -20,12 +24,17 @@ read its own guide:
 | `clients/android/` | `./scripts/build.sh`, `./gradlew :app:testDebugUnitTest` |
 | `clients/python/` | `python3 run_tests.py` |
 | `clients/plugin/` | `./gradlew clean check` (JDK 21; Windows: `.\gradlew.bat clean check`) |
+| `clients/mod/` | `./gradlew -PopenradMinecraftVersion=1.21.1 :core:test :fabric:build :fabric:test` (JDK 21) |
+| `clients/mod/modern/` | `./gradlew -PopenradMinecraftVersion=26.3 build` (JDK 25) |
 | Repo root (sync) | `python3 scripts/check-sync.py` |
 
 The Paper plugin build produces `clients/plugin/build/libs/OpenRadPlugin.jar`;
 `check` also runs its `verifyJar` metadata/bytecode validation. Protocol
 behavior changes in the Rust client (for example membership presence) must be
 ported to the plugin's Java engine as well, even though it has no fixture mirror.
+The mod's `clients/mod/core/src/main/java/.../openradplugin/` classes are
+byte-identical copies of the plugin's; change the plugin and copy the file
+(`scripts/check-sync.py` fails on any divergence).
 
 Sync rule: `tests/fixtures/*.json` and `locales/messages.json` are owned by
 the Rust client. Any wire-format, fixture, or locale change must update the

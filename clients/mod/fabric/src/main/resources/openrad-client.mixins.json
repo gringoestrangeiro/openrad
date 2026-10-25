@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "io.github.gringoestrangeiro.openradclient.fabric.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["${connectionMixin}", "LegacyStatusPingerMixin", "MultiplayerScreenMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

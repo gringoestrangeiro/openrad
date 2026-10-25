@@ -1,0 +1,15 @@
+.gradle/
+**/build/
+**/run/
+**/run-smoke/
+.idea/
+*.iml
+*.log
+config/
+identity.json
+registration.pending
+
+release/
+**/run-preview/
+
+**/run-preview-v022/
