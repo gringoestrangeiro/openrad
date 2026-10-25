@@ -158,9 +158,20 @@ class LoopbackBridgeTest {
             var unused = bridge.route(vpn());
             assertThrows(IllegalStateException.class, () -> bridge.route(vpn()));
             bridge.closeActive();
-            assertThrows(IOException.class, () -> {
-                try (Socket socket = new Socket()) { socket.connect(unused, 500); }
-            });
+            // A completed TCP handshake may briefly remain queued after a listener
+            // closes on Linux; verify the abandoned port stops accepting within a
+            // bounded deadline instead of depending on an immediate refusal.
+            boolean refused = false;
+            for (int attempt = 0; attempt < 20; attempt++) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(unused, 150);
+                } catch (IOException closedPort) {
+                    refused = true;
+                    break;
+                }
+                Thread.sleep(25);
+            }
+            assertTrue(refused, "cancelled local listener must stop accepting clients");
             assertTrue(bridge.route(vpn()).getAddress().isLoopbackAddress());
         }
     }
