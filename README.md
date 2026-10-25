@@ -12,7 +12,7 @@ development has not started.
 
 ## Clients
 
-This repository is a monorepo with four clients sharing one wire format:
+This repository is a monorepo with five clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
@@ -20,11 +20,7 @@ This repository is a monorepo with four clients sharing one wire format:
 | Android | [`clients/android/`](clients/android/README.md) | beta | 2.1.5 |
 | Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.1.5 |
 | Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.1.5 |
-
-> **2.1.5 is still in development, so there is no 2.1.5 release yet.** The source
-> tree is versioned 2.1.5; the latest published release is
-> [2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0). See the
-> [changelog](CHANGELOG.md) for the work in progress.
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README-2.1.5.md) | alpha | 2.1.5 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -85,26 +81,30 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-2.1.5 is still in development and has no release yet; 2.1.0 is the latest release.
-Version **[2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0)** adds the Minecraft **Paper server plugin**
-(`OpenRadPlugin-2.1.0.jar`, alpha), fixes newly joined members being shown offline,
-and includes the direct-path, incoming-offer and Windows reliability work prepared as
-2.0.2. It ships freshly built Linux x86-64 and Windows x64 packages, an offline
-Windows installer, a signed Android APK (beta), the plugin JAR, build metadata,
-dependency notices, and checksums. Read the [2.1.0 release notes](docs/releases/2.1.0.md)
-for upgrade behavior, validation, and platform limitations, and the
-[complete change inventory](docs/releases/2.1.0-changes.md) for every changed file.
+Version **[2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5)** adds
+**stealth block** (drop a VPN address's traffic in either direction while the peer stays
+connected) to the desktop, CLI and Android, a Minecraft **Fabric client mod** (alpha),
+Paper plugin builds for Minecraft 1.21.x and 26.x, and lower RAM use. It ships freshly
+built Linux x86-64 and Windows x64 packages, an offline Windows installer, a signed
+Android APK (beta), the plugin and mod JARs, build metadata, dependency notices, and
+checksums. Read the [2.1.5 release notes](docs/releases/2.1.5.md) for upgrade behavior,
+validation, and platform limitations, and the
+[complete change inventory](docs/releases/2.1.5-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
 - **Windows:** Run `OpenRad-Setup.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.1.0-android.apk` (Android 8.0 or newer).
+- **Android (beta):** Install `openrad-2.1.5-android.apk` (Android 8.0 or newer).
   It is signed with the same key as 2.0.1 and installs as an update.
   See the [Android client guide](clients/android/README.md).
-- **Minecraft server (Paper 1.21.x, alpha):** Put `OpenRadPlugin-2.1.0.jar` in the
-  server's `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
+- **Minecraft server (Paper 1.21.x or 26.x, alpha):** Put the
+  `OpenRadPlugin-2.1.5-paper-<version>.jar` for your Paper version in the server's
+  `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
+- **Minecraft client (Fabric 1.21–1.21.11 or 26.1–26.3, alpha):** Put exactly one
+  `OpenRadClientMod-2.1.5-fabric-<version>.jar`, matching your game version, in the Fabric
+  profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README-2.1.5.md).
 
 ## Quick start
 
@@ -170,18 +170,21 @@ and eligibility details.
 
 ## Minecraft server plugin (Paper)
 
-`OpenRadPlugin.jar` puts a **Paper 1.21.x** server (Java 21) directly on a Radmin
+`OpenRadPlugin.jar` puts a **Paper 1.21.x** (Java 21) or **Paper 26.x** (Java 25) server directly on a Radmin
 VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad) join the
 server at the plugin's `26.x.x.x` address; the host needs no VPN client, TAP/TUN
 driver, root access or native libraries, so it also works on shared hosting.
 The plugin is **alpha**: full multiplayer gameplay through the official Radmin
 client has not been measured yet.
 
-1. Download `OpenRadPlugin-2.1.0.jar` from the [2.1.0 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0), or build it (JDK 21):
+1. Download the JAR for your Paper version from the [2.1.5 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5):
+   `OpenRadPlugin-2.1.5-paper-1.21.jar` for Paper 1.21.x, or `-26.1.1`, `-26.1.2`, `-26.2`
+   or `-26.3` for Paper 26.x. Or build it (JDK 21 for 1.21.x; JDK 25 for 26.x):
 
    ```sh
    cd clients/plugin
-   ./gradlew clean check        # Windows: .\gradlew.bat clean check
+   ./gradlew clean check                                   # Paper 1.21.x
+   ./gradlew -PopenradPaperApi=26.3.build.+ clean check    # Paper 26.3
    # -> build/libs/OpenRadPlugin.jar
    ```
 
@@ -257,6 +260,8 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
+| [2.1.5 release](docs/releases/2.1.5.md) | Stealth block, Fabric mod, multiversion plugin, RAM, packages, upgrading, validation, and limitations |
+| [2.1.5 change inventory](docs/releases/2.1.5-changes.md) | File-by-file account of all changes since v2.1.0 |
 | [2.1.0 release](docs/releases/2.1.0.md) | Paper plugin, presence fix, packages, upgrading, validation, and limitations |
 | [2.1.0 change inventory](docs/releases/2.1.0-changes.md) | File-by-file account of all changes since v2.0.1 |
 | [2.0.1 release](docs/releases/2.0.1.md) | Packages, upgrading, verification, and limitations |

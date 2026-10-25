@@ -1,10 +1,11 @@
 # Changelog
 
-## 2.1.5 — in development (not released)
+## 2.1.5 — 2026-10-25
 
-OpenRad 2.1.5 is still in development, so there is no 2.1.5 release yet; the latest
-published release is 2.1.0. Wire formats are unchanged and the Paper plugin stays
-byte-exact on the wire.
+OpenRad 2.1.5 adds stealth block, the Minecraft Fabric client mod (alpha) and Paper plugin
+builds for Minecraft 1.21.x and 26.x, and lowers CPU/RAM use. Wire formats are unchanged and
+the Paper plugin stays byte-exact on the wire. See the [release notes](docs/releases/2.1.5.md)
+and [file inventory](docs/releases/2.1.5-changes.md).
 
 - Rust client memory: on Linux/glibc the CLI service and desktop cap allocator arenas at
   4 (an explicit `MALLOC_ARENA_MAX` still wins), so per-peer threads no longer each retain
@@ -30,7 +31,21 @@ byte-exact on the wire.
   forwarding table, so they cost nothing per packet. Incoming blocks cost one flag check per
   received record and skip parsing, validation and queueing. The list is saved per profile
   (up to 1024 addresses), applied live, and not counted as dropped traffic.
-- Versions: Rust workspace, Android (`versionCode` 6), Python and the plugin are 2.1.5.
+- Minecraft Fabric client mod (alpha, new in `clients/mod/`, pull request #14): an in-process
+  OpenRad client for Minecraft Java with a virtual TCP stack for `26.x` servers and LAN
+  discovery from authenticated peers. One JAR per version: 1.21–1.21.11 (Java 21) and
+  26.1–26.3 (Java 25). Review fixes before merging: channels survive presence/rename/network
+  updates, closed status pings no longer hold connection slots, joins skip peer backoff,
+  `flush()` no longer waits for ACKs, LAN entries are capped per peer, first registration
+  cannot be interrupted, the legacy ping cannot crash the game, `26.x` addresses use the
+  normal path while OpenRad is disconnected, the language picker no longer crashes, text is
+  visible on 1.21.6+ and 26.x, missing translations show English, and an invalid
+  configuration file is kept for repair.
+- Paper plugin builds per Paper line: 1.21.x (Java 21, API 1.20.6) and 26.1.1, 26.1.2, 26.2,
+  26.3 (Java 25), selected with `-PopenradPaperApi`; `verifyJar` checks the bytecode level.
+- `scripts/check-sync.py` also checks that the mod's copies of the plugin's protocol classes
+  and test fixtures are byte-identical.
+- Versions: Rust workspace, Android (`versionCode` 6), Python, the plugin and the mod are 2.1.5.
 
 ## 2.1.0 — 2026-10-25
 

@@ -1,11 +1,10 @@
 # OpenRad Plugin 2.1.5 (alpha)
 
-> **A 2.1.5 ainda está em desenvolvimento, por isso ainda não há release 2.1.5.** O código
-> está versionado como 2.1.5; a última release publicada é a
-> [2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0), cujos links
-> de download aparecem abaixo.
+> **Download:** [release 2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5).
+> Use `OpenRadPlugin-2.1.5-paper-1.21.jar` para Paper 1.21.x (Java 21) ou
+> `OpenRadPlugin-2.1.5-paper-26.1.1.jar`, `-26.1.2`, `-26.2` ou `-26.3` para Paper 26.x (Java 25).
 
-**Preparação para 2.1.5:** o código mantém as correções da 2.1.0 e as otimizações de CPU/RAM da branch 2.1.5. Builds separados do plugin são configuráveis para Paper 1.21.x (Java 21, API 1.20.6) e Paper 26.1.1, 26.1.2, 26.2 e 26.3 (Java 25). A série 26.1 sem patch não foi certificada. Consulte [a integração do mod e plugin](../../docs/releases/2.1.5-minecraft-integration.md). Não há release ou certificado de gameplay para esses alvos.
+**Novidades da 2.1.5:** um JAR por linha do Paper — 1.21.x (Java 21, API 1.20.6) e 26.1.1, 26.1.2, 26.2 e 26.3 (Java 25) — e menos CPU/RAM por quadro, com o mesmo formato de fio. A série 26.1 sem patch não é suportada. Compilar um alvo não comprova gameplay nessa versão. Consulte [a integração do mod e plugin](../../docs/releases/2.1.5-minecraft-integration.md) e as [notas da 2.1.5](../../docs/releases/2.1.5.md).
 
 Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
@@ -13,7 +12,7 @@ Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor M
 
 ## Início rápido (3 passos)
 
-1. Baixe `OpenRadPlugin-2.1.0.jar` da [release 2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x, Java 21). Confira o arquivo com o `SHA256SUMS` da release.
+1. Baixe o JAR da sua versão do Paper na [release 2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
 2. No **console** do servidor, entre na sua rede Radmin:
 
    ```text
@@ -121,4 +120,4 @@ Os testes normais são locais e sintéticos; não contatam o serviço real. Scri
 
 Documentação: [instalação detalhada](docs/installation.md), [arquitetura](docs/architecture.md), [paridade](docs/protocol-parity.md), [criptografia](docs/crypto-parity.md), [transportes](docs/transport-parity.md), [TCP virtual](docs/virtual-tcp.md), [ameaças](docs/threat-model.md), [hosts e limites](docs/host-compatibility.md), [testes](docs/tests-live.md), [licenças](docs/third-party-licenses.md).
 
-Referência técnica: [OpenRad](https://github.com/gringoestrangeiro/openrad), monorepo 2.1.0; licença MIT em `LICENSE`. Este é um projeto comunitário sem afiliação com Radmin/Famatech.
+Referência técnica: [OpenRad](https://github.com/gringoestrangeiro/openrad), monorepo 2.1.5; licença MIT em `LICENSE`. Este é um projeto comunitário sem afiliação com Radmin/Famatech.
