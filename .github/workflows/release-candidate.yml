@@ -1,9 +1,9 @@
-name: release-candidate-2.0.2
+name: release-candidate
 
 on:
   push:
     branches:
-      - release/2.0.2-candidates
+      - 'release/*-candidates'
   workflow_dispatch:
 
 permissions:
@@ -15,6 +15,13 @@ jobs:
     timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
+      - name: Read release version
+        shell: bash
+        run: |
+          version="$(sed -n '0,/^version = "\(.*\)"$/s//\1/p' Cargo.toml)"
+          test -n "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.95.0'
@@ -49,16 +56,16 @@ jobs:
             --binaries target/release \
             --build-info dist/linux-builder.json \
             --rust-notice "$(rustc --print sysroot)/share/doc/rust/COPYRIGHT-library.html" \
-            --build-date 2026-10-24
+            --build-date "$BUILD_DATE"
           cd dist
-          sha256sum -c openrad-v2.0.2-linux-x86_64.tar.gz.sha256
+          sha256sum -c "openrad-v$VERSION-linux-x86_64.tar.gz.sha256"
       - name: Upload Linux candidate
         uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.0.2-linux-candidate
+          name: openrad-${{ env.VERSION }}-linux-candidate
           path: |
-            dist/openrad-v2.0.2-linux-x86_64.tar.gz
-            dist/openrad-v2.0.2-linux-x86_64.tar.gz.sha256
+            dist/openrad-v${{ env.VERSION }}-linux-x86_64.tar.gz
+            dist/openrad-v${{ env.VERSION }}-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -67,6 +74,13 @@ jobs:
     timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
+      - name: Read release version
+        shell: bash
+        run: |
+          version="$(sed -n '0,/^version = "\(.*\)"$/s//\1/p' Cargo.toml)"
+          test -n "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.95.0'
@@ -85,8 +99,8 @@ jobs:
       - name: Package portable binaries and offline installer
         shell: bash
         run: |
-          python3 scripts/package-windows.py --build-date 2026-10-24
-          docker run --rm --volume "$PWD:/workspace" --volume "$HOME/.cargo:/root/.cargo" --volume "$HOME/.rustup:/root/.rustup" --workdir /workspace debian:trixie /bin/bash -euc '
+          python3 scripts/package-windows.py --build-date "$BUILD_DATE"
+          docker run --rm --env BUILD_DATE --volume "$PWD:/workspace" --volume "$HOME/.cargo:/root/.cargo" --volume "$HOME/.rustup:/root/.rustup" --workdir /workspace debian:trixie /bin/bash -euc '
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git python3 nsis 7zip binutils-mingw-w64
               version="$(makensis -VERSION)"
@@ -95,22 +109,22 @@ jobs:
               export PATH="/root/.cargo/bin:$PATH"
               export RUSTUP_TOOLCHAIN=1.95.0
               git config --global --add safe.directory /workspace
-              python3 scripts/package-windows-installer.py --build-date 2026-10-24
+              python3 scripts/package-windows-installer.py --build-date "$BUILD_DATE"
             '
-          cp dist/OpenRad-Setup.exe dist/OpenRad-Setup-2.0.2.exe
-          (cd dist && sha256sum -c openrad-2.0.2-windows-x86_64-test.zip.sha256)
-          (cd dist && sha256sum -c openrad-2.0.2-windows-x86_64-setup.zip.sha256)
-          (cd dist && sha256sum OpenRad-Setup-2.0.2.exe > OpenRad-Setup-2.0.2.exe.sha256)
+          cp dist/OpenRad-Setup.exe "dist/OpenRad-Setup-$VERSION.exe"
+          (cd dist && sha256sum -c "openrad-$VERSION-windows-x86_64-test.zip.sha256")
+          (cd dist && sha256sum -c "openrad-$VERSION-windows-x86_64-setup.zip.sha256")
+          (cd dist && sha256sum "OpenRad-Setup-$VERSION.exe" > "OpenRad-Setup-$VERSION.exe.sha256")
       - name: Upload Windows candidate
         uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.0.2-windows-candidate
+          name: openrad-${{ env.VERSION }}-windows-candidate
           path: |
-            dist/OpenRad-Setup-2.0.2.exe
-            dist/OpenRad-Setup-2.0.2.exe.sha256
-            dist/openrad-2.0.2-windows-x86_64-test.zip
-            dist/openrad-2.0.2-windows-x86_64-test.zip.sha256
-            dist/openrad-2.0.2-windows-x86_64-setup.zip
-            dist/openrad-2.0.2-windows-x86_64-setup.zip.sha256
+            dist/OpenRad-Setup-${{ env.VERSION }}.exe
+            dist/OpenRad-Setup-${{ env.VERSION }}.exe.sha256
+            dist/openrad-${{ env.VERSION }}-windows-x86_64-test.zip
+            dist/openrad-${{ env.VERSION }}-windows-x86_64-test.zip.sha256
+            dist/openrad-${{ env.VERSION }}-windows-x86_64-setup.zip
+            dist/openrad-${{ env.VERSION }}-windows-x86_64-setup.zip.sha256
           if-no-files-found: error
           retention-days: 14

@@ -1,4 +1,4 @@
-name: android-2.0.2-production-signing
+name: android-production-signing
 
 on:
   workflow_dispatch:
@@ -47,11 +47,14 @@ jobs:
             printf 'keyPassword=%s\n' "$RELEASE_KEY_PASSWORD"
           } > "$props"
           chmod 600 "$props"
+          version_name="$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' app/build.gradle.kts)"
+          version_code="$(sed -n 's/^ *versionCode = \([0-9]*\)$/\1/p' app/build.gradle.kts)"
+          test -n "$version_name" && test -n "$version_code" && test "$version_code" -gt 3
           ./gradlew :app:testDebugUnitTest :app:assembleRelease "-Popenrad.signingProperties=$props" --no-daemon
           apk='app/build/outputs/apk/release/app-release.apk'
           test -s "$apk"
           curl -fsSL --retry 3 'https://github.com/gringoestrangeiro/openrad/releases/download/v2.0.1/openrad-2.0.1-android.apk' -o "$official"
-          export NEW_APK="$apk" OLD_APK="$official"
+          export NEW_APK="$apk" OLD_APK="$official" VERSION_NAME="$version_name" VERSION_CODE="$version_code"
           python3 - <<'VERIFY'
           import os, re, subprocess
           from pathlib import Path
@@ -69,17 +72,18 @@ jobs:
           new_cert,new_package,new_raw=info(os.environ['NEW_APK'])
           assert old_cert == new_cert, 'PRODUCTION RELEASE BLOCKED: signing certificate differs from official v2.0.1'
           assert "name='com.openrad.mobile'" in old_package and "versionCode='3'" in old_package, 'Official reference APK mismatch'
-          assert "name='com.openrad.mobile'" in new_package and "versionCode='4'" in new_package and "versionName='2.0.2'" in new_package, 'APK package/version mismatch'
+          code, name = os.environ['VERSION_CODE'], os.environ['VERSION_NAME']
+          assert "name='com.openrad.mobile'" in new_package and f"versionCode='{code}'" in new_package and f"versionName='{name}'" in new_package, 'APK package/version mismatch'
           assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in new_raw or 'Verified using v3 scheme (APK Signature Scheme v3): true' in new_raw, 'Missing modern compatible Android signing scheme'
           print('PASS: signing certificate identical to official v2.0.1')
-          print('PASS: package com.openrad.mobile, versionCode 4, versionName 2.0.2')
+          print(f'PASS: package com.openrad.mobile, versionCode {code}, versionName {name}')
           VERIFY
           mkdir -p ../../dist/android-release-signed
-          cp "$apk" ../../dist/android-release-signed/openrad-2.0.2-android.apk
-          (cd ../../dist/android-release-signed && sha256sum openrad-2.0.2-android.apk > SHA256SUMS)
+          cp "$apk" "../../dist/android-release-signed/openrad-$version_name-android.apk"
+          (cd ../../dist/android-release-signed && sha256sum "openrad-$version_name-android.apk" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.0.2-android-PRODUCTION-signed-verified
+          name: openrad-android-PRODUCTION-signed-verified
           path: dist/android-release-signed/
           if-no-files-found: error
           retention-days: 7

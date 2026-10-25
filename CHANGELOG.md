@@ -23,6 +23,10 @@ maintenance work below. Wire formats are unchanged. See the
   online unless the service says otherwise, and partial updates keep the known coordinator
   and presence. The Python client and the Paper plugin now match the Rust and Android
   behavior.
+- Release tooling (PR #11): GitHub Actions workflows build Linux/Windows release candidates
+  (Windows installer with NSIS 3.11 or newer), an Android debug preview, and a manual Android
+  production-signing job that refuses to publish an APK whose certificate differs from the
+  official 2.0.1 APK. The workflows read the version from the source instead of hardcoding it.
 - Versions: Rust workspace, Android (`versionCode` 5) and Python 2.1.0.
 - Validation: Linux workspace tests, formatting, Linux/Windows Clippy, Windows test
   compilation, `scripts/check-sync.py`, Android unit tests, Python suites and the plugin

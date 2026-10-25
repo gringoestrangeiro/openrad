@@ -1,12 +1,12 @@
-﻿name: android-2.0.2-preview
+name: android-preview
 
 on:
   push:
     branches:
-      - release/2.0.2-candidates
+      - 'release/*-candidates'
     paths:
       - 'clients/android/**'
-      - '.github/workflows/android-2.0.2-preview.yml'
+      - '.github/workflows/android-preview.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
       - name: Install Android SDK
         working-directory: clients/android
         run: ./scripts/setup-android-sdk.sh
-      - name: Build Android 2.0.2 preview
+      - name: Build Android debug preview
         working-directory: clients/android
         run: ./scripts/build.sh
       - name: Test Android app
@@ -34,14 +34,16 @@ jobs:
       - name: Stage clearly labeled debug preview
         shell: bash
         run: |
+          version="$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' clients/android/app/build.gradle.kts)"
+          test -n "$version"
           mkdir -p dist/android-preview
-          cp clients/android/app/build/outputs/apk/debug/app-debug.apk dist/android-preview/openrad-2.0.2-android-DEBUG-preview.apk
-          (cd dist/android-preview && sha256sum openrad-2.0.2-android-DEBUG-preview.apk > SHA256SUMS)
-          printf '%s\n' 'TEST VERSION ONLY — NOT A PRODUCTION UPDATE' 'Android applicationId: com.openrad.mobile.debug' 'Version: 2.0.2' 'This debug build installs separately from the original com.openrad.mobile.' 'Do not publish this as the production Android 2.0.2 APK.' > dist/android-preview/README-FIRST.txt
+          cp clients/android/app/build/outputs/apk/debug/app-debug.apk "dist/android-preview/openrad-$version-android-DEBUG-preview.apk"
+          (cd dist/android-preview && sha256sum "openrad-$version-android-DEBUG-preview.apk" > SHA256SUMS)
+          printf '%s\n' 'TEST VERSION ONLY — NOT A PRODUCTION UPDATE' 'Android applicationId: com.openrad.mobile.debug' "Version: $version" 'This debug build installs separately from the original com.openrad.mobile.' 'Do not publish this as the production Android APK.' > dist/android-preview/README-FIRST.txt
           printf 'Source commit: %s\n' "$GITHUB_SHA" >> dist/android-preview/README-FIRST.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.0.2-android-DEBUG-preview
+          name: openrad-android-DEBUG-preview
           path: dist/android-preview/
           retention-days: 30
           if-no-files-found: error
