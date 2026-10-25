@@ -1,0 +1,85 @@
+name: android-2.0.2-production-signing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        working-directory: clients/android
+        run: ./scripts/setup-android-sdk.sh
+      - name: Build and verify official upgrade-compatible APK
+        working-directory: clients/android
+        shell: bash
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.OPENRAD_ANDROID_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.OPENRAD_ANDROID_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.OPENRAD_ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.OPENRAD_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$RELEASE_KEYSTORE_BASE64" || { echo 'Signing unavailable: maintainer must configure OPENRAD_ANDROID_KEYSTORE_BASE64 securely.'; exit 2; }
+          test -n "$RELEASE_STORE_PASSWORD" || { echo 'Missing secure store password.'; exit 2; }
+          test -n "$RELEASE_KEY_ALIAS" || { echo 'Missing secure signing key alias.'; exit 2; }
+          test -n "$RELEASE_KEY_PASSWORD" || { echo 'Missing secure signing key password.'; exit 2; }
+          keyfile="$RUNNER_TEMP/openrad-release.jks"
+          props="$RUNNER_TEMP/openrad-signing.properties"
+          official="$RUNNER_TEMP/openrad-2.0.1-official.apk"
+          trap 'rm -f "$keyfile" "$props" "$official"' EXIT
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keyfile"
+          chmod 600 "$keyfile"
+          {
+            printf 'storeFile=%s\n' "$keyfile"
+            printf 'storePassword=%s\n' "$RELEASE_STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$RELEASE_KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$RELEASE_KEY_PASSWORD"
+          } > "$props"
+          chmod 600 "$props"
+          ./gradlew :app:testDebugUnitTest :app:assembleRelease "-Popenrad.signingProperties=$props" --no-daemon
+          apk='app/build/outputs/apk/release/app-release.apk'
+          test -s "$apk"
+          curl -fsSL --retry 3 'https://github.com/gringoestrangeiro/openrad/releases/download/v2.0.1/openrad-2.0.1-android.apk' -o "$official"
+          export NEW_APK="$apk" OLD_APK="$official"
+          python3 - <<'VERIFY'
+          import os, re, subprocess
+          from pathlib import Path
+          sdk=Path(os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT', ''))
+          tools=sdk/'build-tools'/'34.0.0'
+          apksigner=tools/'apksigner'
+          aapt=tools/'aapt'
+          def info(apk):
+              raw=subprocess.check_output([str(apksigner),'verify','--verbose','--print-certs',apk], text=True)
+              match=re.search(r'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)',raw)
+              assert match, f'Missing trusted signing certificate in {Path(apk).name}'
+              package=subprocess.check_output([str(aapt),'dump','badging',apk], text=True).splitlines()[0]
+              return match.group(1).lower(),package,raw
+          old_cert,old_package,old_raw=info(os.environ['OLD_APK'])
+          new_cert,new_package,new_raw=info(os.environ['NEW_APK'])
+          assert old_cert == new_cert, 'PRODUCTION RELEASE BLOCKED: signing certificate differs from official v2.0.1'
+          assert "name='com.openrad.mobile'" in old_package and "versionCode='3'" in old_package, 'Official reference APK mismatch'
+          assert "name='com.openrad.mobile'" in new_package and "versionCode='4'" in new_package and "versionName='2.0.2'" in new_package, 'APK package/version mismatch'
+          assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in new_raw or 'Verified using v3 scheme (APK Signature Scheme v3): true' in new_raw, 'Missing modern compatible Android signing scheme'
+          print('PASS: signing certificate identical to official v2.0.1')
+          print('PASS: package com.openrad.mobile, versionCode 4, versionName 2.0.2')
+          VERIFY
+          mkdir -p ../../dist/android-release-signed
+          cp "$apk" ../../dist/android-release-signed/openrad-2.0.2-android.apk
+          (cd ../../dist/android-release-signed && sha256sum openrad-2.0.2-android.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.0.2-android-PRODUCTION-signed-verified
+          path: dist/android-release-signed/
+          if-no-files-found: error
+          retention-days: 7

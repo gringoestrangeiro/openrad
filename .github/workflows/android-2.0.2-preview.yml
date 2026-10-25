@@ -1,0 +1,47 @@
+﻿name: android-2.0.2-preview
+
+on:
+  push:
+    branches:
+      - release/2.0.2-candidates
+    paths:
+      - 'clients/android/**'
+      - '.github/workflows/android-2.0.2-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-debug-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        working-directory: clients/android
+        run: ./scripts/setup-android-sdk.sh
+      - name: Build Android 2.0.2 preview
+        working-directory: clients/android
+        run: ./scripts/build.sh
+      - name: Test Android app
+        working-directory: clients/android
+        run: ./gradlew :app:testDebugUnitTest
+      - name: Stage clearly labeled debug preview
+        shell: bash
+        run: |
+          mkdir -p dist/android-preview
+          cp clients/android/app/build/outputs/apk/debug/app-debug.apk dist/android-preview/openrad-2.0.2-android-DEBUG-preview.apk
+          (cd dist/android-preview && sha256sum openrad-2.0.2-android-DEBUG-preview.apk > SHA256SUMS)
+          printf '%s\n' 'TEST VERSION ONLY — NOT A PRODUCTION UPDATE' 'Android applicationId: com.openrad.mobile.debug' 'Version: 2.0.2' 'This debug build installs separately from the original com.openrad.mobile.' 'Do not publish this as the production Android 2.0.2 APK.' > dist/android-preview/README-FIRST.txt
+          printf 'Source commit: %s\n' "$GITHUB_SHA" >> dist/android-preview/README-FIRST.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.0.2-android-DEBUG-preview
+          path: dist/android-preview/
+          retention-days: 30
+          if-no-files-found: error

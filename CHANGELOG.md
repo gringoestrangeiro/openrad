@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.2 — proposed (not yet published)
+## 2.0.2 ? release candidate (not yet a signed official release)
 
 OpenRad 2.0.2 is a maintenance update. Wire formats are unchanged.
 
