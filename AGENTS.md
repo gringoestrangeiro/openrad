@@ -5,13 +5,13 @@
 Four clients share one wire format. Work in the client's own directory and
 read its own guide:
 
-- **Rust (stable, canonical, v2.1.0):** `src/`, `desktop/`, `tests/`,
+- **Rust (stable, canonical, v2.1.5):** `src/`, `desktop/`, `tests/`,
   `locales/`, `docs/`, `scripts/`, `packaging/` — rules below in this file.
 - **Android (beta):** `clients/android/` — read
   [`clients/android/AGENTS.md`](clients/android/AGENTS.md) before touching it.
-- **Python (research, 2.1.0):** `clients/python/` — read
+- **Python (research, 2.1.5):** `clients/python/` — read
   [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
-- **Java Paper plugin (alpha, 2.1.0):** `clients/plugin/` — read
+- **Java Paper plugin (alpha, 2.1.5):** `clients/plugin/` — read
   [`clients/plugin/README.md`](clients/plugin/README.md) before touching it.
 
 | Area | Command (run in that directory) |

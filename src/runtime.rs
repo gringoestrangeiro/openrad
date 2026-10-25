@@ -2107,6 +2107,9 @@ pub fn run(
                     }));
                     max_loop_gap_ms = 0;
                     next_health = Instant::now() + Duration::from_secs(30);
+                    // Snapshot clones and finished handshakes leave freed pages behind.
+                    #[cfg(unix)]
+                    crate::resource_limits::release_free_memory();
                 }
                 snapshot.elapsed_secs = started.elapsed().as_secs();
                 report(Update::State(snapshot.clone()));

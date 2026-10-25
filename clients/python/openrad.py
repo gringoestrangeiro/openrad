@@ -31,7 +31,7 @@ import radproto as p
 from radvpn import Engine, Framed, MTU, PeerChannel, Profile, Tap, WakeQueue, ensure_identity, has_net_admin, poll_readable, private_json
 
 
-VERSION = '2.1.0'
+VERSION = '2.1.5'
 __version__ = VERSION
 MAGIC = b'ORAD'
 HEADER = struct.Struct('!4sBBHIQI16s')

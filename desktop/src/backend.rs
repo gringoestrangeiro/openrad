@@ -20,6 +20,9 @@ use std::{
 };
 
 pub const MODULUS: &[u8] = openrad::SERVER_MODULUS;
+/// How often the desktop returns freed heap pages to the operating system.
+#[cfg(unix)]
+const MEMORY_TRIM_INTERVAL: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Loading,
@@ -369,6 +372,8 @@ fn manager(
     };
     let mut connect = settings.auto_connect && loaded.is_ok() && !service_running;
     let mut next_status = Instant::now();
+    #[cfg(unix)]
+    let mut next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
     let mut last_phase = None;
     let mut last_identity: Option<(u64, String)> = None;
     let mut reset_failed = false;
@@ -527,6 +532,13 @@ fn manager(
                     }
                 }
             }
+        }
+        // Full-roster status replies are parsed and dropped every poll; give the
+        // freed pages back instead of holding the largest roster ever seen.
+        #[cfg(unix)]
+        if Instant::now() >= next_trim {
+            next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
+            openrad::resource_limits::release_free_memory();
         }
         match actions.recv_timeout(Duration::from_millis(50)) {
             Ok(Action::Connect) if !replacement.is_pending() => {

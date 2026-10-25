@@ -26,6 +26,11 @@ public final class ReliableUdp implements RecordTransport {
     private final Map<Integer, Ordered> ordered = new HashMap<>();
     private final Map<Integer, Fragment> fragments = new HashMap<>();
     private final ArrayDeque<byte[]> ready = new ArrayDeque<>();
+    /** Owner-thread scratch: datagrams are parsed in place; retained data is always copied. */
+    private final byte[] receiveBuffer = new byte[4096];
+    /** Owner-thread scratch: each datagram is copied out synchronously by send/write. */
+    private byte[] transmitBuffer = new byte[1408];
+    private final byte[] ackCommand = new byte[8];
 
     private static final class Pending {
         final byte[] command;
@@ -68,11 +73,23 @@ public final class ReliableUdp implements RecordTransport {
     }
 
     private static int u16(byte[] b, int at) {
-        return Short.toUnsignedInt(ByteBuffer.wrap(b, at, 2).getShort());
+        return ((b[at] & 255) << 8) | (b[at + 1] & 255);
+    }
+
+    private static int i32(byte[] b, int at) {
+        return ((b[at] & 255) << 24)
+                | ((b[at + 1] & 255) << 16)
+                | ((b[at + 2] & 255) << 8)
+                | (b[at + 3] & 255);
     }
 
     private static long u32(byte[] b, int at) {
-        return Integer.toUnsignedLong(ByteBuffer.wrap(b, at, 4).getInt());
+        return Integer.toUnsignedLong(i32(b, at));
+    }
+
+    private static void put16(byte[] b, int at, int value) {
+        b[at] = (byte) (value >>> 8);
+        b[at + 1] = (byte) value;
     }
 
     private static int wrap(int n) {
@@ -105,7 +122,11 @@ public final class ReliableUdp implements RecordTransport {
     }
 
     public static boolean validPunch(byte[] b, int nonce) {
-        return b.length == 7
+        return validPunch(b, b.length, nonce);
+    }
+
+    private static boolean validPunch(byte[] b, int length, int nonce) {
+        return length == 7
                 && u16(b, 0) == nonce
                 && u16(b, 2) != 0
                 && u16(b, 4) != 0
@@ -160,6 +181,7 @@ public final class ReliableUdp implements RecordTransport {
             throw new IllegalArgumentException("UDP candidates/nonce");
         long began = System.nanoTime(), until = began + timeout.toNanos(), next = 0;
         List<InetSocketAddress> learned = new ArrayList<>();
+        byte[] buffer = new byte[4096];
         try {
             InetSocketAddress endpoint;
             for (; ; ) {
@@ -180,13 +202,13 @@ public final class ReliableUdp implements RecordTransport {
                     next = now + (now - began < 2_000_000_000L ? 100_000_000L : 400_000_000L);
                 }
                 socket.setSoTimeout(10);
-                DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                 try {
                     socket.receive(packet);
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
-                byte[] data = Arrays.copyOf(packet.getData(), packet.getLength());
+                byte[] data = Arrays.copyOf(buffer, packet.getLength());
                 InetSocketAddress source = (InetSocketAddress) packet.getSocketAddress();
                 if (!validPunch(data, nonce)
                         || candidates.stream()
@@ -269,33 +291,41 @@ public final class ReliableUdp implements RecordTransport {
     }
 
     private boolean transmit(byte[] command) throws IOException {
-        byte[] packet =
-                ByteBuffer.allocate(command.length + 8)
-                        .putInt(0)
-                        .putShort((short) (remoteId | 0x8000))
-                        .putShort((short) ((System.nanoTime() - started) / 1_000_000))
-                        .put(command)
-                        .array();
-        ByteBuffer.wrap(packet).putInt(WireChecksum.enet(packet));
+        return transmit(command, command.length);
+    }
+
+    private boolean transmit(byte[] command, int length) throws IOException {
+        int size = length + 8;
+        byte[] packet = transmitBuffer;
+        if (packet.length < size) transmitBuffer = packet = new byte[size];
+        put16(packet, 4, remoteId | 0x8000);
+        put16(packet, 6, (int) ((System.nanoTime() - started) / 1_000_000));
+        System.arraycopy(command, 0, packet, 8, length);
+        // The ENET checksum hashes its own four-byte field as zeroes.
+        int crc = WireChecksum.enet(packet, size);
+        packet[0] = (byte) (crc >>> 24);
+        packet[1] = (byte) (crc >>> 16);
+        packet[2] = (byte) (crc >>> 8);
+        packet[3] = (byte) crc;
         DatagramChannel channel = socket.getChannel();
         if (channel != null) {
             channel.configureBlocking(false);
             try {
                 int n;
                 try {
-                    n = channel.write(ByteBuffer.wrap(packet));
+                    n = channel.write(ByteBuffer.wrap(packet, 0, size));
                 } catch (IOException e) {
                     if (sendRefused(e)) return false;
                     throw e;
                 }
                 if (n == 0) return false;
-                require(n == packet.length, "short UDP datagram write");
+                require(n == size, "short UDP datagram write");
                 return true;
             } finally {
                 if (channel.isOpen()) channel.configureBlocking(true);
             }
         }
-        socket.send(new DatagramPacket(packet, packet.length));
+        socket.send(new DatagramPacket(packet, size));
         return true;
     }
 
@@ -387,10 +417,10 @@ public final class ReliableUdp implements RecordTransport {
                                     Math.max(
                                             1, Math.min(50, (next - System.nanoTime()) / 1_000_000))
                             : 1);
-            DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
+            DatagramPacket packet = new DatagramPacket(receiveBuffer, receiveBuffer.length);
             try {
                 socket.receive(packet);
-                ingest(Arrays.copyOf(packet.getData(), packet.getLength()));
+                ingest(receiveBuffer, packet.getLength());
             } catch (SocketTimeoutException e) {
                 break;
             } catch (PortUnreachableException e) {
@@ -409,34 +439,36 @@ public final class ReliableUdp implements RecordTransport {
                         (p.tries < 20 || now - lastReceive < 5_000_000_000L)
                                 && now - p.queued < LIVENESS,
                         "UDP acknowledgement timeout");
-                boolean sent = transmit(p.command);
+                boolean sent = transmit(p.command, p.command.length);
                 if (sent) p.tries++;
                 p.last = sent ? now : now - RETRY + 10_000_000L;
             }
     }
 
-    private void ingest(byte[] b) throws IOException {
-        if (incomingNonce != null && validPunch(b, incomingNonce)) {
+    /** Parses bytes[0, n) in place; everything retained beyond this call is copied out. */
+    private void ingest(byte[] b, int n) throws IOException {
+        if (incomingNonce != null && validPunch(b, n, incomingNonce)) {
             if (b[6] == 'P' || b[6] == 'A') transmitPunch();
             return;
         }
-        if (b.length < 8 || ByteBuffer.wrap(b).getInt() != WireChecksum.enet(b)) return;
+        if (n < 8 || i32(b, 0) != WireChecksum.enet(b, n)) return;
         int id = u16(b, 4);
         if ((id & 0x7fff) != 0 && !(incomingNonce != null && (id & 0x7fff) == 0x7fff)) return;
         int time = (id & 0x8000) != 0 ? u16(b, 6) : 0, at = (id & 0x8000) != 0 ? 8 : 6;
-        for (int commandCount = 0; commandCount < 32 && at < b.length; commandCount++) {
-            require(b.length - at >= 4, "truncated ENET command");
+        for (int commandCount = 0; commandCount < 32 && at < n; commandCount++) {
+            require(n - at >= 4, "truncated ENET command");
             int kind = b[at] & 15;
             require(kind > 0 && kind < SIZES.length, "unknown ENET command");
             int size = SIZES[kind];
-            require(b.length - at >= size, "truncated ENET command body");
-            byte[] c = Arrays.copyOfRange(b, at, at + size);
+            require(n - at >= size, "truncated ENET command body");
+            int c = at; // command header bytes[c, c + size)
             at += size;
-            int channel = c[1] & 255,
-                    seq = u16(c, 2),
-                    length = kind == 6 ? u16(c, 4) : (kind >= 7 && kind <= 9 ? u16(c, 6) : 0);
-            require(length <= b.length - at, "truncated ENET payload");
-            byte[] payload = Arrays.copyOfRange(b, at, at + length);
+            int command = b[c] & 255,
+                    channel = b[c + 1] & 255,
+                    seq = u16(b, c + 2),
+                    length = kind == 6 ? u16(b, c + 4) : (kind >= 7 && kind <= 9 ? u16(b, c + 6) : 0);
+            require(length <= n - at, "truncated ENET payload");
+            int payload = at; // payload bytes[payload, payload + length)
             at += length;
             if (kind == 2) {
                 require(
@@ -444,40 +476,40 @@ public final class ReliableUdp implements RecordTransport {
                                 && (id & 0x8000) != 0
                                 && channel == 255
                                 && seq == 1
-                                && (c[0] & 255) == 0x82
-                                && u16(c, 4) < 0x7fff
-                                && u32(c, 12) == 1
-                                && u32(c, 24) == 5000
-                                && u32(c, 28) == 2
-                                && u32(c, 32) == 2,
+                                && command == 0x82
+                                && u16(b, c + 4) < 0x7fff
+                                && u32(b, c + 12) == 1
+                                && u32(b, c + 24) == 5000
+                                && u32(b, c + 28) == 2
+                                && u32(b, c + 32) == 2,
                         "ENET incoming CONNECT mismatch");
                 if (remoteId == 0x7fff) {
-                    remoteId = u16(c, 4);
-                    mtu = Math.max(576, Math.min(mtu, u16(c, 6)));
-                    cookie = Arrays.copyOfRange(c, 36, 40);
+                    remoteId = u16(b, c + 4);
+                    mtu = Math.max(576, Math.min(mtu, u16(b, c + 6)));
+                    cookie = Arrays.copyOfRange(b, c + 36, c + 40);
                     queue(connectionCommand(0x83, 36).array());
                 } else
                     require(
-                            remoteId == u16(c, 4)
-                                    && Arrays.equals(cookie, Arrays.copyOfRange(c, 36, 40)),
+                            remoteId == u16(b, c + 4)
+                                    && Arrays.equals(cookie, 0, 4, b, c + 36, c + 40),
                             "ENET changed CONNECT");
             }
-            if ((c[0] & 128) != 0) {
+            if ((command & 128) != 0) {
                 require((id & 0x8000) != 0, "ENET reliable command without timestamp");
                 if (kind == 3) {
                     require(
                             incomingNonce == null
                                     && channel == 255
                                     && seq == 1
-                                    && (c[0] & 255) == 0x83
-                                    && u32(c, 12) == 1
-                                    && u32(c, 24) == 5000
-                                    && u32(c, 28) == 2
-                                    && u32(c, 32) == 2,
+                                    && command == 0x83
+                                    && u32(b, c + 12) == 1
+                                    && u32(b, c + 24) == 5000
+                                    && u32(b, c + 28) == 2
+                                    && u32(b, c + 32) == 2,
                             "ENET verification mismatch");
-                    remoteId = u16(c, 4);
+                    remoteId = u16(b, c + 4);
                     require(remoteId < 0x7fff, "ENET peer id");
-                    mtu = Math.max(576, Math.min(mtu, u16(c, 6)));
+                    mtu = Math.max(576, Math.min(mtu, u16(b, c + 6)));
                     pending.remove((255 << 16) | 1);
                     connected = true;
                 }
@@ -485,34 +517,37 @@ public final class ReliableUdp implements RecordTransport {
             boolean accepted = true;
             switch (kind) {
                 case 1 -> {
-                    Pending p = pending.remove((channel << 16) | u16(c, 4));
-                    if (incomingNonce != null && channel == 255 && u16(c, 4) == 1 && p != null)
+                    Pending p = pending.remove((channel << 16) | u16(b, c + 4));
+                    if (incomingNonce != null && channel == 255 && u16(b, c + 4) == 1 && p != null)
                         connected = true;
                 }
                 case 2, 3, 5, 10, 11 -> {}
                 case 4 -> throw new IOException("UDP peer disconnected");
                 case 6 -> {
                     require(channel == 0, "unsupported ENET channel");
-                    accepted = acceptOrdered(seq, 1, payload);
+                    accepted =
+                            acceptOrdered(
+                                    seq, 1, Arrays.copyOfRange(b, payload, payload + length));
                 }
                 case 8 -> {
                     require(channel == 0, "unsupported ENET channel");
-                    accepted = fragment(c, payload);
+                    accepted = fragment(b, c, payload, length);
                 }
                 default -> throw new IOException("unsupported ENET command");
             }
-            if ((c[0] & 128) != 0 && accepted)
-                transmit(
-                        ByteBuffer.allocate(8)
-                                .put((byte) 1)
-                                .put((byte) channel)
-                                .putShort((short) 0)
-                                .putShort((short) seq)
-                                .putShort((short) time)
-                                .array());
+            if ((command & 128) != 0 && accepted) {
+                byte[] ack = ackCommand;
+                ack[0] = 1;
+                ack[1] = (byte) channel;
+                ack[2] = 0;
+                ack[3] = 0;
+                put16(ack, 4, seq);
+                put16(ack, 6, time);
+                transmit(ack, 8);
+            }
             lastReceive = System.nanoTime();
         }
-        require(at == b.length, "ENET command budget");
+        require(at == n, "ENET command budget");
     }
 
     private void transmitPunch() throws IOException {
@@ -542,20 +577,24 @@ public final class ReliableUdp implements RecordTransport {
             incoming = wrap(incoming + next.count);
             ready.add(next.bytes);
         }
-        fragments
-                .keySet()
-                .removeIf(
-                        s -> {
-                            int d = wrap(s - incoming);
-                            return d == 0 || d > 0x8000;
-                        });
+        if (!fragments.isEmpty())
+            fragments
+                    .keySet()
+                    .removeIf(
+                            s -> {
+                                int d = wrap(s - incoming);
+                                return d == 0 || d > 0x8000;
+                            });
         return true;
     }
 
-    private boolean fragment(byte[] c, byte[] payload) throws IOException {
-        int start = u16(c, 4), ahead = wrap(start - incoming);
+    private boolean fragment(byte[] b, int c, int payload, int payloadLength) throws IOException {
+        int start = u16(b, c + 4), ahead = wrap(start - incoming);
         if (ahead == 0 || ahead > 0x8000 || ordered.containsKey(start)) return true;
-        long countL = u32(c, 8), indexL = u32(c, 12), totalL = u32(c, 16), offsetL = u32(c, 20);
+        long countL = u32(b, c + 8),
+                indexL = u32(b, c + 12),
+                totalL = u32(b, c + 16),
+                offsetL = u32(b, c + 20);
         require(
                 countL >= 1
                         && countL <= 128
@@ -563,21 +602,21 @@ public final class ReliableUdp implements RecordTransport {
                         && totalL >= 1
                         && totalL <= 65536
                         && offsetL <= totalL
-                        && payload.length <= totalL - offsetL,
+                        && payloadLength <= totalL - offsetL,
                 "UDP fragment bounds");
         int count = (int) countL,
                 index = (int) indexL,
                 total = (int) totalL,
                 offset = (int) offsetL;
-        require(u16(c, 2) == wrap(start + index), "UDP fragment sequence");
+        require(u16(b, c + 2) == wrap(start + index), "UDP fragment sequence");
         if (ahead > 512 || (!fragments.containsKey(start) && fragments.size() >= 16 && ahead != 1))
             return false;
         Fragment f = fragments.computeIfAbsent(start, s -> new Fragment(total, count));
         require(f.total == total && f.count == count, "inconsistent UDP fragments");
         if (!f.received.get(index)) {
-            System.arraycopy(payload, 0, f.data, offset, payload.length);
+            System.arraycopy(b, payload, f.data, offset, payloadLength);
             f.offsets[index] = offset;
-            f.lengths[index] = payload.length;
+            f.lengths[index] = payloadLength;
             f.received.set(index);
         }
         if (f.received.cardinality() == count) {

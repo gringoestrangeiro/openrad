@@ -4,7 +4,7 @@
 //! Catalog templates are matched as whole messages; user-provided names and paths
 //! are opaque parameters and are never translated or interpreted as templates.
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, ffi::OsString, str::FromStr, sync::OnceLock};
+use std::{borrow::Borrow, collections::BTreeMap, ffi::OsString, str::FromStr, sync::OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
@@ -95,21 +95,54 @@ impl std::fmt::Display for LanguagePreference {
     }
 }
 
+/// Catalog text borrowed from the embedded JSON. The catalog lives for the
+/// whole process, so the few strings with escape sequences are leaked once
+/// instead of duplicating every entry on the heap.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Text(&'static str);
+impl Borrow<str> for Text {
+    fn borrow(&self) -> &str {
+        self.0
+    }
+}
+impl Deserialize<'static> for Text {
+    fn deserialize<D: serde::Deserializer<'static>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'static> for Visitor {
+            type Value = Text;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_borrowed_str<E>(self, value: &'static str) -> Result<Text, E> {
+                Ok(Text(value))
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Text, E> {
+                self.visit_string(value.to_owned())
+            }
+            fn visit_string<E>(self, value: String) -> Result<Text, E> {
+                Ok(Text(Box::leak(value.into_boxed_str())))
+            }
+        }
+        deserializer.deserialize_str(Visitor)
+    }
+}
+
 struct Catalog {
-    entries: BTreeMap<String, [String; 3]>,
-    templates: Vec<String>,
+    entries: BTreeMap<Text, [Text; 3]>,
+    templates: Vec<&'static str>,
 }
 
 fn catalog() -> &'static Catalog {
     static CATALOG: OnceLock<Catalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let entries: BTreeMap<String, [String; 3]> =
+        let entries: BTreeMap<Text, [Text; 3]> =
             serde_json::from_str(include_str!("../locales/messages.json"))
                 .expect("validated embedded translation catalog");
         let mut templates: Vec<_> = entries
             .keys()
+            .map(|key| key.0)
             .filter(|key| key.contains('{'))
-            .cloned()
             .collect();
         // Prefer specific templates over generic wrappers, such as "{0} completed".
         templates.sort_by_key(|key| std::cmp::Reverse(literal_length(key)));
@@ -183,10 +216,10 @@ impl Language {
     pub fn lookup(self, source: &str) -> Option<&'static str> {
         let (key, translations) = catalog().entries.get_key_value(source)?;
         Some(match self {
-            Self::English => key.as_str(),
-            Self::Portuguese => &translations[0],
-            Self::Russian => &translations[1],
-            Self::Vietnamese => &translations[2],
+            Self::English => key.0,
+            Self::Portuguese => translations[0].0,
+            Self::Russian => translations[1].0,
+            Self::Vietnamese => translations[2].0,
         })
     }
 
@@ -219,9 +252,9 @@ impl Language {
                 self.text(suffix)
             );
         }
-        for template in &catalog().templates {
+        for &template in &catalog().templates {
             if let Some(parameters) = match_template(template, source) {
-                if matches!(template.as_str(), "{0} networks" | "{0} peers")
+                if matches!(template, "{0} networks" | "{0} peers")
                     && parameters
                         .first()
                         .is_none_or(|(_, value)| value.parse::<u64>().is_err())
@@ -542,11 +575,29 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_catalog_matches_an_owned_parse() {
+        let owned: BTreeMap<String, [String; 3]> =
+            serde_json::from_str(include_str!("../locales/messages.json")).unwrap();
+        assert_eq!(owned.len(), catalog().entries.len());
+        for ((source, translations), (Text(key), borrowed)) in owned.iter().zip(&catalog().entries)
+        {
+            assert_eq!(source, key);
+            for (translation, Text(text)) in translations.iter().zip(borrowed) {
+                assert_eq!(translation, text);
+            }
+        }
+        assert!(catalog()
+            .templates
+            .iter()
+            .all(|template| template.contains('{')));
+    }
+
+    #[test]
     fn every_translation_is_present_and_preserves_all_parameters() {
         assert!(catalog().entries.len() > 200);
-        for (source, translations) in &catalog().entries {
+        for (Text(source), translations) in &catalog().entries {
             assert!(!source.trim().is_empty());
-            for translation in translations {
+            for Text(translation) in translations {
                 assert!(
                     !translation.trim().is_empty(),
                     "missing translation: {source}"

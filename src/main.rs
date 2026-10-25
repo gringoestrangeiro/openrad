@@ -650,7 +650,10 @@ fn main() {
         "cli"
     });
     #[cfg(unix)]
-    openrad::resource_limits::configure_open_file_limit();
+    {
+        openrad::resource_limits::configure_allocator();
+        openrad::resource_limits::configure_open_file_limit();
+    }
     let language = i18n::language_for_args(&args, LanguagePreference::System);
     if let Err(error) = execute() {
         early_log::fatal_error(&error);

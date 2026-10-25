@@ -1,6 +1,6 @@
 # Guia de instalação e configuração
 
-Versão 2.1.0 (alpha); veja as pendências de aceitação em `tests-live.md`.
+Versão 2.1.5 (alpha); veja as pendências de aceitação em `tests-live.md`.
 
 **Caminho mais simples:** instale o JAR e, no console, use `orb join "Nome da Rede" senha` e `orb status`. Os comandos abaixo descrevem a configuração manual equivalente.
 

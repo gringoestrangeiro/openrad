@@ -1285,6 +1285,9 @@ fn supervisor(
                 move |update| shared_updates.update(update),
             )
         });
+        // The finished engine just freed its whole roster and peer state.
+        #[cfg(unix)]
+        crate::resource_limits::release_free_memory();
         if shared.shutdown.load(Ordering::Relaxed) {
             break;
         }

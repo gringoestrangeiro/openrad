@@ -1,4 +1,9 @@
-# OpenRad Plugin 2.1.0 (alpha)
+# OpenRad Plugin 2.1.5 (alpha)
+
+> **A 2.1.5 ainda está em desenvolvimento, por isso ainda não há release 2.1.5.** O código
+> está versionado como 2.1.5; a última release publicada é a
+> [2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0), cujos links
+> de download aparecem abaixo.
 
 Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 

@@ -16,10 +16,15 @@ This repository is a monorepo with four clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.1.0 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.1.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.1.0 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.1.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.1.5 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.1.5 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.1.5 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.1.5 |
+
+> **2.1.5 is still in development, so there is no 2.1.5 release yet.** The source
+> tree is versioned 2.1.5; the latest published release is
+> [2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0). See the
+> [changelog](CHANGELOG.md) for the work in progress.
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -80,6 +85,7 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
+2.1.5 is still in development and has no release yet; 2.1.0 is the latest release.
 Version **[2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0)** adds the Minecraft **Paper server plugin**
 (`OpenRadPlugin-2.1.0.jar`, alpha), fixes newly joined members being shown offline,
 and includes the direct-path, incoming-offer and Windows reliability work prepared as

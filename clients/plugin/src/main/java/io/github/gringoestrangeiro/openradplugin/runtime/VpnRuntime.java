@@ -851,6 +851,7 @@ public final class VpnRuntime implements AutoCloseable {
                 attempts.authenticated(peer.rid());
                 int seq = 0, verified = 0;
                 long lastLan = 0;
+                PeerGrant grant = null; // fixed for this worker: peer, networks and MAC are final
                 long keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos(),
                         lastPacket = System.nanoTime();
                 while (!isClosed()
@@ -895,14 +896,16 @@ public final class VpnRuntime implements AutoCloseable {
                                     || !Objects.equals(
                                             authorizedNetworks.get(peer.rid()), allowedNetworks))
                                 break;
-                            var grant =
-                                    new PeerGrant(
-                                            peer.rid(),
-                                            true,
-                                            allowedNetworks,
-                                            ipInt(peer.vip()),
-                                            connected.peerMac());
-                            for (byte[] frame : f.frames()) stack.accept(grant, frame);
+                            if (grant == null)
+                                grant =
+                                        new PeerGrant(
+                                                peer.rid(),
+                                                true,
+                                                allowedNetworks,
+                                                ipInt(peer.vip()),
+                                                connected.peerMac());
+                            // Freshly decoded arrays: ownership moves to the bridge queue.
+                            for (byte[] frame : f.ownedFrames()) stack.acceptOwned(grant, frame);
                         }
                     }
                     if (System.nanoTime() - lastPacket > Duration.ofSeconds(50).toNanos())
