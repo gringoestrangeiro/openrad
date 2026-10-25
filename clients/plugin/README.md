@@ -6,7 +6,7 @@ Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor M
 
 ## Início rápido (3 passos)
 
-1. Obtenha `OpenRadPlugin.jar` (compile com `./gradlew clean check`, veja abaixo, ou baixe de uma [release](https://github.com/gringoestrangeiro/openrad/releases) que o inclua), coloque em `plugins/` e inicie o servidor (Paper 1.21.x, Java 21).
+1. Baixe `OpenRadPlugin-2.1.0.jar` da [release 2.1.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x, Java 21). Confira o arquivo com o `SHA256SUMS` da release.
 2. No **console** do servidor, entre na sua rede Radmin:
 
    ```text
