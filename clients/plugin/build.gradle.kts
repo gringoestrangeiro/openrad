@@ -11,7 +11,7 @@ version = "2.1.5"
 // Shared runtime includes the 2.1.5 CPU/RAM and peer-presence fixes.
 // Only the Paper API and Java target vary by build.
 val paperApi = providers.gradleProperty("openradPaperApi").orElse("1.20.6-R0.1-SNAPSHOT").get()
-val bytecodeJava = if (paperApi.startsWith("26.")) 25 else if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) 17 else 21
+val bytecodeJava = if (paperApi.startsWith("26.")) 25 else if (paperApi.startsWith("1.18.2-") || paperApi.startsWith("1.19-") || paperApi.startsWith("1.19.1-") || paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) 17 else 21
 
 repositories {
     // Paper 1.20.5 imports a historical Adventure BOM snapshot that disappeared
@@ -55,7 +55,7 @@ java {
 
 // Paper 1.19.2 predates JavaPlugin#getPluginMeta. Generate a legacy-only
 // source copy so the current versions keep using the newer Paper API.
-if (paperApi.startsWith("1.19.2-")) {
+if (paperApi.startsWith("1.18.2-") || paperApi.startsWith("1.19-") || paperApi.startsWith("1.19.1-") || paperApi.startsWith("1.19.2-")) {
     val legacySources = layout.buildDirectory.dir("generated/java1192")
     val generateLegacy1192 by tasks.registering(Copy::class) {
         from("src/main/java")
@@ -95,9 +95,9 @@ tasks.test {
 // Paper 1.20.3-1.20.4 do not recognize the newer 1.20.6 API-version string.
 tasks.processResources {
     inputs.property("openradTargetPaperApi", paperApi)
-    if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-") || paperApi.startsWith("1.20.5-")) {
+    if (paperApi.startsWith("1.18.2-") || paperApi.startsWith("1.19-") || paperApi.startsWith("1.19.1-") || paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-") || paperApi.startsWith("1.20.5-")) {
         filesMatching("plugin.yml") {
-            filter { line: String -> line.replace("api-version: '1.20.6'", if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-")) "api-version: '1.19'" else if (paperApi.startsWith("1.20.5-")) "api-version: '1.20.5'" else "api-version: '1.20'") }
+            filter { line: String -> line.replace("api-version: '1.20.6'", if (paperApi.startsWith("1.18.2-")) "api-version: '1.18'" else if (paperApi.startsWith("1.19-") || paperApi.startsWith("1.19.1-") || paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-")) "api-version: '1.19'" else if (paperApi.startsWith("1.20.5-")) "api-version: '1.20.5'" else "api-version: '1.20'") }
         }
     }
 }

@@ -2,12 +2,15 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.18.2" to "0.59.1+1.18.2",
+    "1.19" to "0.58.0+1.19",
+    "1.19.1" to "0.58.5+1.19.1",
     "1.19.2" to "0.77.0+1.19.2",
     "1.19.3" to "0.76.1+1.19.3",
     "1.19.4" to "0.87.2+1.19.4",
@@ -51,14 +54,14 @@ sourceSets.main {
 }
 // Minecraft 1.19.4 uses PoseStack in Screen.render rather than GuiGraphics.
 // Generate a source-only compatibility copy; never modify new-version UI sources.
-if (minecraftTarget in setOf("1.19.2", "1.19.3", "1.19.4")) {
+if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
-        inputs.property("compatibilityAdapterVersion", "1192-v5")
+        inputs.property("compatibilityAdapterVersion", "1182-v3")
         from("src/main/java")
         into(generated1194)
         filteringCharset = "UTF-8"
-        if (minecraftTarget == "1.19.2") {
+        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2")) {
             exclude("**/mixin/MultiplayerScreenMixin.java")
             filesMatching("**/*.java") {
                 filter { line: String ->
@@ -73,6 +76,20 @@ if (minecraftTarget in setOf("1.19.2", "1.19.3", "1.19.4")) {
                 }
             }
         }
+        if (minecraftTarget == "1.18.2") {
+            filesMatching("**/*.java") {
+                filter { source: String ->
+                    source.replace("Component.literal(", "new net.minecraft.network.chat.TextComponent(")
+                        .replace("Component.translatable(", "new net.minecraft.network.chat.TranslatableComponent(")
+                        .replace("Component.empty()", "new net.minecraft.network.chat.TextComponent(\"\")")
+                        .replace("rebuildWidgets();", "clearWidgets(); init();")
+                        .replace("net.fabricmc.fabric.api.client.command.v2.", "net.fabricmc.fabric.api.client.command.v1.")
+                        .replace("import net.fabricmc.fabric.api.client.command.v1.ClientCommandRegistrationCallback;", "")
+                        .replace("ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(", "net.fabricmc.fabric.api.client.command.v1.ClientCommandManager.DISPATCHER.register(")
+                        .replace("}))))", "})))")
+                }
+            }
+        }
         // Mixin uses a different static connection entrypoint before MC 1.20.
         filesMatching("**/ConnectionMixin.java") {
             filter { line: String ->
@@ -81,7 +98,7 @@ if (minecraftTarget in setOf("1.19.2", "1.19.3", "1.19.4")) {
             }
         }
         // 1.19.3 returns a LanguageInfo rather than a locale String.
-        if (minecraftTarget in setOf("1.19.2", "1.19.3")) {
+        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3")) {
             filesMatching("**/OpenRad*Screen.java") {
                 filter { line: String ->
                     line.replace("minecraft.getLanguageManager().getSelected()",
@@ -100,7 +117,7 @@ if (minecraftTarget in setOf("1.19.2", "1.19.3", "1.19.4")) {
     }
     sourceSets.main {
         val legacyRoots = mutableListOf(generated1194.get().asFile, file("../core/src/main/java"))
-        if (minecraftTarget == "1.19.2") legacyRoots.add(file("src/compat1192/java"))
+        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2")) legacyRoots.add(file("src/compat1192/java"))
         java.setSrcDirs(legacyRoots)
     }
     tasks.named<JavaCompile>("compileJava") { dependsOn(generate1194) }

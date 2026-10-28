@@ -13,6 +13,9 @@ foi preservado em outra worktree, sem alterações.
 
 | Minecraft Java | Mod Fabric | Plugin Paper | Estado |
 | --- | --- | --- | --- |
+| 1.18.2 | Adaptadores específicos de texto, comandos e UI; build/test/remap Java 17 verificados | Java 17, Gradle check/test e JAR verificados (117 classes) | **Experimental: ambos compilados, runtime não testado** |
+| 1.19 | Java 17, Fabric Gradle build/test/remap verificados | Java 17, Gradle check/test + verifyJar (117 classes) verificados | **Experimental; gameplay/Radmin não testados** |
+| 1.19.1 | Java 17, build/test/remap verificados | Java 17, Gradle check/test, JAR verificado | **Experimental; gameplay/Radmin não testados** |
 | 1.19.2 | Java17; botão e tooltip legados, mixin LAN adaptado; build/test/remap | Java17; API antiga de metadados, Gradle check/test | **Experimental, sem teste em jogo** |
 | 1.19.3 | Java 17 + PoseStack/LanguageInfo adaptados; Gradle build, testes e remap verificados | Paper Java 17 compilado e tests passaram | **Experimental, sem teste real em jogo** |
 | 1.19.4 | Java 17 + PoseStack e Mixin específico; Gradle build/test/remap verificados | Paper 1.19.4 Java 17 + Gradle check verificado | **Experimental: nenhum teste real de Minecraft/Radmin** |
@@ -52,9 +55,9 @@ No Windows PowerShell, na raiz desta worktree:
 
 ```powershell
 cd clients/mod
-.\build-full-range.ps1 -Targets 1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
+.\build-full-range.ps1 -Targets 1.18.2,1.19,1.19.1,1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\plugin
-.\scripts\build-paper-targets.ps1 -Targets 1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
+.\scripts\build-paper-targets.ps1 -Targets 1.18.2,1.19,1.19.1,1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\..
 python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
 python tools/minecraft_version_coverage.py --output docs/minecraft-java-releases-1.8-to-26.3.json
@@ -67,11 +70,11 @@ continuam preservados, mas não devem ser instalados como mods Java 17.
 
 ## Versões ainda pendentes
 
-**Fabric 1.14–1.19.1:** portar APIs e mixins por geração, recompilar
+**Fabric 1.14–1.18.1:** portar APIs e mixins por geração, recompilar
 para a JVM correspondente (Java 8, 16 ou 17), inicializar o jogo e testar
 conexões reais. Fabric 1.8–1.13 **fora de escopo**.
 
-**Paper 1.8–1.19.1:** requer portabilidade do núcleo e autenticação para
+**Paper 1.8–1.18.1:** requer portabilidade do núcleo e autenticação para
 Java 8/11/16/17, dependendo da versão histórica do servidor. Não é correto
 distribuir um mesmo JAR moderno renomeado para essas versões.
 

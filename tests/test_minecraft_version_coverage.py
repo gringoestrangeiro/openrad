@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+import json
 from pathlib import Path
 script = Path(__file__).resolve().parents[1] / "tools" / "minecraft_version_coverage.py"
 spec = importlib.util.spec_from_file_location("version_coverage", script)
@@ -19,7 +20,7 @@ class VersionCoverageTest(unittest.TestCase):
                              "not-targeted-no-fabric-before-1.14")
 
     def test_experimental_java21_is_not_release(self):
-        for version in ("1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"):
+        for version in ("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"):
             state = coverage.classify(version)
             self.assertEqual(state["fabric"], "experimental-java17-build-verified-runtime-untested")
             self.assertEqual(state["paper"], "experimental-java17-build-verified-runtime-untested")
@@ -40,6 +41,19 @@ class VersionCoverageTest(unittest.TestCase):
                          "development-build-verified")
         self.assertEqual(coverage.classify("1.20.5")["paper"],
                          "development-build-verified")
+
+    def test_paper_matrix_contains_119_targets(self):
+        matrix = script.parents[1] / 'clients' / 'plugin' / 'scripts' / 'build-paper-targets.ps1'
+        source = matrix.read_text(encoding='utf-8-sig')
+        self.assertEqual(source.count("'1.18.2'='1.18.2-R0.1-SNAPSHOT'"), 1)
+        self.assertEqual(source.count("'1.19'='1.19-R0.1-SNAPSHOT'"), 1)
+        self.assertEqual(source.count("'1.19.1'='1.19.1-R0.1-SNAPSHOT'"), 1)
+
+    def test_catalog_is_consistent(self):
+        report = script.parents[1] / 'docs' / 'minecraft-java-releases-1.8-to-26.3.json'
+        versions = json.loads(report.read_text(encoding='utf-8'))['versions']
+        for item in versions:
+            self.assertEqual(item, coverage.classify(item['minecraft']))
 
     def test_minecraft_paper_121(self):
         self.assertEqual(coverage.classify("1.21.11")["paper"],
