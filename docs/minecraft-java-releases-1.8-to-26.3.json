@@ -10,137 +10,137 @@
   "versions": [
     {
       "minecraft": "1.8",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.3",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.4",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.5",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.6",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.7",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.8",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.8.9",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.9",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.9.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.9.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.9.3",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.9.4",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.10",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.10.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.10.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.11",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.11.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.11.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.12",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.12.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.12.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.13",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.13.1",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
       "minecraft": "1.13.2",
-      "fabric": "unsupported-by-official-fabric",
+      "fabric": "not-targeted-no-fabric-before-1.14",
       "paper": "requires-paper-api-and-java-port"
     },
     {
@@ -280,13 +280,13 @@
     },
     {
       "minecraft": "1.20.3",
-      "fabric": "requires-game-api-and-java-port",
-      "paper": "requires-paper-api-and-java-port"
+      "fabric": "experimental-java21-build-verified-runtime-untested",
+      "paper": "experimental-java21-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.20.4",
-      "fabric": "requires-game-api-and-java-port",
-      "paper": "requires-paper-api-and-java-port"
+      "fabric": "experimental-java21-build-verified-runtime-untested",
+      "paper": "experimental-java21-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.20.5",

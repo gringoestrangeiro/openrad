@@ -7,6 +7,8 @@ java { toolchain.languageVersion.set(JavaLanguageVersion.of(21)) }
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.20.3" to "0.91.1+1.20.3",
+    "1.20.4" to "0.97.3+1.20.4",
     "1.20.5" to "0.97.8+1.20.5",
     "1.20.6" to "0.100.8+1.20.6",
     "1.21" to "0.102.0+1.21",

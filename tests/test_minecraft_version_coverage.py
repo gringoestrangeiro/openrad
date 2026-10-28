@@ -16,7 +16,14 @@ class VersionCoverageTest(unittest.TestCase):
     def test_legacy_fabric_not_faked(self):
         for v in ("1.8","1.8.9","1.12.2","1.13.2"):
             self.assertEqual(coverage.classify(v)["fabric"],
-                             "unsupported-by-official-fabric")
+                             "not-targeted-no-fabric-before-1.14")
+
+    def test_experimental_java21_is_not_release(self):
+        for version in ("1.20.3", "1.20.4"):
+            state = coverage.classify(version)
+            self.assertEqual(state["fabric"], "experimental-java21-build-verified-runtime-untested")
+            self.assertEqual(state["paper"], "experimental-java21-build-verified-runtime-untested")
+        self.assertNotIn("1.8", coverage.FABRIC_RELEASES)
 
     def test_minecraft_2026(self):
         self.assertEqual(coverage.classify("26.1")["paper"],

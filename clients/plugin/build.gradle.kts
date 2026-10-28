@@ -45,6 +45,17 @@ tasks.test {
     jvmArgs("-XX:ActiveProcessorCount=2")
 }
 
+// Version-specific Bukkit metadata, not a broad compatibility claim.
+// Paper 1.20.3-1.20.4 do not recognize the newer 1.20.6 API-version string.
+tasks.processResources {
+    inputs.property("openradTargetPaperApi", paperApi)
+    if (paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) {
+        filesMatching("plugin.yml") {
+            filter { line: String -> line.replace("api-version: '1.20.6'", "api-version: '1.20'") }
+        }
+    }
+}
+
 tasks.jar {
     archiveFileName.set("OpenRadPlugin.jar")
     isPreserveFileTimestamps = false
