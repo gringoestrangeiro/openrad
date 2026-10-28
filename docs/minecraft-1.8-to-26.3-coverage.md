@@ -5,16 +5,17 @@ https://github.com/gringoestrangeiro/openrad/pull/17
 
 **Restrições respeitadas:** nenhum loader novo; Fabric começa em Minecraft
 1.14, e não criamos builds Fabric ou Paper 1.8–1.13. A meta de compatibilidade para os dois clientes começa em 1.14;
-as versões anteriores à 1.17.1 continuam sem JARs verificados. O código experimental de Velocity/BungeeCord
+as versões anteriores à 1.17 continuam sem JARs verificados. O código experimental de Velocity/BungeeCord
 foi preservado em outra worktree, sem alterações.
 
 ## Resultados de compilação
 
 | Minecraft Java | Mod Fabric | Plugin Paper | Estado |
 | --- | --- | --- | --- |
+| 1.17 | Java 16, Fabric API 0.36.0+1.17; Gradle build/test/remap e JAR verificados | Java 16, 119 classes; Gradle check/test/verifyJar verificados | **Ambos experimentais; runtime não testado** |
 | 1.17.1 | Java 16, Fabric API 0.46.1+1.17, Gradle build/test/remap + verificação do JAR | Java 16, 119 classes, Gradle check/test + JAR verificados | **Ambos experimentais; runtime não testado** |
-| 1.18 | Build/test/remap Java 17 e JAR exato verificados | Plugin para a API 1.18 original não validado | **Fabric experimental; runtime não testado** |
-| 1.18.1 | Build/test/remap Java 17 e JAR exato verificados | Compilação Java 17 passou; suíte completa falhou em teste(s) TCP de sincronização | **Fabric experimental; Paper NÃO aprovado** |
+| 1.18 | Build/test/remap Java 17 e JAR exato verificados | Java 17, 119 classes; Gradle check/test/verifyJar verificados | **Ambos experimentais; runtime não testado** |
+| 1.18.1 | Build/test/remap Java 17 e JAR exato verificados | Java 17, 117 classes, suíte Gradle check e rerun completo sem cache aprovados; JAR verificado | **Ambos experimentais; runtime não testado** |
 | 1.18.2 | Adaptadores específicos de texto, comandos e UI; build/test/remap Java 17 verificados | Java 17, Gradle check/test e JAR verificados (117 classes) | **Experimental: ambos compilados, runtime não testado** |
 | 1.19 | Java 17, Fabric Gradle build/test/remap verificados | Java 17, Gradle check/test + verifyJar (117 classes) verificados | **Experimental; gameplay/Radmin não testados** |
 | 1.19.1 | Java 17, build/test/remap verificados | Java 17, Gradle check/test, JAR verificado | **Experimental; gameplay/Radmin não testados** |
@@ -72,11 +73,11 @@ continuam preservados, mas não devem ser instalados como mods Java 17.
 
 ## Versões ainda pendentes
 
-**Fabric 1.14–1.17:** portar APIs e mixins por geração, recompilar
+**Fabric 1.14–1.16.5:** portar APIs e mixins por geração, recompilar
 para a JVM correspondente (Java 8, 16 ou 17), inicializar o jogo e testar
 conexões reais. Fabric 1.8–1.13 **fora de escopo**.
 
-**Paper 1.14–1.17 e 1.18–1.18.1:** requer portabilidade do núcleo e autenticação para
+**Paper 1.14–1.16.5:** requer portabilidade do núcleo e autenticação para
 Java 8/11/16/17, dependendo da versão histórica do servidor. Não é correto
 distribuir um mesmo JAR moderno renomeado para essas versões.
 

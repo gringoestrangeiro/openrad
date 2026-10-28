@@ -215,8 +215,8 @@
     },
     {
       "minecraft": "1.17",
-      "fabric": "requires-game-api-and-java-port",
-      "paper": "requires-paper-api-and-java-port"
+      "fabric": "experimental-java16-build-verified-runtime-untested",
+      "paper": "experimental-java16-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.17.1",
@@ -226,12 +226,12 @@
     {
       "minecraft": "1.18",
       "fabric": "experimental-java17-build-verified-runtime-untested",
-      "paper": "requires-paper-api-and-java-port"
+      "paper": "experimental-java17-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.18.1",
       "fabric": "experimental-java17-build-verified-runtime-untested",
-      "paper": "requires-paper-api-and-java-port"
+      "paper": "experimental-java17-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.18.2",

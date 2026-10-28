@@ -26,30 +26,36 @@ class VersionCoverageTest(unittest.TestCase):
             self.assertEqual(state["paper"], "experimental-java17-build-verified-runtime-untested")
         self.assertNotIn("1.8", coverage.FABRIC_RELEASES)
 
-    def test_fabric_118_builds_do_not_claim_untested_paper(self):
-        for version in ("1.18", "1.18.1"):
-            state = coverage.classify(version)
+    def test_1181_paper_approved_after_clean_rerun(self):
+        state = coverage.classify("1.18.1")
+        for kind in ("fabric", "paper"):
             self.assertEqual(
-                state["fabric"], "experimental-java17-build-verified-runtime-untested"
+                state[kind], "experimental-java17-build-verified-runtime-untested"
             )
-            self.assertNotEqual(
-                state["paper"], "experimental-java17-build-verified-runtime-untested"
-            )
+
+    def test_paper_118_exact_api(self):
+        self.assertEqual(
+            coverage.classify("1.18")["paper"],
+            "experimental-java17-build-verified-runtime-untested"
+        )
+        self.assertEqual(
+            coverage.classify("1.18.1")["paper"],
+            "experimental-java17-build-verified-runtime-untested"
+        )
 
     def test_legacy_114_not_falsely_verified(self):
         state = coverage.classify("1.14")
         self.assertNotIn("verified", state["fabric"])
         self.assertNotIn("verified", state["paper"])
 
-    def test_java16_1171_needs_real_minecraft_runtime(self):
-        state = coverage.classify("1.17.1")
-        for kind in ("fabric", "paper"):
-            self.assertEqual(
-                state[kind],
-                "experimental-java16-build-verified-runtime-untested"
-            )
-        self.assertNotIn("verified", coverage.classify("1.17")["fabric"])
-        self.assertNotIn("verified", coverage.classify("1.17")["paper"])
+    def test_java16_117x_needs_real_minecraft_runtime(self):
+        for minecraft in ("1.17", "1.17.1"):
+            state = coverage.classify(minecraft)
+            for kind in ("fabric", "paper"):
+                self.assertEqual(
+                    state[kind],
+                    "experimental-java16-build-verified-runtime-untested"
+                )
 
     def test_minecraft_2026(self):
         self.assertEqual(coverage.classify("26.1")["paper"],
@@ -70,6 +76,8 @@ class VersionCoverageTest(unittest.TestCase):
     def test_paper_matrix_contains_119_targets(self):
         matrix = script.parents[1] / 'clients' / 'plugin' / 'scripts' / 'build-paper-targets.ps1'
         source = matrix.read_text(encoding='utf-8-sig')
+        self.assertEqual(source.count("'1.17'='1.17-R0.1-SNAPSHOT'"), 1)
+        self.assertEqual(source.count("'1.18'='1.18-R0.1-SNAPSHOT'"), 1)
         self.assertEqual(source.count("'1.17.1'='1.17.1-R0.1-SNAPSHOT'"), 1)
         self.assertEqual(source.count("'1.18.1'='1.18.1-R0.1-SNAPSHOT'"), 1)
         self.assertEqual(source.count("'1.18.2'='1.18.2-R0.1-SNAPSHOT'"), 1)
