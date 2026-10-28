@@ -309,6 +309,8 @@ class LocalClient:
         if endpoint[0] != '127.0.0.1' or not 1024 <= endpoint[1] <= 65535:
             raise ValueError('API endpoint must be localhost on a high UDP port')
         self.token, self.timeout = bytes(token), timeout
+        if len(self.token) != 16:
+            raise ValueError('UDP API token must contain 16 bytes')
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
         self.sock.bind(('127.0.0.1', 0))
@@ -1244,6 +1246,13 @@ def self_test():
             for value in (0, -1, True, 1.5, '400'):
                 with self.assertRaises(ValueError):
                     OpenRad(max_peers=value)
+
+        def test_local_client_rejects_invalid_token_before_opening_socket(self):
+            for size in (0, 15, 17):
+                with self.subTest(size=size), patch.object(socket, 'socket') as constructor:
+                    with self.assertRaisesRegex(ValueError, 'token must contain 16 bytes'):
+                        LocalClient(('127.0.0.1', 12345), bytes(size))
+                    constructor.assert_not_called()
 
         def test_framing_supports_descriptors_above_select_limit(self):
             import fcntl
