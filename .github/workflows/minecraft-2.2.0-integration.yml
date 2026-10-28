@@ -1,21 +1,21 @@
-name: Minecraft mod and multiversion Paper (2.1.6)
+name: Minecraft mod and multiversion Paper (2.2.0)
 
 on:
   push:
     branches:
-      - 'release/2.1.6-candidates'
-      - 'release/2.1.6'
+      - 'release/2.2.0-candidates'
+      - 'release/2.2.0'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
-      - '.github/workflows/minecraft-2.1.6-integration.yml'
+      - '.github/workflows/minecraft-2.2.0-integration.yml'
   pull_request:
     branches:
-      - 'release/2.1.6'
+      - 'release/2.2.0'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
-      - '.github/workflows/minecraft-2.1.6-integration.yml'
+      - '.github/workflows/minecraft-2.2.0-integration.yml'
   workflow_dispatch:
 
 permissions:
@@ -54,11 +54,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../../dist/paper
-          cp build/libs/OpenRadPlugin.jar "../../dist/paper/OpenRadPlugin-2.1.6-paper-${{ matrix.target }}-java${{ matrix.java }}.jar"
+          cp build/libs/OpenRadPlugin.jar "../../dist/paper/OpenRadPlugin-2.2.0-paper-${{ matrix.target }}-java${{ matrix.java }}.jar"
           (cd ../../dist/paper && sha256sum *.jar > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: paper-2.1.6-${{ matrix.target }}-build-test
+          name: paper-2.2.0-${{ matrix.target }}-build-test
           path: dist/paper/
           if-no-files-found: error
           retention-days: 7
@@ -103,17 +103,58 @@ jobs:
           set -euo pipefail
           mkdir -p dist/fabric
           if [ "$MODERN" = true ]; then
-            source="clients/mod/modern/build/libs/OpenRadClientMod-2.1.6-modern-$MC.jar"
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-$MC.jar"
           else
-            source="clients/mod/fabric/build/libs/fabric-2.1.6.jar"
+            source="clients/mod/fabric/build/libs/fabric-2.2.0.jar"
           fi
           test -s "$source"
-          python3 clients/mod/tools/verify-version-jar.py "$source" "$MC" 2.1.6
-          cp "$source" "dist/fabric/OpenRadClientMod-2.1.6-fabric-$MC.jar"
+          python3 clients/mod/tools/verify-version-jar.py "$source" "$MC" 2.2.0
+          cp "$source" "dist/fabric/OpenRadClientMod-2.2.0-fabric-$MC.jar"
           (cd dist/fabric && sha256sum *.jar > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: fabric-2.1.6-${{ matrix.target }}-build-test
+          name: fabric-2.2.0-${{ matrix.target }}-build-test
           path: dist/fabric/
           if-no-files-found: error
           retention-days: 7
+
+  # Exercita o jogo real, nao apenas bytecode: perfil e TUN isolados/desligados.
+  fabric-runtime-smoke:
+    name: Fabric 1.21.1 real client smoke (offline)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install software OpenGL and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0 libasound2 libpulse0
+      - name: Launch Minecraft via Fabric with no VPN identity or user profile
+        working-directory: clients/mod
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM 17m xvfb-run -a ./gradlew --no-daemon --max-workers=1 \
+            '-PopenradSmoke=true' '-PopenradMinecraftVersion=1.21.1' \
+            ':fabric:runSmokeClient' --console=plain | tee runtime-smoke.log
+          test -f fabric/run-smoke/openrad-smoke-result.txt
+          grep -q '^PASS: required mixins' fabric/run-smoke/openrad-smoke-result.txt
+          grep -q 'OPENRAD_SMOKE RESULT PASS' runtime-smoke.log
+      - name: Preserve smoke test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-minecraft-1.21.1-runtime-smoke
+          path: |
+            clients/mod/runtime-smoke.log
+            clients/mod/fabric/run-smoke/openrad-smoke-result.txt
+            clients/mod/fabric/run-smoke/logs/latest.log
+          if-no-files-found: warn
+          retention-days: 14

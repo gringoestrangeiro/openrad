@@ -1,0 +1,45 @@
+name: release-windows-native-tests
+
+on:
+  push:
+    branches:
+      - 'release/*-candidates'
+    paths:
+      - 'src/**'
+      - 'desktop/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/release-windows-native-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-unit-and-cli:
+    runs-on: windows-2022
+    timeout-minutes: 65
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt, clippy
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Run native Windows headless Rust workspace tests
+        run: cargo test --workspace --locked
+      - name: Check native Windows Rust warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Print CLI version without touching a VPN profile
+        run: |
+          cargo build --bin openrad --locked
+          & .\target\debug\openrad.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

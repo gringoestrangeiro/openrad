@@ -77,13 +77,13 @@ network conditions, including NAT or firewall restrictions; OpenRad can use a
 relay when a direct path is unavailable. See the [architecture guide](docs/architecture.md)
 for protocol and transport details.
 
-## Candidata 2.1.6 (ainda nao publicada)
+## Candidata 2.2.0 (ainda nao publicada)
 
-A atualizacao **2.1.6** esta sendo preparada na branch `release/2.1.6-candidates`.
+A atualizacao **2.2.0** esta sendo preparada na branch `release/2.2.0-candidates`.
 Ela corrige o aviso **Ver versao**, reforca o shutdown do servico, a validacao do
 cliente Python, a busca Android e a compatibilidade de mixins Fabric e de testes Paper.
 Os detalhes, a matriz de builds e os limites sao documentados nas
-[notas da candidata 2.1.6](docs/releases/2.1.6.md). **Nao trate builds
+[notas da candidata 2.2.0](docs/releases/2.2.0.md). **Nao trate builds
 experimentais Minecraft/Android como testados em dispositivo/jogo apenas pelo Gradle.**
 
 ## Download

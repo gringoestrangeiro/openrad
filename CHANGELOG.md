@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.6 — candidata de release (2026-10-28; ainda nao publicada)
+## 2.2.0 — candidata de release (2026-10-28; ainda nao publicada)
 
 Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto
 do servico Rust quando o cliente encerra o IPC; teste deterministico de pacing;
@@ -16,8 +16,8 @@ Windows permanece experimental, Android beta, Minecraft alpha, Python research/L
 Fora do escopo implementado: Minecraft 1.14-1.16.5, 1.20 sem patch; nenhum
 loader novo foi adicionado.
 
-Veja [notas 2.1.6](docs/releases/2.1.6.md) e
-[inventario 2.1.6](docs/releases/2.1.6-changes.md).
+Veja [notas 2.2.0](docs/releases/2.2.0.md) e
+[inventario 2.2.0](docs/releases/2.2.0-changes.md).
 
 ## 2.1.5 — 2026-10-25
 
