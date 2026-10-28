@@ -13,12 +13,14 @@ foi preservado em outra worktree, sem alterações.
 
 | Minecraft Java | Mod Fabric | Plugin Paper | Estado |
 | --- | --- | --- | --- |
+| 1.19.2 | Java17; botão e tooltip legados, mixin LAN adaptado; build/test/remap | Java17; API antiga de metadados, Gradle check/test | **Experimental, sem teste em jogo** |
+| 1.19.3 | Java 17 + PoseStack/LanguageInfo adaptados; Gradle build, testes e remap verificados | Paper Java 17 compilado e tests passaram | **Experimental, sem teste real em jogo** |
 | 1.19.4 | Java 17 + PoseStack e Mixin específico; Gradle build/test/remap verificados | Paper 1.19.4 Java 17 + Gradle check verificado | **Experimental: nenhum teste real de Minecraft/Radmin** |
 | 1.20.1 | Gradle build/test Java 17 verificados | Paper 1.20.1 Gradle check Java 17 verificado | **Experimental, runtime não testado** |
 | 1.20.2 | Compilação, remapeamento, testes Java 17 verificados | API 1.20.2, Gradle check/test Java 17 verificados | **Experimental, sem teste de jogo/multiplayer** |
 | 1.20.3 | Compilação, remapeamento, testes e metadata Java 17 verificados | API 1.20.3, Gradle check/test, classes Java 17 e plugin.yml 1.20 verificados | **Experimental, sem startup/jogo ou multiplayer** |
 | 1.20.4 | Compilação, remapeamento, testes e metadata Java 17 verificados | API 1.20.4, Gradle check/test, classes Java 17 e plugin.yml 1.20 verificados | **Experimental, sem startup/jogo ou multiplayer** |
-| 1.20.5 | Compilação, remapeamento e testes Java 21 verificados | **Bloqueado:** dependência histórica Adventure BOM 4.17.0-SNAPSHOT não encontrada nos repositórios configurados | Fabric experimental, Paper não |
+| 1.20.5 | Compilação, remapeamento e testes Java 21 verificados | Gradle check Java 21 verificado; BOM histórico 4.17.0-SNAPSHOT obtido de espelho e demais módulos Adventure resolvidos em 4.17.0 estável. **Experimental** | Ambos em desenvolvimento; sem validação em jogo |
 | 1.20.6 | Compilação, remapeamento e testes Java 21 verificados | Gradle check/test e classfile Java 21 verificados | Compilação validada, gameplay não |
 | 1.21–1.21.11 | Versões existentes da 2.1.5 | Cobertura Paper existente varia por versão | Preservar upstream |
 | 26.1–26.3 | Versões existentes da 2.1.5 | Paper 26.1.1, 26.1.2, 26.2, 26.3 | Preservar upstream |
@@ -50,9 +52,9 @@ No Windows PowerShell, na raiz desta worktree:
 
 ```powershell
 cd clients/mod
-.\build-full-range.ps1 -Targets 1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
+.\build-full-range.ps1 -Targets 1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\plugin
-.\scripts\build-paper-targets.ps1 -Targets 1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.6
+.\scripts\build-paper-targets.ps1 -Targets 1.19.2,1.19.3,1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\..
 python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
 python tools/minecraft_version_coverage.py --output docs/minecraft-java-releases-1.8-to-26.3.json
@@ -65,15 +67,15 @@ continuam preservados, mas não devem ser instalados como mods Java 17.
 
 ## Versões ainda pendentes
 
-**Fabric 1.14–1.19.3:** portar APIs e mixins por geração, recompilar
+**Fabric 1.14–1.19.1:** portar APIs e mixins por geração, recompilar
 para a JVM correspondente (Java 8, 16 ou 17), inicializar o jogo e testar
 conexões reais. Fabric 1.8–1.13 **fora de escopo**.
 
-**Paper 1.8–1.19.3:** requires porto do núcleo e autenticação para
+**Paper 1.8–1.19.1:** requer portabilidade do núcleo e autenticação para
 Java 8/11/16/17, dependendo da versão histórica do servidor. Não é correto
 distribuir um mesmo JAR moderno renomeado para essas versões.
 
-**Paper 1.20.5:** corrigir resolução das dependências históricas, compilar,
+**Paper 1.20.5:** dependências históricas resolvidas na compilação; falta verificar o carregamento em servidor real,
 executar o servidor de teste e validar.
 
 Versões 1.21+/26.x existentes foram preservadas, mas precisam de uma matriz

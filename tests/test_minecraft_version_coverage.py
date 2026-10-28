@@ -19,7 +19,7 @@ class VersionCoverageTest(unittest.TestCase):
                              "not-targeted-no-fabric-before-1.14")
 
     def test_experimental_java21_is_not_release(self):
-        for version in ("1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"):
+        for version in ("1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"):
             state = coverage.classify(version)
             self.assertEqual(state["fabric"], "experimental-java17-build-verified-runtime-untested")
             self.assertEqual(state["paper"], "experimental-java17-build-verified-runtime-untested")
@@ -39,7 +39,7 @@ class VersionCoverageTest(unittest.TestCase):
         self.assertEqual(coverage.classify("1.20.6")["paper"],
                          "development-build-verified")
         self.assertEqual(coverage.classify("1.20.5")["paper"],
-                         "blocked-legacy-api-dependency")
+                         "development-build-verified")
 
     def test_minecraft_paper_121(self):
         self.assertEqual(coverage.classify("1.21.11")["paper"],

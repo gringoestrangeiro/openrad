@@ -11,11 +11,33 @@ version = "2.1.5"
 // Shared runtime includes the 2.1.5 CPU/RAM and peer-presence fixes.
 // Only the Paper API and Java target vary by build.
 val paperApi = providers.gradleProperty("openradPaperApi").orElse("1.20.6-R0.1-SNAPSHOT").get()
-val bytecodeJava = if (paperApi.startsWith("26.")) 25 else if (paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) 17 else 21
+val bytecodeJava = if (paperApi.startsWith("26.")) 25 else if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) 17 else 21
 
 repositories {
+    // Paper 1.20.5 imports a historical Adventure BOM snapshot that disappeared
+    // from the default repositories. Mirror only that metadata-only module.
+    if (paperApi.startsWith("1.20.5-")) {
+        maven("https://repo.stellardrift.ca/maven/snapshots/") {
+            content { includeModule("net.kyori", "adventure-bom") }
+        }
+    }
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
+}
+
+// The April 2024 Paper API references Adventure 4.17.0 snapshots that are
+// no longer hosted. The BOM comes from its archived POM; substitute the May
+// 2024 final 4.17.0 artifacts for non-BOM runtime API dependencies only.
+if (paperApi.startsWith("1.20.5-")) {
+    configurations.configureEach {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "net.kyori" && requested.name != "adventure-bom"
+                    && requested.version == "4.17.0-SNAPSHOT") {
+                useVersion("4.17.0")
+                because("Paper 1.20.5 snapshot modules no longer published")
+            }
+        }
+    }
 }
 
 dependencies {
@@ -29,6 +51,24 @@ dependencies {
 java {
     withSourcesJar()
     toolchain.languageVersion.set(JavaLanguageVersion.of(if (bytecodeJava == 17) 25 else bytecodeJava))
+}
+
+// Paper 1.19.2 predates JavaPlugin#getPluginMeta. Generate a legacy-only
+// source copy so the current versions keep using the newer Paper API.
+if (paperApi.startsWith("1.19.2-")) {
+    val legacySources = layout.buildDirectory.dir("generated/java1192")
+    val generateLegacy1192 by tasks.registering(Copy::class) {
+        from("src/main/java")
+        into(legacySources)
+        filteringCharset = "UTF-8"
+        filesMatching("**/OpenRadPlugin.java") {
+            filter { line: String ->
+                line.replace("getPluginMeta().getVersion()", "getDescription().getVersion()")
+            }
+        }
+    }
+    sourceSets.main { java.setSrcDirs(listOf(legacySources.get().asFile)) }
+    tasks.named<JavaCompile>("compileJava") { dependsOn(generateLegacy1192) }
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -55,9 +95,9 @@ tasks.test {
 // Paper 1.20.3-1.20.4 do not recognize the newer 1.20.6 API-version string.
 tasks.processResources {
     inputs.property("openradTargetPaperApi", paperApi)
-    if (paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) {
+    if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-") || paperApi.startsWith("1.20.1-") || paperApi.startsWith("1.20.2-") || paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-") || paperApi.startsWith("1.20.5-")) {
         filesMatching("plugin.yml") {
-            filter { line: String -> line.replace("api-version: '1.20.6'", if (paperApi.startsWith("1.19.4-")) "api-version: '1.19'" else "api-version: '1.20'") }
+            filter { line: String -> line.replace("api-version: '1.20.6'", if (paperApi.startsWith("1.19.2-") || paperApi.startsWith("1.19.3-") || paperApi.startsWith("1.19.4-")) "api-version: '1.19'" else if (paperApi.startsWith("1.20.5-")) "api-version: '1.20.5'" else "api-version: '1.20'") }
         }
     }
 }

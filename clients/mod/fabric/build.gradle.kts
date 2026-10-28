@@ -2,12 +2,14 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.19.2" to "0.77.0+1.19.2",
+    "1.19.3" to "0.76.1+1.19.3",
     "1.19.4" to "0.87.2+1.19.4",
     "1.20.1" to "0.92.12+1.20.1",
     "1.20.2" to "0.91.6+1.20.2",
@@ -49,18 +51,42 @@ sourceSets.main {
 }
 // Minecraft 1.19.4 uses PoseStack in Screen.render rather than GuiGraphics.
 // Generate a source-only compatibility copy; never modify new-version UI sources.
-if (minecraftTarget == "1.19.4") {
+if (minecraftTarget in setOf("1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
-    val generate1194 by tasks.registering(Copy::class) {
-        inputs.property("compatibilityAdapterVersion", "1194-v2")
+    val generate1194 by tasks.registering(Sync::class) {
+        inputs.property("compatibilityAdapterVersion", "1192-v5")
         from("src/main/java")
         into(generated1194)
         filteringCharset = "UTF-8"
+        if (minecraftTarget == "1.19.2") {
+            exclude("**/mixin/MultiplayerScreenMixin.java")
+            filesMatching("**/*.java") {
+                filter { line: String ->
+                    line.replace("Button.builder(", "LegacyButtonFactory.builder(")
+                        .replace("import net.minecraft.client.gui.components.Tooltip;", "// Tooltip was introduced after Minecraft 1.19.2")
+                        .replace("save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr(\"openrad.menu.reconnect_note\")) : null);", ";")
+                        .replace("option.setTooltip(Tooltip.create(Component.literal(item.entry().name())));", ";")
+                        .replace("ScreenEvents.afterTick(screen).register(ignored -> button.setTooltip(Tooltip.create(", "/* Legacy 1.19.2 has no dynamic Tooltip API")
+                        .replace("OpenRadI18n.tr(\"openrad.menu.status\", phase(controller.status().phase())))));", "*/")
+                        .replace("box.getX()", "box.x")
+                        .replace("box.getY()", "box.y")
+                }
+            }
+        }
         // Mixin uses a different static connection entrypoint before MC 1.20.
         filesMatching("**/ConnectionMixin.java") {
             filter { line: String ->
                 line.replace("connect(Ljava/net/InetSocketAddress;ZLnet/minecraft/network/Connection;)Lio/netty/channel/ChannelFuture;",
                     "connectToServer(Ljava/net/InetSocketAddress;Z)Lnet/minecraft/network/Connection;")
+            }
+        }
+        // 1.19.3 returns a LanguageInfo rather than a locale String.
+        if (minecraftTarget in setOf("1.19.2", "1.19.3")) {
+            filesMatching("**/OpenRad*Screen.java") {
+                filter { line: String ->
+                    line.replace("minecraft.getLanguageManager().getSelected()",
+                        "minecraft.getLanguageManager().getSelected().getCode()")
+                }
             }
         }
         filesMatching("**/OpenRad*Screen.java") {
@@ -73,7 +99,9 @@ if (minecraftTarget == "1.19.4") {
         }
     }
     sourceSets.main {
-        java.setSrcDirs(listOf(generated1194.get().asFile, file("../core/src/main/java")))
+        val legacyRoots = mutableListOf(generated1194.get().asFile, file("../core/src/main/java"))
+        if (minecraftTarget == "1.19.2") legacyRoots.add(file("src/compat1192/java"))
+        java.setSrcDirs(legacyRoots)
     }
     tasks.named<JavaCompile>("compileJava") { dependsOn(generate1194) }
 }
