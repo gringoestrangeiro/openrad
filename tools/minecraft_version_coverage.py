@@ -26,7 +26,9 @@ def classify(version):
         raise ValueError("Not a stable Minecraft Java release within 1.8..26.3")
     if version in FABRIC_RELEASES:
         fabric = "published-build-verified"
-    elif version in {"1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"}:
+    elif version == "1.17.1":
+        fabric = "experimental-java16-build-verified-runtime-untested"
+    elif version in {"1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"}:
         fabric = "experimental-java17-build-verified-runtime-untested"
     elif version in {"1.20.5", "1.20.6"}:
         fabric = "development-build-verified"
@@ -36,6 +38,8 @@ def classify(version):
         fabric = "requires-game-api-and-java-port"
     if version in PAPER_EXACT_BUILDS:
         paper = "published-build-verified"
+    elif version == "1.17.1":
+        paper = "experimental-java16-build-verified-runtime-untested"
     elif parsed >= (1, 21, 0) and parsed < (26, 0, 0):
         paper = "paper-line-build-needs-runtime-test"
     elif version in {"1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4"}:

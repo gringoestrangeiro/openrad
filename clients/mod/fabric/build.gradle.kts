@@ -2,12 +2,16 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
-java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
+val legacyJava16 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() == "1.17.1"
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
+java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava16 || legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.17.1" to "0.46.1+1.17",
+    "1.18" to "0.46.6+1.18",
+    "1.18.1" to "0.46.6+1.18",
     "1.18.2" to "0.59.1+1.18.2",
     "1.19" to "0.58.0+1.19",
     "1.19.1" to "0.58.5+1.19.1",
@@ -54,14 +58,14 @@ sourceSets.main {
 }
 // Minecraft 1.19.4 uses PoseStack in Screen.render rather than GuiGraphics.
 // Generate a source-only compatibility copy; never modify new-version UI sources.
-if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
+if (minecraftTarget in setOf("1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
         inputs.property("compatibilityAdapterVersion", "1182-v3")
         from("src/main/java")
         into(generated1194)
         filteringCharset = "UTF-8"
-        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2")) {
+        if (minecraftTarget in setOf("1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2")) {
             exclude("**/mixin/MultiplayerScreenMixin.java")
             filesMatching("**/*.java") {
                 filter { line: String ->
@@ -76,7 +80,7 @@ if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.
                 }
             }
         }
-        if (minecraftTarget == "1.18.2") {
+        if (minecraftTarget in setOf("1.17.1", "1.18", "1.18.1", "1.18.2")) {
             filesMatching("**/*.java") {
                 filter { source: String ->
                     source.replace("Component.literal(", "new net.minecraft.network.chat.TextComponent(")
@@ -98,7 +102,7 @@ if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.
             }
         }
         // 1.19.3 returns a LanguageInfo rather than a locale String.
-        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3")) {
+        if (minecraftTarget in setOf("1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3")) {
             filesMatching("**/OpenRad*Screen.java") {
                 filter { line: String ->
                     line.replace("minecraft.getLanguageManager().getSelected()",
@@ -115,26 +119,52 @@ if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.
             }
         }
     }
+    val generateCore1171 = if (minecraftTarget == "1.17.1") {
+        tasks.register<Sync>("generateCore1171") {
+            from("../core/src/main/java")
+            from("../../plugin/src/compat16/java") { include("**/util/HexFormatCompat.java") }
+            into(layout.buildDirectory.dir("generated/core1171"))
+            filteringCharset = "UTF-8"
+            inputs.property("openradCoreCompatVersion", "java16-v1")
+            filesMatching("**/*.java") {
+                filter { line: String ->
+                    line.replace("import java.util.HexFormat;", "import io.github.gringoestrangeiro.openradplugin.util.HexFormatCompat;")
+                        .replace("java.util.HexFormat.of()", "io.github.gringoestrangeiro.openradplugin.util.HexFormatCompat.of()")
+                        .replace("HexFormat.of()", "HexFormatCompat.of()")
+                        .replace("public sealed interface Packet permits Frames, Keepalive, Other {}", "public interface Packet {}")
+                        .replace("public sealed interface Result permits Rejected, ArpResponse, AdmittedTcp {}", "public interface Result {}")
+                        .replace("import java.util.random.RandomGenerator;", "import java.util.Random;")
+                        .replace("RandomGenerator random", "Random random")
+                }
+            }
+        }
+    } else null
     sourceSets.main {
-        val legacyRoots = mutableListOf(generated1194.get().asFile, file("../core/src/main/java"))
-        if (minecraftTarget in setOf("1.18.2", "1.19", "1.19.1", "1.19.2")) legacyRoots.add(file("src/compat1192/java"))
+        val legacyRoots = mutableListOf(generated1194.get().asFile)
+        if (generateCore1171 != null) legacyRoots.add(layout.buildDirectory.dir("generated/core1171").get().asFile)
+        else legacyRoots.add(file("../core/src/main/java"))
+        if (minecraftTarget in setOf("1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2")) legacyRoots.add(file("src/compat1192/java"))
         java.setSrcDirs(legacyRoots)
     }
-    tasks.named<JavaCompile>("compileJava") { dependsOn(generate1194) }
+    tasks.named<JavaCompile>("compileJava") {
+        dependsOn(generate1194)
+        if (generateCore1171 != null) dependsOn(generateCore1171)
+    }
 }
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(if (legacyJava17) 17 else 21)
+    options.release.set(if (legacyJava16) 16 else if (legacyJava17) 17 else 21)
     options.encoding = "UTF-8"
 }
 tasks.named<JavaCompile>("compileTestJava") {
-    if (legacyJava17) options.release.set(21)
+    if (legacyJava16 || legacyJava17) options.release.set(21)
 }
 tasks.processResources {
     // Track the version as a task input so Gradle refreshes fabric.mod.json on updates.
     inputs.property("openradModVersion", project.version.toString())
     inputs.property("openradMinecraftVersion", minecraftTarget)
+    inputs.property("openradTargetJavaVersion", if (legacyJava16) 16 else if (legacyJava17) 17 else 21)
     filesMatching("fabric.mod.json") {
-        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget, "javaVersion" to (if (legacyJava17) 17 else 21))
+        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget, "javaVersion" to (if (legacyJava16) 16 else if (legacyJava17) 17 else 21))
     }
     val newerRouting = minecraftTarget == "1.21.11"
     inputs.property("openradRouteMixin", newerRouting)

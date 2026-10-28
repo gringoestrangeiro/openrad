@@ -1,15 +1,15 @@
-param([string[]]$Targets = @('1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5','1.20.6','1.21','26.1.1','26.1.2','26.2','26.3'))
+param([string[]]$Targets = @('1.17.1','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5','1.20.6','1.21','26.1.1','26.1.2','26.2','26.3'))
 $ErrorActionPreference='Stop'
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $dest = Join-Path $root 'release'
 New-Item -ItemType Directory -Force $dest | Out-Null
-$known=@{'1.18.2'='1.18.2-R0.1-SNAPSHOT';'1.19'='1.19-R0.1-SNAPSHOT';'1.19.1'='1.19.1-R0.1-SNAPSHOT';'1.19.2'='1.19.2-R0.1-SNAPSHOT';'1.19.3'='1.19.3-R0.1-SNAPSHOT';'1.19.4'='1.19.4-R0.1-SNAPSHOT';'1.20.1'='1.20.1-R0.1-SNAPSHOT';'1.20.2'='1.20.2-R0.1-SNAPSHOT';'1.20.3'='1.20.3-R0.1-SNAPSHOT';'1.20.4'='1.20.4-R0.1-SNAPSHOT';'1.20.5'='1.20.5-R0.1-SNAPSHOT';'1.20.6'='1.20.6-R0.1-SNAPSHOT';'1.21'='1.20.6-R0.1-SNAPSHOT';'26.1.1'='26.1.1.build.+';'26.1.2'='26.1.2.build.+';'26.2'='26.2.build.+';'26.3'='26.3.build.+'}
+$known=@{'1.17.1'='1.17.1-R0.1-SNAPSHOT';'1.18.1'='1.18.1-R0.1-SNAPSHOT';'1.18.2'='1.18.2-R0.1-SNAPSHOT';'1.19'='1.19-R0.1-SNAPSHOT';'1.19.1'='1.19.1-R0.1-SNAPSHOT';'1.19.2'='1.19.2-R0.1-SNAPSHOT';'1.19.3'='1.19.3-R0.1-SNAPSHOT';'1.19.4'='1.19.4-R0.1-SNAPSHOT';'1.20.1'='1.20.1-R0.1-SNAPSHOT';'1.20.2'='1.20.2-R0.1-SNAPSHOT';'1.20.3'='1.20.3-R0.1-SNAPSHOT';'1.20.4'='1.20.4-R0.1-SNAPSHOT';'1.20.5'='1.20.5-R0.1-SNAPSHOT';'1.20.6'='1.20.6-R0.1-SNAPSHOT';'1.21'='1.20.6-R0.1-SNAPSHOT';'26.1.1'='26.1.1.build.+';'26.1.2'='26.1.2.build.+';'26.2'='26.2.build.+';'26.3'='26.3.build.+'}
 $results=@()
 foreach($target in $Targets){
   if(-not $known.ContainsKey($target)){throw "Unsupported Paper target: $target"}
-  $java=if($target -in @('1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.5','1.20.6','1.21')){21}else{25}
-  $name=if($target -in @("1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
-  $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -in @('1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5'));runtimeValidated=$false;jar=$null;sha256=$null;error=$null}
+  $java=if($target -eq '1.17.1'){16}elseif($target -in @('1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.5','1.20.6','1.21')){21}else{25}
+  $name=if($target -in @("1.17.1", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
+  $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -in @('1.17.1','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5'));runtimeValidated=$false;jar=$null;sha256=$null;error=$null}
   Push-Location $root
   try {
     & '.\gradlew.bat' --no-daemon --max-workers=1 "-PopenradPaperApi=$($known[$target])" ':check' '--console=plain'

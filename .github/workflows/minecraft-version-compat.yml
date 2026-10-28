@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        minecraft: ['1.18.2', '1.19', '1.19.1', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6']
+        minecraft: ['1.17.1', '1.18.1', '1.18.2', '1.19', '1.19.1', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -66,6 +66,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - minecraft: '1.17.1'
+            api: '1.17.1-R0.1-SNAPSHOT'
+            java: 16
+          - minecraft: '1.18.1'
+            api: '1.18.1-R0.1-SNAPSHOT'
+            java: 17
           - minecraft: '1.18.2'
             api: '1.18.2-R0.1-SNAPSHOT'
             java: 17
@@ -131,7 +137,7 @@ jobs:
               major = struct.unpack('>H',data[6:8])[0]
               assert major == expected_java + 44, (major, expected_java)
               yml = jar.read('plugin.yml').decode('utf-8')
-              expected_api = ('1.18' if os.environ['MC_TARGET'] == '1.18.2' else ('1.19' if os.environ['MC_TARGET'].startswith('1.19') else ('1.20.5' if os.environ['MC_TARGET'] == '1.20.5' else ('1.20' if expected_java == 17 else '1.20.6'))))
+              expected_api = ('1.17' if os.environ['MC_TARGET'] == '1.17.1' else ('1.18' if os.environ['MC_TARGET'] in ('1.18.1', '1.18.2') else ('1.19' if os.environ['MC_TARGET'].startswith('1.19') else ('1.20.5' if os.environ['MC_TARGET'] == '1.20.5' else ('1.20' if expected_java == 17 else '1.20.6')))))
               assert f"api-version: '{expected_api}'" in yml
               print('Paper metadata verified:', os.environ['MC_TARGET'], 'Java', expected_java)
           PY
