@@ -33,6 +33,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
 
   fabric:
     name: Fabric ${{ matrix.minecraft }}
@@ -41,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        minecraft: ['1.17', '1.17.1', '1.18', '1.18.1', '1.18.2', '1.19', '1.19.1', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6']
+        minecraft: ['1.17', '1.17.1', '1.18', '1.18.1', '1.18.2', '1.19', '1.19.1', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6', '1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.1', '26.1.2', '26.2', '26.3']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -51,13 +52,47 @@ jobs:
             21
             25
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compile, remap, and test exact Minecraft target
+      - name: Compile, remap and test regular Fabric target
+        if: ${{ !startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod
         run: |
           ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" :core:test :fabric:build :fabric:test --console=plain
-      - name: Verify exact game version, Java bytecode, mixins and metadata
+      - name: Verify regular Fabric version, bytecode, mixins and metadata
+        if: ${{ !startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod
         run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.2.0.jar "${{ matrix.minecraft }}" 2.2.0
+      - name: Compile and test modern Fabric on Java 25
+        if: ${{ startsWith(matrix.minecraft, '26.') }}
+        working-directory: clients/mod/modern
+        run: |
+          ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" build --console=plain
+      - name: Verify modern Fabric version, bytecode, mixins and metadata
+        if: ${{ startsWith(matrix.minecraft, '26.') }}
+        run: |
+          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.2.0
+
+      - name: Stage version-specific verified Fabric JAR and checksum
+        shell: bash
+        env:
+          MC: ${{ matrix.minecraft }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/minecraft/fabric
+          if [[ "$MC" == 26.* ]]; then
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-$MC.jar"
+          else
+            source="clients/mod/fabric/build/libs/fabric-2.2.0.jar"
+          fi
+          test -s "$source"
+          output="dist/minecraft/fabric/OpenRadClientMod-2.2.0-fabric-$MC.jar"
+          cp "$source" "$output"
+          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.2.0-fabric-$MC.jar" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified
+          path: dist/minecraft/fabric/
+          if-no-files-found: error
+          retention-days: 14
 
   paper:
     name: Paper ${{ matrix.minecraft }}
@@ -115,6 +150,21 @@ jobs:
           - minecraft: '1.20.6'
             api: '1.20.6-R0.1-SNAPSHOT'
             java: 21
+          - minecraft: '1.21'
+            api: '1.20.6-R0.1-SNAPSHOT'
+            java: 21
+          - minecraft: '26.1.1'
+            api: '26.1.1.build.+'
+            java: 25
+          - minecraft: '26.1.2'
+            api: '26.1.2.build.+'
+            java: 25
+          - minecraft: '26.2'
+            api: '26.2.build.+'
+            java: 25
+          - minecraft: '26.3'
+            api: '26.3.build.+'
+            java: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -161,4 +211,24 @@ jobs:
           "$JAVA_HOME_17_X64/bin/java" -cp "build/libs/OpenRadPlugin.jar:build/java17Smoke" \
             io.github.gringoestrangeiro.openradplugin.util.Java17ThreadCompatSmoke
 
+
+      - name: Stage version-specific verified Paper JAR and checksum
+        shell: bash
+        env:
+          MC: ${{ matrix.minecraft }}
+          JAVA: ${{ matrix.java }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/minecraft/paper
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-paper-${{ matrix.minecraft }}-verified
+          path: dist/minecraft/paper/
+          if-no-files-found: error
+          retention-days: 14
+
+# This matrix checks all 33 configured Fabric targets and 21 Paper API targets
+# as individual jobs. It does not claim real multiplayer/VPN interoperability.
 # Verification is build-time only. This workflow never publishes JARs or releases.
