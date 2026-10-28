@@ -13,6 +13,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Locale files load without executing Minecraft; Minecraft shows en_us for any missing key. */
 class OpenRadLanguageResourcesTest {
+    @Test void mixinCompatibilityMatchesTheDeclaredJavaRuntime() throws Exception {
+        var loader = getClass().getClassLoader();
+        try (var metadata = loader.getResourceAsStream("fabric.mod.json");
+             var mixins = loader.getResourceAsStream("openrad-client.mixins.json")) {
+            assertNotNull(metadata);
+            assertNotNull(mixins);
+            var mod = new JsonParser().parse(new InputStreamReader(metadata, StandardCharsets.UTF_8)).getAsJsonObject();
+            var config = new JsonParser().parse(new InputStreamReader(mixins, StandardCharsets.UTF_8)).getAsJsonObject();
+            String java = mod.getAsJsonObject("depends").get("java").getAsString();
+            assertTrue(java.startsWith(">="));
+            assertEquals("JAVA_" + java.substring(2), config.get("compatibilityLevel").getAsString());
+        }
+    }
+
     private JsonObject load(String locale) throws Exception {
         String resource = "assets/openrad-client/lang/" + locale + ".json";
         try (var input = getClass().getClassLoader().getResourceAsStream(resource)) {

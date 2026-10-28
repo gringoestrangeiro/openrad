@@ -63,6 +63,9 @@ if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
         inputs.property("compatibilityAdapterVersion", "1182-v3")
+        // Filters differ across 1.17/1.18, 1.19.2 and 1.19.3/4. Without this
+        // input a matrix build can reuse source transformed for the prior target.
+        inputs.property("minecraftTarget", minecraftTarget)
         from("src/main/java")
         into(generated1194)
         filteringCharset = "UTF-8"
@@ -170,7 +173,8 @@ tasks.processResources {
     val newerRouting = minecraftTarget == "1.21.11"
     inputs.property("openradRouteMixin", newerRouting)
     filesMatching("openrad-client.mixins.json") {
-        expand("connectionMixin" to (if (newerRouting) "ConnectionRoutingMixin" else "ConnectionMixin"))
+        expand("connectionMixin" to (if (newerRouting) "ConnectionRoutingMixin" else "ConnectionMixin"),
+            "javaVersion" to (if (legacyJava16) 16 else if (legacyJava17) 17 else 21))
     }
 }
 tasks.jar { from("../LICENSE") { into("META-INF") } }
