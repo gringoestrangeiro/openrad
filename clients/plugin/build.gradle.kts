@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "io.github.gringoestrangeiro"
-version = "2.1.5"
+version = "2.1.6"
 
 // Shared runtime includes the 2.1.5 CPU/RAM and peer-presence fixes.
 // Only the Paper API and Java target vary by build.

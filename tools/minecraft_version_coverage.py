@@ -79,7 +79,7 @@ def main():
         versions = stable_versions(manifest)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
-    result = {"baseVersion": "2.1.5",
+    result = {"baseVersion": "2.1.6",
               "sourceManifest": MOJANG_MANIFEST,
               "range": ["1.8", "26.3"],
               "warning": "Build verified does not mean tested with real Minecraft or Radmin peers.",

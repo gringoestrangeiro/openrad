@@ -3,7 +3,7 @@ plugins {
     java
 }
 group = "io.github.gringoestrangeiro"
-version = "2.1.5"
+version = "2.1.6"
 val target = providers.gradleProperty("openradMinecraftVersion").orElse("26.3").get()
 val apis = mapOf(
     "26.1" to "0.145.1+26.1",
@@ -37,6 +37,6 @@ tasks.processResources {
     }
 }
 tasks.jar {
-    archiveFileName.set("OpenRadClientMod-2.1.5-modern-$target.jar")
+    archiveFileName.set("OpenRadClientMod-2.1.6-modern-$target.jar")
     from("../LICENSE") { into("META-INF") }
 }

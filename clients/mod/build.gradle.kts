@@ -1,2 +1,2 @@
 plugins { base }
-allprojects { group = "io.github.gringoestrangeiro"; version = "2.1.5" }
+allprojects { group = "io.github.gringoestrangeiro"; version = "2.1.6" }

@@ -1,21 +1,21 @@
-name: Minecraft mod and multiversion Paper (2.1.5)
+name: Minecraft mod and multiversion Paper (2.1.6)
 
 on:
   push:
     branches:
-      - 'feature/2.1.5-minecraft-mod-paper'
-      - 'release/2.1.5'
+      - 'release/2.1.6-candidates'
+      - 'release/2.1.6'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
-      - '.github/workflows/minecraft-2.1.5-integration.yml'
+      - '.github/workflows/minecraft-2.1.6-integration.yml'
   pull_request:
     branches:
-      - 'release/2.1.5'
+      - 'release/2.1.6'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
-      - '.github/workflows/minecraft-2.1.5-integration.yml'
+      - '.github/workflows/minecraft-2.1.6-integration.yml'
   workflow_dispatch:
 
 permissions:
@@ -54,11 +54,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../../dist/paper
-          cp build/libs/OpenRadPlugin.jar "../../dist/paper/OpenRadPlugin-2.1.5-paper-${{ matrix.target }}-java${{ matrix.java }}.jar"
+          cp build/libs/OpenRadPlugin.jar "../../dist/paper/OpenRadPlugin-2.1.6-paper-${{ matrix.target }}-java${{ matrix.java }}.jar"
           (cd ../../dist/paper && sha256sum *.jar > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: paper-2.1.5-${{ matrix.target }}-build-test
+          name: paper-2.1.6-${{ matrix.target }}-build-test
           path: dist/paper/
           if-no-files-found: error
           retention-days: 7
@@ -103,17 +103,17 @@ jobs:
           set -euo pipefail
           mkdir -p dist/fabric
           if [ "$MODERN" = true ]; then
-            source="clients/mod/modern/build/libs/OpenRadClientMod-2.1.5-modern-$MC.jar"
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.1.6-modern-$MC.jar"
           else
-            source="clients/mod/fabric/build/libs/fabric-2.1.5.jar"
+            source="clients/mod/fabric/build/libs/fabric-2.1.6.jar"
           fi
           test -s "$source"
-          python3 clients/mod/tools/verify-version-jar.py "$source" "$MC" 2.1.5
-          cp "$source" "dist/fabric/OpenRadClientMod-2.1.5-fabric-$MC.jar"
+          python3 clients/mod/tools/verify-version-jar.py "$source" "$MC" 2.1.6
+          cp "$source" "dist/fabric/OpenRadClientMod-2.1.6-fabric-$MC.jar"
           (cd dist/fabric && sha256sum *.jar > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: fabric-2.1.5-${{ matrix.target }}-build-test
+          name: fabric-2.1.6-${{ matrix.target }}-build-test
           path: dist/fabric/
           if-no-files-found: error
           retention-days: 7

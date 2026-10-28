@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'
+      - 'release/2.1.6-candidates'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
@@ -56,7 +57,7 @@ jobs:
           ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" :core:test :fabric:build :fabric:test --console=plain
       - name: Verify exact game version, Java bytecode, mixins and metadata
         working-directory: clients/mod
-        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.1.5.jar "${{ matrix.minecraft }}" 2.1.5
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.1.6.jar "${{ matrix.minecraft }}" 2.1.6
 
   paper:
     name: Paper ${{ matrix.minecraft }}

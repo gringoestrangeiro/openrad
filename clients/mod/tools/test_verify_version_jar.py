@@ -16,7 +16,7 @@ class VerifyVersionJarTest(unittest.TestCase):
     def fixture(self, directory, compatibility="JAVA_17", extra_major=61):
         jar = Path(directory) / "synthetic.jar"
         with zipfile.ZipFile(jar, "w") as z:
-            z.writestr("fabric.mod.json", json.dumps({"version": "2.1.5", "environment": "client",
+            z.writestr("fabric.mod.json", json.dumps({"version": "2.1.6", "environment": "client",
                 "depends": {"minecraft": "1.18.2", "java": ">=17"}}))
             z.writestr("openrad-client.mixins.json", json.dumps({"package": "synthetic",
                 "client": [], "compatibilityLevel": compatibility}))
@@ -29,17 +29,17 @@ class VerifyVersionJarTest(unittest.TestCase):
 
     def test_accepts_matching_legacy_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
-            verifier.verify(self.fixture(directory), "1.18.2", "2.1.5")
+            verifier.verify(self.fixture(directory), "1.18.2", "2.1.6")
 
     def test_rejects_newer_mixin_compatibility(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "mixin Java compatibility"):
-                verifier.verify(self.fixture(directory, compatibility="JAVA_21"), "1.18.2", "2.1.5")
+                verifier.verify(self.fixture(directory, compatibility="JAVA_21"), "1.18.2", "2.1.6")
 
     def test_checks_additional_classes_not_only_entrypoints(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "bytecode major"):
-                verifier.verify(self.fixture(directory, extra_major=65), "1.18.2", "2.1.5")
+                verifier.verify(self.fixture(directory, extra_major=65), "1.18.2", "2.1.6")
 
 
 if __name__ == "__main__":

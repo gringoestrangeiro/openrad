@@ -1,3 +1,7 @@
+> **Candidata 2.1.6 (ainda nao publicada):** corrige testes e metadados de
+> compatibilidade. Consulte [notas 2.1.6](../../docs/releases/2.1.6.md);
+> versoes de Minecraft continuam **alpha** e o build nao comprova gameplay.
+
 > **Download (2.1.5, alpha):** [release 2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5),
 > arquivos `OpenRadClientMod-2.1.5-fabric-<versão>.jar` para Minecraft 1.21–1.21.11 (Java 21)
 > e 26.1–26.3 (Java 25). Instale **um** JAR, da versão exata do seu jogo, com a Fabric API.
