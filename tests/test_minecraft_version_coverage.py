@@ -19,7 +19,7 @@ class VersionCoverageTest(unittest.TestCase):
                              "not-targeted-no-fabric-before-1.14")
 
     def test_experimental_java21_is_not_release(self):
-        for version in ("1.20.2", "1.20.3", "1.20.4"):
+        for version in ("1.20.1", "1.20.2", "1.20.3", "1.20.4"):
             state = coverage.classify(version)
             self.assertEqual(state["fabric"], "experimental-java17-build-verified-runtime-untested")
             self.assertEqual(state["paper"], "experimental-java17-build-verified-runtime-untested")

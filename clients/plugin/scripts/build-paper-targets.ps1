@@ -1,14 +1,14 @@
-param([string[]]$Targets = @('1.20.2','1.20.3','1.20.4','1.20.6','1.21','26.1.1','26.1.2','26.2','26.3'))
+param([string[]]$Targets = @('1.20.1','1.20.2','1.20.3','1.20.4','1.20.6','1.21','26.1.1','26.1.2','26.2','26.3'))
 $ErrorActionPreference='Stop'
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $dest = Join-Path $root 'release'
 New-Item -ItemType Directory -Force $dest | Out-Null
-$known=@{'1.20.2'='1.20.2-R0.1-SNAPSHOT';'1.20.3'='1.20.3-R0.1-SNAPSHOT';'1.20.4'='1.20.4-R0.1-SNAPSHOT';'1.20.6'='1.20.6-R0.1-SNAPSHOT';'1.21'='1.20.6-R0.1-SNAPSHOT';'26.1.1'='26.1.1.build.+';'26.1.2'='26.1.2.build.+';'26.2'='26.2.build.+';'26.3'='26.3.build.+'}
+$known=@{'1.20.1'='1.20.1-R0.1-SNAPSHOT';'1.20.2'='1.20.2-R0.1-SNAPSHOT';'1.20.3'='1.20.3-R0.1-SNAPSHOT';'1.20.4'='1.20.4-R0.1-SNAPSHOT';'1.20.6'='1.20.6-R0.1-SNAPSHOT';'1.21'='1.20.6-R0.1-SNAPSHOT';'26.1.1'='26.1.1.build.+';'26.1.2'='26.1.2.build.+';'26.2'='26.2.build.+';'26.3'='26.3.build.+'}
 $results=@()
 foreach($target in $Targets){
   if(-not $known.ContainsKey($target)){throw "Unsupported Paper target: $target"}
-  $java=if($target -in @('1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.6','1.21')){21}else{25}
-  $name=if($target -in @("1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
+  $java=if($target -in @('1.20.1','1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.6','1.21')){21}else{25}
+  $name=if($target -in @("1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
   $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -eq '1.20.4');runtimeValidated=$false;jar=$null;sha256=$null}
   Push-Location $root
   try {

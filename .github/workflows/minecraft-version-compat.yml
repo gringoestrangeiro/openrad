@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        minecraft: ['1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6']
+        minecraft: ['1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -66,6 +66,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - minecraft: '1.20.1'
+            api: '1.20.1-R0.1-SNAPSHOT'
+            java: 17
           - minecraft: '1.20.2'
             api: '1.20.2-R0.1-SNAPSHOT'
             java: 17
