@@ -1,6 +1,6 @@
 param(
     [string[]]$Targets = @(
-        '1.20.3','1.20.4','1.20.5','1.20.6',
+        '1.20.2','1.20.3','1.20.4','1.20.5','1.20.6',
         '1.21','1.21.1','1.21.2','1.21.3','1.21.4',
         '1.21.5','1.21.6','1.21.7','1.21.8',
         '1.21.9','1.21.10','1.21.11',
@@ -10,11 +10,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$legacy=@('1.20.3','1.20.4','1.20.5','1.20.6','1.21','1.21.1','1.21.2','1.21.3','1.21.4',
+$legacy=@('1.20.2','1.20.3','1.20.4','1.20.5','1.20.6','1.21','1.21.1','1.21.2','1.21.3','1.21.4',
           '1.21.5','1.21.6','1.21.7','1.21.8','1.21.9','1.21.10','1.21.11')
 $modern=@('26.1','26.1.1','26.1.2','26.2','26.3')
 $approved=$legacy+$modern
-$report=Join-Path $root 'release\OpenRad-1.20.3-to-26.3-build-status.json'
+$report=Join-Path $root 'release\OpenRad-1.20.2-to-26.3-build-status.json'
 New-Item -ItemType Directory -Path (Join-Path $root 'release') -Force | Out-Null
 $results = [System.Collections.Generic.List[object]]::new()
 foreach($target in $Targets){
@@ -24,15 +24,15 @@ foreach($target in $Targets){
     $isModern=$target -in $modern
     $modVersion='2.1.5'
     $buildDir=if($isModern){Join-Path $root 'modern'}else{$root}
-    $jarName=if($target -in @("1.20.3", "1.20.4")){"OpenRadClientMod-$modVersion-fabric-$target-java17-experimental.jar"}else{"OpenRadClientMod-$modVersion-fabric-$target.jar"}
+    $jarName=if($target -in @("1.20.2", "1.20.3", "1.20.4")){"OpenRadClientMod-$modVersion-fabric-$target-java17-experimental.jar"}else{"OpenRadClientMod-$modVersion-fabric-$target.jar"}
     $jar=Join-Path $root "release\$jarName"
     $source=if($isModern){
       Join-Path $root "modern\build\libs\OpenRadClientMod-$modVersion-modern-$target.jar"
     }else{
       Join-Path $root "fabric\build\libs\fabric-$modVersion.jar"
     }
-    $item=[ordered]@{minecraft=$target;java=if($isModern){25}elseif($target -in @("1.20.3","1.20.4")){17}else{21};
-      modVersion=$modVersion;status='NOT_TESTED';experimental=($target -in @('1.20.3','1.20.4'));runtimeValidated=$false;jar=$null;error=$null;sha256=$null}
+    $item=[ordered]@{minecraft=$target;java=if($isModern){25}elseif($target -in @("1.20.2","1.20.3","1.20.4")){17}else{21};
+      modVersion=$modVersion;status='NOT_TESTED';experimental=($target -in @('1.20.2','1.20.3','1.20.4'));runtimeValidated=$false;jar=$null;error=$null;sha256=$null}
     try{
         if((Test-Path $jar) -and -not $Rebuild){
             & python (Join-Path $root 'tools\verify-version-jar.py') $jar $target $modVersion

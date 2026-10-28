@@ -275,8 +275,8 @@
     },
     {
       "minecraft": "1.20.2",
-      "fabric": "requires-game-api-and-java-port",
-      "paper": "requires-paper-api-and-java-port"
+      "fabric": "experimental-java17-build-verified-runtime-untested",
+      "paper": "experimental-java17-build-verified-runtime-untested"
     },
     {
       "minecraft": "1.20.3",

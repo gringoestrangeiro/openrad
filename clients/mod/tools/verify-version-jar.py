@@ -36,7 +36,7 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             if len(bytecode) < 8 or bytecode[:4] != b"\xca\xfe\xba\xbe":
                 raise ValueError(f"Invalid Java class {name}")
             major = struct.unpack(">H", bytecode[6:8])[0]
-            expected_java = 25 if expected_minecraft.startswith("26.") else (17 if expected_minecraft in ("1.20.3", "1.20.4") else 21)
+            expected_java = 25 if expected_minecraft.startswith("26.") else (17 if expected_minecraft in ("1.20.2", "1.20.3", "1.20.4") else 21)
             expected_major = expected_java + 44
             if major != expected_major:
                 raise ValueError(f"Unexpected Java bytecode major {major}; expected {expected_major}")

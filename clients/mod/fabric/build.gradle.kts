@@ -2,12 +2,13 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.20.3", "1.20.4")
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.20.2", "1.20.3", "1.20.4")
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.20.2" to "0.91.6+1.20.2",
     "1.20.3" to "0.91.1+1.20.3",
     "1.20.4" to "0.97.3+1.20.4",
     "1.20.5" to "0.97.8+1.20.5",

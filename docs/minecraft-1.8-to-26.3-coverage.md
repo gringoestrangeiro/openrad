@@ -13,6 +13,7 @@ foi preservado em outra worktree, sem alterações.
 
 | Minecraft Java | Mod Fabric | Plugin Paper | Estado |
 | --- | --- | --- | --- |
+| 1.20.2 | Compilação, remapeamento, testes Java 17 verificados | API 1.20.2, Gradle check/test Java 17 verificados | **Experimental, sem teste de jogo/multiplayer** |
 | 1.20.3 | Compilação, remapeamento, testes e metadata Java 17 verificados | API 1.20.3, Gradle check/test, classes Java 17 e plugin.yml 1.20 verificados | **Experimental, sem startup/jogo ou multiplayer** |
 | 1.20.4 | Compilação, remapeamento, testes e metadata Java 17 verificados | API 1.20.4, Gradle check/test, classes Java 17 e plugin.yml 1.20 verificados | **Experimental, sem startup/jogo ou multiplayer** |
 | 1.20.5 | Compilação, remapeamento e testes Java 21 verificados | **Bloqueado:** dependência histórica Adventure BOM 4.17.0-SNAPSHOT não encontrada nos repositórios configurados | Fabric experimental, Paper não |
@@ -37,7 +38,7 @@ No cliente e no plugin, as chamadas diretas incompatíveis com Java 17
 - `clients/mod/core/src/main/java/.../ThreadCompat.java`
 - `clients/plugin/src/main/java/.../ThreadCompat.java`
 
-Os JARs de 1.20.3 e 1.20.4 foram compilados usando `--release 17`,
+Os JARs de 1.20.2 a 1.20.4 foram compilados usando `--release 17`,
 e a metadata do Fabric exige `java >=17`. A suíte de testes mais moderna
 continua usando Java 21+ no ambiente de build.
 
@@ -47,9 +48,9 @@ No Windows PowerShell, na raiz desta worktree:
 
 ```powershell
 cd clients/mod
-.\build-full-range.ps1 -Targets 1.20.3,1.20.4,1.20.5,1.20.6
+.\build-full-range.ps1 -Targets 1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\plugin
-.\scripts\build-paper-targets.ps1 -Targets 1.20.3,1.20.4,1.20.6
+.\scripts\build-paper-targets.ps1 -Targets 1.20.2,1.20.3,1.20.4,1.20.6
 cd ..\..
 python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
 python tools/minecraft_version_coverage.py --output docs/minecraft-java-releases-1.8-to-26.3.json
@@ -62,11 +63,11 @@ continuam preservados, mas não devem ser instalados como mods Java 17.
 
 ## Versões ainda pendentes
 
-**Fabric 1.14–1.20.2:** portar APIs e mixins por geração, recompilar
+**Fabric 1.14–1.20.1:** portar APIs e mixins por geração, recompilar
 para a JVM correspondente (Java 8, 16 ou 17), inicializar o jogo e testar
 conexões reais. Fabric 1.8–1.13 **fora de escopo**.
 
-**Paper 1.8–1.20.2:** requires porto do núcleo e autenticação para
+**Paper 1.8–1.20.1:** requires porto do núcleo e autenticação para
 Java 8/11/16/17, dependendo da versão histórica do servidor. Não é correto
 distribuir um mesmo JAR moderno renomeado para essas versões.
 
