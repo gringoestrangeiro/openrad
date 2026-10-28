@@ -1,0 +1,124 @@
+name: OpenRad Minecraft version compatibility (development)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'clients/mod/**'
+      - 'clients/plugin/**'
+      - 'tools/minecraft_version_coverage.py'
+      - 'tests/test_minecraft_version_coverage.py'
+      - '.github/workflows/minecraft-version-compat.yml'
+  push:
+    branches:
+      - 'feature/minecraft-1.8-to-26.3-version-coverage'
+    paths:
+      - 'clients/mod/**'
+      - 'clients/plugin/**'
+      - 'tools/minecraft_version_coverage.py'
+      - '.github/workflows/minecraft-version-compat.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
+
+  fabric:
+    name: Fabric ${{ matrix.minecraft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        minecraft: ['1.20.3', '1.20.4', '1.20.5', '1.20.6']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile, remap, and test exact Minecraft target
+        working-directory: clients/mod
+        run: |
+          ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" :core:test :fabric:build :fabric:test --console=plain
+      - name: Verify exact game version, Java bytecode, mixins and metadata
+        working-directory: clients/mod
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.1.5.jar "${{ matrix.minecraft }}" 2.1.5
+
+  paper:
+    name: Paper ${{ matrix.minecraft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minecraft: '1.20.3'
+            api: '1.20.3-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.4'
+            api: '1.20.4-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.6'
+            api: '1.20.6-R0.1-SNAPSHOT'
+            java: 21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and test Java target
+        working-directory: clients/plugin
+        run: |
+          ./gradlew --no-daemon --max-workers=1 "-PopenradPaperApi=${{ matrix.api }}" check --console=plain
+      - name: Verify Java classfile and server API metadata
+        working-directory: clients/plugin
+        env:
+          MC_TARGET: ${{ matrix.minecraft }}
+          EXPECT_JAVA: ${{ matrix.java }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, struct, zipfile
+          expected_java = int(os.environ['EXPECT_JAVA'])
+          with zipfile.ZipFile('build/libs/OpenRadPlugin.jar') as jar:
+              data = jar.read('io/github/gringoestrangeiro/openradplugin/OpenRadPlugin.class')
+              major = struct.unpack('>H',data[6:8])[0]
+              assert major == expected_java + 44, (major, expected_java)
+              yml = jar.read('plugin.yml').decode('utf-8')
+              expected_api = '1.20' if expected_java == 17 else '1.20.6'
+              assert f"api-version: '{expected_api}'" in yml
+              print('Paper metadata verified:', os.environ['MC_TARGET'], 'Java', expected_java)
+          PY
+
+      - name: Execute compatibility shim on an actual JDK17 runtime
+        if: matrix.java == 17
+        working-directory: clients/plugin
+        shell: bash
+        run: |
+          mkdir -p build/java17Smoke
+          javac --release 17 -cp build/libs/OpenRadPlugin.jar \
+            -d build/java17Smoke \
+            src/jdk17Smoke/java/io/github/gringoestrangeiro/openradplugin/util/Java17ThreadCompatSmoke.java
+          "$JAVA_HOME_17_X64/bin/java" -cp "build/libs/OpenRadPlugin.jar:build/java17Smoke" \
+            io.github.gringoestrangeiro.openradplugin.util.Java17ThreadCompatSmoke
+
+# Verification is build-time only. This workflow never publishes JARs or releases.

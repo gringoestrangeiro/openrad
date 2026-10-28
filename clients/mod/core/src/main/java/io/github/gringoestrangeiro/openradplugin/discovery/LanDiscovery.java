@@ -71,7 +71,7 @@ public final class LanDiscovery implements AutoCloseable {
             socket.close();
             throw e;
         }
-        worker = Thread.ofPlatform().name("OpenRad Plugin-LAN").daemon().start(this::receive);
+        worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformStart("OpenRad Plugin-LAN", this::receive);
     }
 
     private void receive() {

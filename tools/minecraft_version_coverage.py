@@ -27,7 +27,7 @@ def classify(version):
     if version in FABRIC_RELEASES:
         fabric = "published-build-verified"
     elif version in {"1.20.3", "1.20.4"}:
-        fabric = "experimental-java21-build-verified-runtime-untested"
+        fabric = "experimental-java17-build-verified-runtime-untested"
     elif version in {"1.20.5", "1.20.6"}:
         fabric = "development-build-verified"
     elif parsed < (1, 14, 0):
@@ -39,7 +39,7 @@ def classify(version):
     elif parsed >= (1, 21, 0) and parsed < (26, 0, 0):
         paper = "paper-line-build-needs-runtime-test"
     elif version in {"1.20.3", "1.20.4"}:
-        paper = "experimental-java21-build-verified-runtime-untested"
+        paper = "experimental-java17-build-verified-runtime-untested"
     elif version == "1.20.6":
         paper = "development-build-verified"
     elif version == "1.20.5":

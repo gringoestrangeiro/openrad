@@ -52,7 +52,7 @@ public final class ShClient implements AutoCloseable {
 
     public byte[] challenge(byte[] data) {
         require(state == 4, "SH unexpected challenge");
-        byte[] b = ShRecord.parse(data, 4, 0x60000000).getFirst();
+        byte[] b = ShRecord.parse(data, 4, 0x60000000).get(0);
         BigInteger bv = ShMath.peerPublic(b),
                 x = ShMath.x(rid, password, salt),
                 k = ShMath.multiplier();
@@ -68,7 +68,7 @@ public final class ShClient implements AutoCloseable {
 
     public byte[] confirm(byte[] data) {
         require(state == 6, "SH unexpected confirmation");
-        byte[] proof = ShRecord.parse(data, 6, 0x70000000).getFirst();
+        byte[] proof = ShRecord.parse(data, 6, 0x70000000).get(0);
         require(MessageDigest.isEqual(proof, expected), "SH server proof rejected");
         state = 7;
         return key.clone();

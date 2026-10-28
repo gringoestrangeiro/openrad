@@ -2,7 +2,8 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-java { toolchain.languageVersion.set(JavaLanguageVersion.of(21)) }
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.20.3", "1.20.4")
+java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
@@ -44,15 +45,18 @@ sourceSets.main {
         java.exclude("**/ConnectionRoutingMixin.java")
 }
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
+    options.release.set(if (legacyJava17) 17 else 21)
     options.encoding = "UTF-8"
+}
+tasks.named<JavaCompile>("compileTestJava") {
+    if (legacyJava17) options.release.set(21)
 }
 tasks.processResources {
     // Track the version as a task input so Gradle refreshes fabric.mod.json on updates.
     inputs.property("openradModVersion", project.version.toString())
     inputs.property("openradMinecraftVersion", minecraftTarget)
     filesMatching("fabric.mod.json") {
-        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget)
+        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget, "javaVersion" to (if (legacyJava17) 17 else 21))
     }
     val newerRouting = minecraftTarget == "1.21.11"
     inputs.property("openradRouteMixin", newerRouting)

@@ -21,8 +21,8 @@ class VersionCoverageTest(unittest.TestCase):
     def test_experimental_java21_is_not_release(self):
         for version in ("1.20.3", "1.20.4"):
             state = coverage.classify(version)
-            self.assertEqual(state["fabric"], "experimental-java21-build-verified-runtime-untested")
-            self.assertEqual(state["paper"], "experimental-java21-build-verified-runtime-untested")
+            self.assertEqual(state["fabric"], "experimental-java17-build-verified-runtime-untested")
+            self.assertEqual(state["paper"], "experimental-java17-build-verified-runtime-untested")
         self.assertNotIn("1.8", coverage.FABRIC_RELEASES)
 
     def test_minecraft_2026(self):

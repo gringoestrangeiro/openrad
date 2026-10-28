@@ -24,14 +24,14 @@ foreach($target in $Targets){
     $isModern=$target -in $modern
     $modVersion='2.1.5'
     $buildDir=if($isModern){Join-Path $root 'modern'}else{$root}
-    $jarName=if($target -in @("1.20.3", "1.20.4")){"OpenRadClientMod-$modVersion-fabric-$target-java21-experimental.jar"}else{"OpenRadClientMod-$modVersion-fabric-$target.jar"}
+    $jarName=if($target -in @("1.20.3", "1.20.4")){"OpenRadClientMod-$modVersion-fabric-$target-java17-experimental.jar"}else{"OpenRadClientMod-$modVersion-fabric-$target.jar"}
     $jar=Join-Path $root "release\$jarName"
     $source=if($isModern){
       Join-Path $root "modern\build\libs\OpenRadClientMod-$modVersion-modern-$target.jar"
     }else{
       Join-Path $root "fabric\build\libs\fabric-$modVersion.jar"
     }
-    $item=[ordered]@{minecraft=$target;java=if($isModern){25}else{21};
+    $item=[ordered]@{minecraft=$target;java=if($isModern){25}elseif($target -in @("1.20.3","1.20.4")){17}else{21};
       modVersion=$modVersion;status='NOT_TESTED';experimental=($target -in @('1.20.3','1.20.4'));runtimeValidated=$false;jar=$null;error=$null;sha256=$null}
     try{
         if((Test-Path $jar) -and -not $Rebuild){

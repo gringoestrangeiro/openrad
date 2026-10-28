@@ -105,9 +105,9 @@ public final class VpnRuntime implements AutoCloseable {
                         0,
                         TimeUnit.SECONDS,
                         new SynchronousQueue<>(),
-                        Thread.ofVirtual().name("orb-peer-", 0).factory(),
+                        io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("orb-peer-"),
                         new ThreadPoolExecutor.AbortPolicy());
-        worker = Thread.ofPlatform().name("OpenRad Plugin-control").daemon().unstarted(this::run);
+        worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("OpenRad Plugin-control", this::run);
     }
 
     public void start() {
@@ -989,7 +989,7 @@ public final class VpnRuntime implements AutoCloseable {
         long deadline = System.nanoTime() + timeout.toNanos();
         long remaining = deadline - System.nanoTime();
         if (remaining <= 0) return !worker.isAlive() && peers.isTerminated();
-        worker.join(Duration.ofNanos(remaining));
+        worker.join(TimeUnit.NANOSECONDS.toMillis(remaining), (int) (remaining % 1_000_000L));
         if (worker.isAlive()) return false;
         remaining = deadline - System.nanoTime();
         if (remaining <= 0) return peers.isTerminated();

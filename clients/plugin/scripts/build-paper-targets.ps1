@@ -7,7 +7,7 @@ $known=@{'1.20.3'='1.20.3-R0.1-SNAPSHOT';'1.20.4'='1.20.4-R0.1-SNAPSHOT';'1.20.6
 $results=@()
 foreach($target in $Targets){
   if(-not $known.ContainsKey($target)){throw "Unsupported Paper target: $target"}
-  $java=if($target -in @('1.20.3','1.20.4','1.20.6','1.21')){21}else{25}
+  $java=if($target -in @('1.20.3','1.20.4')){17}elseif($target -in @('1.20.6','1.21')){21}else{25}
   $name=if($target -in @("1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
   $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -eq '1.20.4');runtimeValidated=$false;jar=$null;sha256=$null}
   Push-Location $root

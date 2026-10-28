@@ -11,7 +11,7 @@ version = "2.1.5"
 // Shared runtime includes the 2.1.5 CPU/RAM and peer-presence fixes.
 // Only the Paper API and Java target vary by build.
 val paperApi = providers.gradleProperty("openradPaperApi").orElse("1.20.6-R0.1-SNAPSHOT").get()
-val bytecodeJava = if (paperApi.startsWith("26.")) 25 else 21
+val bytecodeJava = if (paperApi.startsWith("26.")) 25 else if (paperApi.startsWith("1.20.3-") || paperApi.startsWith("1.20.4-")) 17 else 21
 
 repositories {
     mavenCentral()
@@ -28,13 +28,19 @@ dependencies {
 
 java {
     withSourcesJar()
-    toolchain.languageVersion.set(JavaLanguageVersion.of(bytecodeJava))
+    toolchain.languageVersion.set(JavaLanguageVersion.of(if (bytecodeJava == 17) 25 else bytecodeJava))
 }
 
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(bytecodeJava)
     options.encoding = "UTF-8"
     options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-processing"))
+}
+
+// Keep the existing JUnit harness (which intentionally uses Java 21 test APIs)
+// while compiling the actual legacy plugin classes for Java 17.
+tasks.named<JavaCompile>("compileTestJava") {
+    if (bytecodeJava == 17) options.release.set(21)
 }
 
 tasks.test {
