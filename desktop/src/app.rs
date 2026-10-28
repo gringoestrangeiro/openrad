@@ -635,6 +635,7 @@ pub struct App {
     pings: BTreeMap<u64, PingState>,
     next_ping_id: u64,
     release: Option<openrad::releases::Release>,
+    release_details_open: bool,
     dismissed_releases: BTreeSet<String>,
     toast: Option<(String, bool, Instant)>,
     activity: VecDeque<Activity>,
@@ -740,6 +741,7 @@ impl App {
             pings: BTreeMap::new(),
             next_ping_id: 0,
             release: None,
+            release_details_open: false,
             dismissed_releases: BTreeSet::new(),
             toast: None,
             activity: VecDeque::new(),
@@ -854,6 +856,13 @@ impl App {
                 Notice::BlockList(blocked) => self.blocked = blocked,
                 Notice::Release(release) => {
                     if !self.dismissed_releases.contains(&release.version) {
+                        if self
+                            .release
+                            .as_ref()
+                            .is_some_and(|shown| shown.version != release.version)
+                        {
+                            self.release_details_open = false;
+                        }
                         self.release = Some(release);
                     }
                 }
@@ -3313,7 +3322,11 @@ impl App {
                     ))
                     .color(BLUE),
                 );
-                ui.hyperlink_to(language.text("View release"), &release.url);
+                if ui.button(language.text("View release")).clicked() {
+                    // A native browser may be unavailable or fail to start. Keep
+                    // the release details accessible inside the desktop window.
+                    self.release_details_open = !self.release_details_open;
+                }
                 if ui
                     .button(language.text("×"))
                     .on_hover_text(language.text("Dismiss update notice"))
@@ -3321,8 +3334,20 @@ impl App {
                 {
                     self.dismissed_releases.insert(release.version.clone());
                     self.release = None;
+                    self.release_details_open = false;
                 }
             });
+            if self.release_details_open {
+                ui.add_space(8.);
+                // A wrapping label keeps the full link visible at narrow window sizes.
+                ui.add(egui::Label::new(release.url.as_str()).wrap());
+                ui.horizontal(|ui| {
+                    ui.hyperlink_to(language.text("Open in browser"), &release.url);
+                    if ui.button(language.text("Copy")).clicked() {
+                        ui.ctx().copy_text(release.url.clone());
+                    }
+                });
+            }
         });
         ui.add_space(12.);
     }
@@ -5601,8 +5626,23 @@ mod tests {
         app.page = Page::Networks;
         frame(&ctx, app, vec![]);
         assert!(app.release.is_some());
+        click_button(&ctx, app, "View release");
+        assert!(
+            app.release_details_open,
+            "the button must expand in-app details"
+        );
+        let expanded = labels(&tall_frame(&ctx, app, vec![]));
+        assert!(
+            expanded.iter().any(|label| label.contains(&release.url)),
+            "the exact release URL must remain visible without a browser"
+        );
+        assert!(expanded.iter().any(|label| label == "Open in browser"));
+        assert!(expanded.iter().any(|label| label == "Copy"));
+        click_button(&ctx, app, "View release");
+        assert!(!app.release_details_open, "second click collapses details");
         click_button(&ctx, app, "×");
         assert!(app.release.is_none());
+        assert!(!app.release_details_open);
         app.backend.notices.send(Notice::Release(release));
         app.consume(&ctx);
         assert!(
