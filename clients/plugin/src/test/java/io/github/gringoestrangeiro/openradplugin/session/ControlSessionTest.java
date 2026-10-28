@@ -68,6 +68,56 @@ class ControlSessionTest {
 
     @Test
     @Timeout(25)
+    void redirectedRegistrationKeepsTheSameBootstrapIdentity() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0);
+                var executor = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
+            listener.setSoTimeout(10000);
+            var service =
+                    executor.submit(
+                            () -> {
+                                long bootstrapRid;
+                                try (var first =
+                                        SyntheticControlService.authenticate(
+                                                listener.accept(),
+                                                3,
+                                                0,
+                                                "rpassword".getBytes(StandardCharsets.US_ASCII))) {
+                                    bootstrapRid = first.rid();
+                                    assertEquals(20, clientOperation(first.receive()));
+                                    first.send(
+                                            concat(
+                                                    u32(TlvCodec.SERVER_OP, 12),
+                                                    tlv(0x1238, tlv(0x1234, text(0x030001c9, "127.0.0.2")))));
+                                }
+                                try (var second =
+                                        SyntheticControlService.authenticate(
+                                                listener.accept(),
+                                                3,
+                                                bootstrapRid,
+                                                "rpassword".getBytes(StandardCharsets.US_ASCII))) {
+                                    assertEquals(20, clientOperation(second.receive()));
+                                    second.send(u32(TlvCodec.SERVER_OP, 21));
+                                    second.send(assignedIdentity());
+                                }
+                                return null;
+                            });
+            try (Identity issued =
+                    Provisioner.loadOrRegister(
+                            directory,
+                            NAME,
+                            "127.0.0.1",
+                            listener.getLocalPort(),
+                            session -> {},
+                            SyntheticControlService.modulus())) {
+                assertEquals(RID, issued.rid());
+                assertTrue(Files.isRegularFile(directory.resolve("identity.json")));
+                assertFalse(Files.exists(directory.resolve("registration.pending")));
+            }
+            service.get(5, TimeUnit.SECONDS);
+        }
+    }
+    @Test
+    @Timeout(25)
     void localSyntheticServiceRegistersPersistsAttachesAndAuthenticatesPrivateJoin()
             throws Exception {
         try (ServerSocket listener = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
