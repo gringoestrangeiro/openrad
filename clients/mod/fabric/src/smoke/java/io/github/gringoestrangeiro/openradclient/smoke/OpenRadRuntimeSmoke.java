@@ -91,14 +91,16 @@ public final class OpenRadRuntimeSmoke implements ClientModInitializer {
                                     && unchanged.getPort() == ordinary.getLocalPort(), "ordinary endpoint retained");
                         }
                         System.out.println("OPENRAD_SMOKE ORDINARY_CONNECTION PASS");
-                        // Default isolated config has no networks, so this must hit loopback then fail closed.
-                        InetSocketAddress intercepted = connect(new InetSocketAddress(
-                                InetAddress.getByAddress(new byte[]{26, (byte) 254, (byte) 253, (byte) 252}), 25565));
-                        require(intercepted.getAddress().equals(loopback) && intercepted.getPort() != 25565,
-                                "26/8 routed to an ephemeral IPv4 loopback endpoint");
-                        System.out.println("OPENRAD_SMOKE VIRTUAL_CONNECTION_INTERCEPT PASS");
+                        // Offline routing deliberately retains 26/8 for an existing OS VPN.
+                        // Inspect the policy without attempting a real connection to that address.
+                        var controller = io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod.controller();
+                        require(!controller.active(), "isolated profile remains offline");
+                        InetSocketAddress syntheticVip = new InetSocketAddress(
+                                InetAddress.getByAddress(new byte[]{26, (byte) 254, (byte) 253, (byte) 252}), 25565);
+                        require(controller.route(syntheticVip) == syntheticVip, "offline routing policy retains endpoint");
+                        System.out.println("OPENRAD_SMOKE OFFLINE_ROUTING_POLICY PASS");
                         if (FINISHED.compareAndSet(false, true)) {
-                            result("PASS: required mixins, Multiplayer init/tick/button, ordinary connection, offline 26/8 loopback interception");
+                            result("PASS: required mixins, Multiplayer init/tick/button, ordinary connection, offline routing policy");
                             System.out.println("OPENRAD_SMOKE RESULT PASS");
                             client.execute(client::stop);
                         }
