@@ -96,8 +96,7 @@ jobs:
             sleep 12
             adb shell pidof com.openrad.mobile.debug | grep -E '^[0-9]+'
             adb shell dumpsys package com.openrad.mobile.debug | grep -q 'com.openrad.mobile.vpn.OpenRadVpnService'
-            cd clients/android
-            ./gradlew --no-daemon :app:connectedDebugAndroidTest
+            ./clients/android/gradlew -p clients/android --no-daemon :app:connectedDebugAndroidTest
       - uses: actions/upload-artifact@v4
         if: always()
         with:
