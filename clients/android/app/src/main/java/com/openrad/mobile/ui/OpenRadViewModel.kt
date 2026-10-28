@@ -15,6 +15,7 @@ import com.openrad.mobile.model.JoinConfiguration
 import com.openrad.mobile.model.JoinNetwork
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -47,7 +48,7 @@ class OpenRadViewModel(val repo: VpnRepository) : ViewModel() {
             discoverQuery
                 .debounce(SEARCH_DEBOUNCE_MS)
                 .distinctUntilChanged()
-                .collect { repo.searchPublic(it) }
+                .collectLatest { repo.searchPublic(it) }
         }
         // Refresh the catalog once the session comes online.
         viewModelScope.launch {

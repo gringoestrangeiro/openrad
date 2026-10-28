@@ -4,6 +4,7 @@ import com.openrad.mobile.data.MockRepository
 import com.openrad.mobile.data.VpnRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -52,5 +53,31 @@ class OpenRadViewModelTest {
         advanceTimeBy(2)
         runCurrent()
         assertEquals(listOf("", "min"), repo.searches)
+    }
+
+    @Test
+    fun newPublicQueryCancelsWaitingSearchAfterDebounce() = runTest(dispatcher) {
+        val searches = ArrayList<String>()
+        val completed = ArrayList<String>()
+        val repo = object : VpnRepository by MockRepository(this) {
+            override suspend fun searchPublic(query: String) {
+                searches.add(query)
+                if (query.isEmpty()) delay(10_000)
+                completed.add(query)
+            }
+        }
+        val vm = OpenRadViewModel(repo)
+        runCurrent()
+        advanceTimeBy(301)
+        runCurrent()
+        assertEquals(listOf(""), searches)
+
+        vm.discoverQuery.value = "new query"
+        runCurrent()
+        advanceTimeBy(301)
+        runCurrent()
+
+        assertEquals(listOf("", "new query"), searches)
+        assertEquals(listOf("new query"), completed)
     }
 }
