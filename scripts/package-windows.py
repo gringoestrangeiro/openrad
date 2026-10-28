@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "x86_64-pc-windows-gnu"
+# Native Windows MSVC builds link to Microsoft's redistributable C runtime.
+# QA ZIPs may list it as an explicit prerequisite, never as a system DLL.
+MSVC_EXTERNAL_RUNTIME = {"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll"}
 SYSTEM_DLLS = {
     "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "combase.dll",
     "comctl32.dll", "comdlg32.dll", "crypt32.dll", "dcomp.dll", "dbghelp.dll", "dwrite.dll",
@@ -133,6 +136,7 @@ def main():
             shutil.copy2(source, output / filename)
             pending.append(output / filename)
         provided = set()
+        external_prerequisites = set()
         while pending:
             path = pending.pop()
             dependencies = imports(path, objdump)
@@ -142,6 +146,9 @@ def main():
                 if key in SYSTEM_DLLS or key.startswith(("api-ms-win-", "ext-ms-win-")):
                     continue
                 if key in provided:
+                    continue
+                if args.native_msvc and key in MSVC_EXTERNAL_RUNTIME and key not in runtime:
+                    external_prerequisites.add(dll)
                     continue
                 if key not in runtime or not args.runtime_license:
                     raise RuntimeError(f"Missing non-system DLL or its redistribution notice: {dll}; provide --runtime-dir and --runtime-license")
@@ -153,8 +160,10 @@ def main():
             shutil.copy2(args.runtime_license, output / "RUNTIME-DLL-LICENSE.txt")
         if args.native_msvc:
             (output / "NATIVE-MSVC-QA.txt").write_text(
-                "Portable Windows MSVC QA candidate. This is NOT the signed offline installer;\n"
-                "the native runtime, TAP driver/UAC and real VPN interoperability require manual checks.\n", encoding="utf-8")
+                "Portable Windows MSVC QA candidate. NOT the signed offline installer.\n"
+                + ("Requires Microsoft Visual C++ Redistributable x64: " + ", ".join(sorted(external_prerequisites)) + "\n"
+                   if external_prerequisites else "")
+                + "TAP driver/UAC and real VPN interoperability require manual checks.\n", encoding="utf-8")
         # Explicit allowlist: never package credentials, captures or runtime logs.
         for source, target in [
             ("LICENSE", "LICENSE"), ("CREDITS.md", "CREDITS.md"),
@@ -214,7 +223,8 @@ def main():
         (output / "DLL-IMPORTS.json").write_text(json.dumps({
             "target": build_target, "audit": "Static PE imports and supplied non-system DLLs, inspected on the build host",
             "windows_system_dlls_are_not_bundled": True,
-            "application_runtime_dlls": sorted(provided), "imports": manifest,
+            "application_runtime_dlls": sorted(provided),
+            "external_vendor_runtime_dlls": sorted(external_prerequisites), "imports": manifest,
         }, indent=2) + "\n", encoding="utf-8")
         (output / "BUILD-INFO.json").write_text(json.dumps({
             "version": version, "target": build_target, "build_date": args.build_date,
@@ -223,6 +233,7 @@ def main():
             "worktree_dirty": bool(command("git", "status", "--porcelain")),
             "rustc": command("rustc", "--version"),
             "windows_runtime_tested": False,
+            "external_runtime_prerequisite": "Microsoft Visual C++ Redistributable x64" if external_prerequisites else None,
             "windows_support": "experimental",
             "radmin_recovery": "Administrator worker, SYSTEM fallback and final administrator retry; forced service/GUI termination and verified adapter-disable fallbacks",
         }, indent=2) + "\n", encoding="utf-8")
