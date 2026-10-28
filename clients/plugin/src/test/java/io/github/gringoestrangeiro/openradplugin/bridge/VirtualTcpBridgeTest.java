@@ -471,8 +471,10 @@ class VirtualTcpBridgeTest {
             client.handshake();
             client.send(client.next, client.serverNext, FIN | ACK, EMPTY, EMPTY);
             client.next++;
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(900);
-            while (System.nanoTime() < deadline) {
+            // Windows may round Thread.sleep(5) to the system timer tick (~16 ms).
+            // Stop when enough data arrives instead of assuming a 900 ms wall clock.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (System.nanoTime() < deadline && client.received.size() <= 100) {
                 TcpSegment packet = client.wire.poll(20, TimeUnit.MILLISECONDS);
                 if (packet != null) client.process(packet);
             }

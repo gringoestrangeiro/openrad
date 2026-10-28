@@ -1,5 +1,6 @@
 param(
     [string[]]$Targets = @(
+        '1.20.5','1.20.6',
         '1.21','1.21.1','1.21.2','1.21.3','1.21.4',
         '1.21.5','1.21.6','1.21.7','1.21.8',
         '1.21.9','1.21.10','1.21.11',
@@ -9,11 +10,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$legacy=@('1.21','1.21.1','1.21.2','1.21.3','1.21.4',
+$legacy=@('1.20.5','1.20.6','1.21','1.21.1','1.21.2','1.21.3','1.21.4',
           '1.21.5','1.21.6','1.21.7','1.21.8','1.21.9','1.21.10','1.21.11')
 $modern=@('26.1','26.1.1','26.1.2','26.2','26.3')
 $approved=$legacy+$modern
-$report=Join-Path $root 'release\OpenRad-1.21-to-26.3-build-status.json'
+$report=Join-Path $root 'release\OpenRad-1.20.5-to-26.3-build-status.json'
 New-Item -ItemType Directory -Path (Join-Path $root 'release') -Force | Out-Null
 $results = [System.Collections.Generic.List[object]]::new()
 foreach($target in $Targets){
