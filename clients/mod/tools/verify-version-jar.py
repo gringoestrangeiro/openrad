@@ -30,8 +30,9 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             class_path = mixins["package"].replace(".", "/") + "/" + name + ".class"
             if class_path not in files:
                 raise ValueError(f"Missing mixin {class_path}")
-        for name in ("io/github/gringoestrangeiro/openradclient/fabric/OpenRadClientMod.class",
-                     "io/github/gringoestrangeiro/openradclient/ClientVpnRuntime.class"):
+        for name in sorted(files):
+            if not name.endswith(".class"):
+                continue
             bytecode = z.read(name)
             if len(bytecode) < 8 or bytecode[:4] != b"\xca\xfe\xba\xbe":
                 raise ValueError(f"Invalid Java class {name}")
@@ -42,6 +43,8 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
                 raise ValueError(f"Unexpected Java bytecode major {major}; expected {expected_major}")
         if metadata.get("depends", {}).get("java") != f">={expected_java}":
             raise ValueError(f"Unexpected Java metadata: {metadata.get('depends', {}).get('java')}")
+        if mixins.get("compatibilityLevel") != f"JAVA_{expected_java}":
+            raise ValueError(f"Unexpected mixin Java compatibility: {mixins.get('compatibilityLevel')}")
         print(f"VERIFIED {jar.name}: Fabric Minecraft {actual_target}, "
               f"mod {metadata['version']}, Java {expected_java}, classes and mixins included")
 
