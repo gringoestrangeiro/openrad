@@ -2,12 +2,13 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.20.1", "1.20.2", "1.20.3", "1.20.4")
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.19.4" to "0.87.2+1.19.4",
     "1.20.1" to "0.92.12+1.20.1",
     "1.20.2" to "0.91.6+1.20.2",
     "1.20.3" to "0.91.1+1.20.3",
@@ -45,6 +46,36 @@ sourceSets.main {
         java.exclude("**/ConnectionMixin.java")
     else
         java.exclude("**/ConnectionRoutingMixin.java")
+}
+// Minecraft 1.19.4 uses PoseStack in Screen.render rather than GuiGraphics.
+// Generate a source-only compatibility copy; never modify new-version UI sources.
+if (minecraftTarget == "1.19.4") {
+    val generated1194 = layout.buildDirectory.dir("generated/java1194")
+    val generate1194 by tasks.registering(Copy::class) {
+        inputs.property("compatibilityAdapterVersion", "1194-v2")
+        from("src/main/java")
+        into(generated1194)
+        filteringCharset = "UTF-8"
+        // Mixin uses a different static connection entrypoint before MC 1.20.
+        filesMatching("**/ConnectionMixin.java") {
+            filter { line: String ->
+                line.replace("connect(Ljava/net/InetSocketAddress;ZLnet/minecraft/network/Connection;)Lio/netty/channel/ChannelFuture;",
+                    "connectToServer(Ljava/net/InetSocketAddress;Z)Lnet/minecraft/network/Connection;")
+            }
+        }
+        filesMatching("**/OpenRad*Screen.java") {
+            filter { sourceLine: String ->
+                sourceLine.replace("net.minecraft.client.gui.GuiGraphics", "com.mojang.blaze3d.vertex.PoseStack")
+                    .replace("GuiGraphics ", "PoseStack ")
+                    .replace("graphics.drawCenteredString(font,", "drawCenteredString(graphics, font,")
+                    .replace("graphics.drawString(font,", "drawString(graphics, font,")
+            }
+        }
+    }
+    sourceSets.main {
+        java.setSrcDirs(listOf(generated1194.get().asFile, file("../core/src/main/java")))
+    }
+    tasks.named<JavaCompile>("compileJava") { dependsOn(generate1194) }
 }
 tasks.withType<JavaCompile>().configureEach {
     options.release.set(if (legacyJava17) 17 else 21)

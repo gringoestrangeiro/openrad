@@ -13,6 +13,7 @@ foi preservado em outra worktree, sem alterações.
 
 | Minecraft Java | Mod Fabric | Plugin Paper | Estado |
 | --- | --- | --- | --- |
+| 1.19.4 | Java 17 + PoseStack e Mixin específico; Gradle build/test/remap verificados | Paper 1.19.4 Java 17 + Gradle check verificado | **Experimental: nenhum teste real de Minecraft/Radmin** |
 | 1.20.1 | Gradle build/test Java 17 verificados | Paper 1.20.1 Gradle check Java 17 verificado | **Experimental, runtime não testado** |
 | 1.20.2 | Compilação, remapeamento, testes Java 17 verificados | API 1.20.2, Gradle check/test Java 17 verificados | **Experimental, sem teste de jogo/multiplayer** |
 | 1.20.3 | Compilação, remapeamento, testes e metadata Java 17 verificados | API 1.20.3, Gradle check/test, classes Java 17 e plugin.yml 1.20 verificados | **Experimental, sem startup/jogo ou multiplayer** |
@@ -49,9 +50,9 @@ No Windows PowerShell, na raiz desta worktree:
 
 ```powershell
 cd clients/mod
-.\build-full-range.ps1 -Targets 1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
+.\build-full-range.ps1 -Targets 1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.5,1.20.6
 cd ..\plugin
-.\scripts\build-paper-targets.ps1 -Targets 1.20.1,1.20.2,1.20.3,1.20.4,1.20.6
+.\scripts\build-paper-targets.ps1 -Targets 1.19.4,1.20.1,1.20.2,1.20.3,1.20.4,1.20.6
 cd ..\..
 python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
 python tools/minecraft_version_coverage.py --output docs/minecraft-java-releases-1.8-to-26.3.json
@@ -64,11 +65,11 @@ continuam preservados, mas não devem ser instalados como mods Java 17.
 
 ## Versões ainda pendentes
 
-**Fabric 1.14–1.20.0:** portar APIs e mixins por geração, recompilar
+**Fabric 1.14–1.19.3:** portar APIs e mixins por geração, recompilar
 para a JVM correspondente (Java 8, 16 ou 17), inicializar o jogo e testar
 conexões reais. Fabric 1.8–1.13 **fora de escopo**.
 
-**Paper 1.8–1.20.0:** requires porto do núcleo e autenticação para
+**Paper 1.8–1.19.3:** requires porto do núcleo e autenticação para
 Java 8/11/16/17, dependendo da versão histórica do servidor. Não é correto
 distribuir um mesmo JAR moderno renomeado para essas versões.
 
