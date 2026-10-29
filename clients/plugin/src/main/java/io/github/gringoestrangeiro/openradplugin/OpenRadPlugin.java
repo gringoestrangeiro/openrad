@@ -162,18 +162,10 @@ public final class OpenRadPlugin extends JavaPlugin {
                                     + " all-ptbr para que jogadores possam entrar.");
         if (parsed.bridge().backendPortAutomatic())
             parsed = parsed.withBridge(parsed.bridge().withBackendPort(getServer().getPort()));
-        if (parsed.bridge().enabled()
-                && !getServer().getOnlineMode()
-                && parsed.minecraftNetworks().enabled()
-                && !parsed.minecraftNetworks().select().isEmpty()
-                && !yaml.getBoolean("security.allow-insecure-offline-public-networks", false)) {
-            throw new IllegalArgumentException("Offline-mode with public Minecraft VPN networks is unsafe. "
-                    + "Enable online-mode=true, or explicitly acknowledge the risk using "
-                    + "security.allow-insecure-offline-public-networks: true.");
-        }
+        validateOfflinePublicNetworks(parsed, getServer().getOnlineMode(),
+                yaml.getBoolean("security.allow-insecure-offline-public-networks", false));
         if (parsed.bridge().enabled() && !getServer().getOnlineMode()
-                && parsed.minecraftNetworks().enabled()
-                && !parsed.minecraftNetworks().select().isEmpty()) {
+                && hasPublicNetworks(parsed)) {
             getLogger().warning("Offline-mode with public VPN networks allows Minecraft "
                     + "username impersonation, including OP names. Use online-mode=true.");
         }
@@ -183,6 +175,22 @@ public final class OpenRadPlugin extends JavaPlugin {
                     + "using firewall rules or server-ip=127.0.0.1 where appropriate.");
         }
         return parsed;
+    }
+
+    static void validateOfflinePublicNetworks(
+            VpnSettings settings, boolean onlineMode, boolean acknowledged) {
+        if (settings.bridge().enabled() && !onlineMode && !acknowledged
+                && hasPublicNetworks(settings)) {
+            throw new IllegalArgumentException("Offline-mode with public Minecraft VPN networks is unsafe. "
+                    + "Enable online-mode=true, or explicitly acknowledge the risk using "
+                    + "security.allow-insecure-offline-public-networks: true.");
+        }
+    }
+
+    private static boolean hasPublicNetworks(VpnSettings settings) {
+        return settings.networks().stream().anyMatch(network -> network.secret().isEmpty())
+                || (settings.minecraftNetworks().enabled()
+                        && !settings.minecraftNetworks().select().isEmpty());
     }
 
     /**
