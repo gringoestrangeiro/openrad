@@ -8,7 +8,7 @@ $results=@()
 foreach($target in $Targets){
   if(-not $known.ContainsKey($target)){throw "Unsupported Paper target: $target"}
   $java=if($target -in @('1.17','1.17.1')){16}elseif($target -in @('1.18','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.5','1.20.6','1.21')){21}else{25}
-  $name=if($target -in @("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.1.5-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.1.5-paper-$target-java$java.jar"}
+  $name=if($target -in @("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.2.0-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.2.0-paper-$target-java$java.jar"}
   $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -in @('1.17','1.17.1','1.18','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5'));runtimeValidated=$false;jar=$null;sha256=$null;error=$null}
   Push-Location $root
   try {
@@ -26,6 +26,6 @@ foreach($target in $Targets){
   $results+=[pscustomobject]$result
   Write-Output "[PAPER $target] $($result.status) $name"
 }
-$results | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $dest 'paper-2.1.5-build-status.json')
+$results | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $dest 'paper-2.2.0-build-status.json')
 $results | Where-Object { $_.status -eq 'BUILD_VERIFIED' } | ForEach-Object { "$($_.sha256)  $($_.jar)" } | Set-Content -Encoding ascii (Join-Path $dest 'SHA256SUMS-paper.txt')
 if ($results | Where-Object { $_.status -ne 'BUILD_VERIFIED' }) { exit 1 }

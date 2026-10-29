@@ -86,7 +86,10 @@ class VersionCoverageTest(unittest.TestCase):
 
     def test_catalog_is_consistent(self):
         report = script.parents[1] / 'docs' / 'minecraft-java-releases-1.8-to-26.3.json'
-        versions = json.loads(report.read_text(encoding='utf-8'))['versions']
+        catalog = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(catalog['baseVersion'], '2.2.0')
+        self.assertEqual(catalog['totalStableReleases'], len(catalog['versions']))
+        versions = catalog['versions']
         for item in versions:
             self.assertEqual(item, coverage.classify(item['minecraft']))
 

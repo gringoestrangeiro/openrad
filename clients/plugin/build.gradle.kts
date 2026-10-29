@@ -57,7 +57,7 @@ java {
 // source copy so the current versions keep using the newer Paper API.
 if ((paperApi.startsWith("1.17-") || paperApi.startsWith("1.17.1-")) || (paperApi.startsWith("1.18-") || paperApi.startsWith("1.18.1-")) || paperApi.startsWith("1.18.2-") || paperApi.startsWith("1.19-") || paperApi.startsWith("1.19.1-") || paperApi.startsWith("1.19.2-")) {
     val legacySources = layout.buildDirectory.dir("generated/java1192")
-    val generateLegacy1192 by tasks.registering(Copy::class) {
+    val generateLegacy1192 by tasks.registering(Sync::class) {
         inputs.property("openradLegacyAdapterVersion", if ((paperApi.startsWith("1.17-") || paperApi.startsWith("1.17.1-"))) "java16-v4" else if (paperApi.startsWith("1.18-")) "java17-118-v1" else "java17-v1")
         from("src/main/java")
         into(legacySources)

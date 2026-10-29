@@ -1,5 +1,5 @@
 {
-  "baseVersion": "2.1.5",
+  "baseVersion": "2.2.0",
   "sourceManifest": "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
   "range": [
     "1.8",

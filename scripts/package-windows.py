@@ -119,6 +119,9 @@ def main():
     args = parser.parse_args()
     build_target = "x86_64-pc-windows-msvc" if args.native_msvc else TARGET
     objdump = "objdump" if args.native_msvc and args.objdump == "x86_64-w64-mingw32-objdump" else args.objdump
+    if shutil.which(objdump) is None:
+        flag = "--objdump PATH to a GNU binutils objdump that reads PE files (pei-x86-64)" if args.native_msvc else "--objdump PATH"
+        parser.error(f"{objdump!r} was not found on PATH; supply {flag}")
     metadata = json.loads(command("cargo", "metadata", "--format-version", "1", "--filter-platform", build_target, "--locked", "--offline"))
     version = next(p["version"] for p in metadata["packages"] if p["name"] == "openrad-client")
     name = f"openrad-{version}-windows-x86_64-test"

@@ -7,6 +7,15 @@ on:
       - '.github/workflows/release-2.2.0-runtime-qualification.yml'
       - 'clients/android/app/src/androidTest/**'
   workflow_dispatch:
+    inputs:
+      installer_run_id:
+        description: 'Run ID of a Windows packaging workflow built from this exact commit (required for the Windows TAP job)'
+        required: false
+        type: string
+      installer_repo:
+        description: 'Repository that owns the installer run (defaults to this repository)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +24,8 @@ permissions:
 jobs:
   windows-tap-installer:
     name: Install actual TAP on disposable Windows runner
+    # The installer must be named explicitly so the result describes the commit under test.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_run_id != '' }}
     runs-on: windows-2022
     timeout-minutes: 25
     defaults:
@@ -25,8 +36,17 @@ jobs:
       - name: Download exact CI installer and check SHA256
         env:
           GH_TOKEN: ${{ github.token }}
+          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+          INSTALLER_REPO: ${{ inputs.installer_repo || github.repository }}
         run: |
-          gh run download 40766845084 --repo mariananetto-sys/openrad --name openrad-2.2.0-windows-candidate --dir "$env:RUNNER_TEMP\openrad-installer"
+          if ($env:INSTALLER_RUN_ID -notmatch '^[0-9]+$') { throw 'installer_run_id must be numeric' }
+          $run = gh run view $env:INSTALLER_RUN_ID --repo $env:INSTALLER_REPO --json headSha,conclusion | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the installer run' }
+          if ($run.conclusion -ne 'success') { throw "Installer run did not succeed: $($run.conclusion)" }
+          if ($run.headSha -ne $env:GITHUB_SHA) {
+            throw "Installer was built from $($run.headSha), not the commit under test $env:GITHUB_SHA"
+          }
+          gh run download $env:INSTALLER_RUN_ID --repo $env:INSTALLER_REPO --name openrad-2.2.0-windows-candidate --dir "$env:RUNNER_TEMP\openrad-installer"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot retrieve signed driver candidate' }
           $file = "$env:RUNNER_TEMP\openrad-installer\OpenRad-Setup-2.2.0.exe"
           $want = ((Get-Content "$file.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()

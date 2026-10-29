@@ -8,7 +8,9 @@ param(
     [string]$UnsignedApk,
     [string]$ReferenceApk,
     [string]$SdkRoot,
-    [string]$OutputApk
+    [string]$OutputApk,
+    # Full git commit the unsigned APK must have been built from (README-FIRST.txt next to it).
+    [string]$ExpectedCommit
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -23,8 +25,33 @@ if (-not $OutputApk) {
 if (-not (Test-Path -LiteralPath $UnsignedApk -PathType Leaf)) {
     throw "Unsigned APK missing: $UnsignedApk. Download the unsigned GitHub Actions artifact into dist/android-local-signing first."
 }
+if ($ExpectedCommit) {
+    $note = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $UnsignedApk).Path) 'README-FIRST.txt'
+    $built = if (Test-Path -LiteralPath $note -PathType Leaf) {
+        [regex]::Match((Get-Content -LiteralPath $note -Raw), 'Source commit: ([0-9a-fA-F]{40})')
+    }
+    if (-not $built -or -not $built.Success) {
+        throw 'Cannot read the source commit from README-FIRST.txt beside the unsigned APK.'
+    }
+    if ($built.Groups[1].Value -ne $ExpectedCommit.Trim().ToLowerInvariant()) {
+        throw "The unsigned APK was built from $($built.Groups[1].Value), not the expected commit $ExpectedCommit."
+    }
+} else {
+    Write-Warning 'No -ExpectedCommit given: the APK is not verified against a release commit.'
+}
 if (-not (Test-Path -LiteralPath $Keystore -PathType Leaf)) {
     throw 'Original signing keystore not found. Do not generate a new key: upgrades would be incompatible.'
+}
+# Move-Item -Force replaces whatever file -OutputApk names, so refuse every input
+# (including the keystore) before any password is requested or used.
+$fullOutput = [IO.Path]::GetFullPath($OutputApk)
+if ([IO.Path]::GetExtension($fullOutput) -ne '.apk') {
+    throw '-OutputApk must name a .apk file.'
+}
+foreach ($input in @($Keystore, $UnsignedApk, $ReferenceApk)) {
+    if ($input -and [string]::Equals([IO.Path]::GetFullPath($input), $fullOutput, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "-OutputApk must not be an input file: $input"
+    }
 }
 if (-not $SdkRoot) {
     foreach ($location in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT,

@@ -2,21 +2,25 @@ name: OpenRad Minecraft version compatibility (development)
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, '2.2.0-dev']
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
+      - 'tests/test_minecraft_ci_matrix.py'
       - '.github/workflows/minecraft-version-compat.yml'
   push:
     branches:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'
       - 'release/2.2.0-candidates'
+      - '2.2.0-dev'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
       - 'tools/minecraft_version_coverage.py'
+      - 'tests/test_minecraft_version_coverage.py'
+      - 'tests/test_minecraft_ci_matrix.py'
       - '.github/workflows/minecraft-version-compat.yml'
   workflow_dispatch:
 
@@ -34,6 +38,7 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
+      - run: python -m unittest discover -s clients/mod/tools -p test_verify_version_jar.py -v
 
   fabric:
     name: Fabric ${{ matrix.minecraft }}

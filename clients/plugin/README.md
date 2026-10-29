@@ -1,5 +1,5 @@
-> **Candidata 2.2.0 (ainda nao publicada):** corrige testes e metadados de
-> compatibilidade. Consulte [notas 2.2.0](../../docs/releases/2.2.0.md);
+> **2.2.0 em desenvolvimento (branch `2.2.0-dev`, ainda nao publicada):** corrige testes e
+> metadados de compatibilidade e amplia a matriz de builds para 1.17–26.3. Os downloads abaixo continuam sendo da 2.1.5. Consulte [notas 2.2.0](../../docs/releases/2.2.0.md);
 > versoes de Minecraft continuam **alpha** e o build nao comprova gameplay.
 
 # OpenRad Plugin 2.1.5 (alpha)

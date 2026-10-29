@@ -3,12 +3,11 @@ name: release-2.2.0-tap-end-to-end
 on:
   push:
     branches: ['release/2.2.0-candidates']
-    paths: ['.github/workflows/release-2.2.0-tap-end-to-end.yml', 'scripts/qa-live-java-provision/**']
+    paths: ['.github/workflows/release-2.2.0-tap-end-to-end.yml', 'scripts/qa-live-java-provision/**', 'src/**', 'Cargo.toml', 'Cargo.lock']
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   isolated-tap-ip-traffic:
@@ -29,17 +28,15 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/openrad-qa/java-classes"
           javac --release 21 -sourcepath clients/plugin/src/main/java -d "$RUNNER_TEMP/openrad-qa/java-classes" scripts/qa-live-java-provision/LiveProvisionForTapQa.java
-      - name: Fetch verified 2.2.0 Linux release artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+      - name: Build the CLI from the commit under test
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/openrad-qa"
-          gh run download 40786749665 --repo mariananetto-sys/openrad --name openrad-2.2.0-linux-candidate --dir "$RUNNER_TEMP/openrad-qa"
-          cd "$RUNNER_TEMP/openrad-qa"
-          sha256sum --check openrad-v2.2.0-linux-x86_64.tar.gz.sha256
-          tar -xzf openrad-v2.2.0-linux-x86_64.tar.gz
-          "$PWD/openrad-v2.2.0-linux-x86_64/openrad" --version | grep -F '2.2.0'
+          cargo build --release --locked --bin openrad
+          "$GITHUB_WORKSPACE/target/release/openrad" --version | grep -F '2.2.0'
+          echo "Testing openrad built from $GITHUB_SHA"
       - name: Provision namespaces and exercise real TAP-to-TAP ICMP
         env:
           GH_TOKEN: ${{ github.token }}
@@ -47,7 +44,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq iproute2 iptables iputils-ping
-          binary="$RUNNER_TEMP/openrad-qa/openrad-v2.2.0-linux-x86_64/openrad"
+          binary="$GITHUB_WORKSPACE/target/release/openrad"
           test -c /dev/net/tun
           test -x "$binary"
           user_name="$(id -un)"

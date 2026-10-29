@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/android-unsigned-local-signing.yml'
       - 'scripts/sign-android-local.ps1'
+      - 'clients/android/**'
   workflow_dispatch:
 
 permissions:

@@ -44,11 +44,35 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         self.assertEqual(len(self.paper), 21)
         self.assertNotIn("26.1", self.paper)  # Unsupported unpatched Paper API
 
+    def step_conditions(self, job):
+        """Map each step name of one workflow job to its `if:` expression."""
+        block = self.text.split(f"\n  {job}:", 1)[1]
+        block = re.split(r"\n  [a-z]+:\n", block, maxsplit=1)[0]
+        conditions = {}
+        for step in re.split(r"\n      - ", block)[1:]:
+            name = re.match(r"name: (.+)", step)
+            condition = re.search(r"^\s+if: \$\{\{ (.+) \}\}\s*$", step, re.M)
+            if name:
+                conditions[name.group(1).strip()] = condition.group(1) if condition else None
+        return conditions
+
     def test_modern_targets_use_separate_java25_build(self):
-        self.assertIn("clients/mod/modern", self.text)
-        self.assertIn("startsWith(matrix.minecraft, '26.')", self.text)
+        steps = self.step_conditions("fabric")
+        modern = "startsWith(matrix.minecraft, '26.')"
+        regular = "!" + modern
+        for name in ("Compile and test modern Fabric on Java 25",
+                     "Verify modern Fabric version, bytecode, mixins and metadata"):
+            self.assertEqual(steps[name], modern, name)
+        for name in ("Compile, remap and test regular Fabric target",
+                     "Verify regular Fabric version, bytecode, mixins and metadata"):
+            self.assertEqual(steps[name], regular, name)
+        self.assertIn("working-directory: clients/mod/modern", self.text)
         for version in ("26.1", "26.1.1", "26.1.2", "26.2", "26.3"):
             self.assertIn(version, self.fabric)
+
+    def test_verifier_tests_run_in_inventory_job(self):
+        inventory = self.text.split("\n  fabric:", 1)[0]
+        self.assertIn("test_verify_version_jar.py", inventory)
 
     def test_paper_26_targets_use_matching_api(self):
         for version in ("26.1.1", "26.1.2", "26.2", "26.3"):
