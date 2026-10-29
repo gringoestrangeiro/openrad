@@ -399,6 +399,7 @@ class Engine(
             commands.poll()
             val request = nextRequest
             nextRequest = nextRequest % 0xffffffffL + 1
+            var prepared: NetworkOperation? = null
             try {
                 when (next) {
                     is Command.Search -> {
@@ -412,6 +413,7 @@ class Engine(
                             next.done(CommandResult.Network(NetworkOperation.Outcome.Joined(already, pendingApproval)))
                         } else {
                             val op = NetworkOperation.join(next.name, next.password, request, request)
+                            prepared = op
                             control.send(op.packet)
                             lastJoinStart = t
                             active.add(Active(op, null, request, t + 35_000, next.done))
@@ -419,6 +421,7 @@ class Engine(
                     }
                     is Command.Create -> {
                         val op = NetworkOperation.create(next.name, next.password, request, request)
+                        prepared = op
                         control.send(op.packet)
                         lastJoinStart = t
                         active.add(Active(op, null, request, t + 35_000, next.done))
@@ -427,12 +430,20 @@ class Engine(
                         val network = synchronized(lock) { membership.networks[next.networkId] }
                             ?: fail("network is not an authenticated membership")
                         val op = NetworkOperation.remove(next.networkId, network.name, next.delete, request, request)
+                        prepared = op
                         control.send(op.packet)
                         active.add(Active(op, null, request, t + 35_000, next.done))
                     }
                 }
             } catch (e: ProtocolException) {
+                prepared?.wipe()
                 next.fail(e.message ?: "invalid request")
+            } catch (e: IOException) {
+                // This command has left the queue but is not active until send succeeds.
+                // Complete it here; reconnect cleanup cannot find it in either collection.
+                prepared?.wipe()
+                next.fail("control connection closed")
+                throw e
             } finally {
                 next.wipe()
             }
