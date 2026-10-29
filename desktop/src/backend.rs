@@ -736,6 +736,10 @@ fn manager(
                             ensure!(reply.ok, "{}", reply.message);
                         }
                     } else {
+                        // Status is only a cached observation. Exclude identity
+                        // replacement and a newly started service before offline writes.
+                        let _profile_lock = dir.try_profile_lock()?;
+                        let _service_lock = dir.stopped_lock()?;
                         dir.save_preferences(&configure(&next)?)?;
                         if (identity.is_some() || last_identity.is_some())
                             && next.node_name != settings.node_name
@@ -1072,6 +1076,69 @@ mod tests {
             assert!(notices
                 .try_iter()
                 .any(|notice| matches!(notice, Notice::Phase(Phase::Error, _))));
+            drop(lock);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn offline_settings_preserve_identity_when_another_frontend_owns_the_profile() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-rename-lock-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            let settings = Settings {
+                auto_connect: false,
+                node_name: "original".into(),
+                ..Settings::default()
+            };
+            paths.save_settings(&settings).unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let lock = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let (sender, actions) = mpsc::channel();
+            sender
+                .send(Action::Save(Settings {
+                    node_name: "renamed".into(),
+                    ..settings
+                }))
+                .unwrap();
+            sender.send(Action::Shutdown).unwrap();
+            let notices = Notices::default();
+            let published = notices.clone();
+            manager(
+                paths,
+                None,
+                None,
+                runtime::Options::default(),
+                actions,
+                Cancellation::default(),
+                Arc::new(move |notice| published.send(notice)),
+            );
+            assert_eq!(
+                std::fs::read(dir.identity()).unwrap(),
+                before,
+                "offline settings must not bypass another frontend's lock"
+            );
+            assert!(notices.try_iter().any(|notice| matches!(
+                notice,
+                Notice::Engine(runtime::Update::Operation { error: true, .. })
+            )));
             drop(lock);
             std::fs::remove_dir_all(directory).unwrap();
         }
