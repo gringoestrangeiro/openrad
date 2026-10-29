@@ -124,8 +124,8 @@ jobs:
             fi
           done
           classes="$RUNNER_TEMP/openrad-qa/java-classes"
-          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- java -cp "$classes" LiveProvisionForTapQa "$java_owner" "OpenRadTAPQA-A-$GITHUB_RUN_ID"
-          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- java -cp "$classes" LiveProvisionForTapQa "$java_guest" "OpenRadTAPQA-B-$GITHUB_RUN_ID"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$JAVA_HOME/bin/java" -cp "$classes" LiveProvisionForTapQa "$java_owner" "OpenRadTAPQA-A-$GITHUB_RUN_ID"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$JAVA_HOME/bin/java" -cp "$classes" LiveProvisionForTapQa "$java_guest" "OpenRadTAPQA-B-$GITHUB_RUN_ID"
           sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" init --identity "$java_owner/identity.json" --data-dir "$owner"
           sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" init --identity "$java_guest/identity.json" --data-dir "$guest"
           sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" start --data-dir "$owner"
