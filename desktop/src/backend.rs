@@ -317,14 +317,7 @@ fn manager(
         if let Some(path) = import {
             let imported = Identity::load(&path)?;
             ensure!(!service_running, "Disconnect before importing an identity");
-            ensure!(identity.as_ref().is_none_or(|id| id.rid == imported.rid),
-                "This profile already has an identity; use another data directory to import a different one");
-            if dir.identity_file_present() {
-                dir.save_identity(&imported)?;
-            } else {
-                storage::save(&paths.entry()?, &imported)?;
-            }
-            identity = Some(imported);
+            identity = Some(import_identity(&paths, &dir, imported)?);
         }
         if let Some(id) = &identity {
             settings.node_name = id.node_name.clone();
@@ -775,15 +768,7 @@ fn manager(
             Ok(Action::Import(path)) if !service_running && !replacement.is_pending() => {
                 let result = (|| -> Result<()> {
                     let imported = Identity::load(&path)?;
-                    ensure!(
-                        identity.as_ref().is_none_or(|id| id.rid == imported.rid),
-                        "An identity is already saved in this profile"
-                    );
-                    if dir.identity_file_present() {
-                        dir.save_identity(&imported)?;
-                    } else {
-                        storage::save(&paths.entry()?, &imported)?;
-                    }
+                    let imported = import_identity(&paths, &dir, imported)?;
                     settings.node_name = imported.node_name.clone();
                     report(Notice::NodeName(imported.node_name.clone()));
                     report(Notice::Identity {
@@ -875,6 +860,32 @@ fn manager(
             _ => {}
         }
     }
+}
+
+/// Import only while this frontend exclusively owns the stopped profile.
+/// Reload under the locks: a cached identity/status may predate a CLI reset.
+fn import_identity(
+    paths: &Paths,
+    dir: &openrad::daemon::DataDir,
+    imported: Identity,
+) -> Result<Identity> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let current = if dir.identity_file_present() {
+        Some(dir.load_identity()?)
+    } else {
+        storage::load(&paths.entry()?)?
+    };
+    ensure!(
+        current.as_ref().is_none_or(|id| id.rid == imported.rid),
+        "This profile already has an identity; use another data directory to import a different one"
+    );
+    if dir.identity_file_present() {
+        dir.save_identity(&imported)?;
+    } else {
+        storage::save(&paths.entry()?, &imported)?;
+    }
+    Ok(imported)
 }
 
 // Move owned JSON subtrees into deserialization. Missing fields retain the
@@ -1005,6 +1016,66 @@ impl storage::Vault for ProfileVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_import_preserves_identity_when_another_frontend_owns_the_profile() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-import-lock-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            paths
+                .save_settings(&Settings {
+                    auto_connect: false,
+                    ..Settings::default()
+                })
+                .unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let mut imported = original.clone();
+            imported.node_name = "imported".into();
+            let import_dir = ReportDirectory::new(&directory.join("import")).unwrap();
+            imported.save(&import_dir).unwrap();
+            let lock = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let (sender, actions) = mpsc::channel();
+            sender.send(Action::Shutdown).unwrap();
+            let notices = Notices::default();
+            let published = notices.clone();
+            manager(
+                paths,
+                Some(directory.join("import/identity.json")),
+                None,
+                runtime::Options::default(),
+                actions,
+                Cancellation::default(),
+                Arc::new(move |notice| published.send(notice)),
+            );
+            assert_eq!(
+                std::fs::read(dir.identity()).unwrap(),
+                before,
+                "an import must not bypass another frontend's lock"
+            );
+            assert!(notices
+                .try_iter()
+                .any(|notice| matches!(notice, Notice::Phase(Phase::Error, _))));
+            drop(lock);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
 
     #[test]
     fn the_notice_queue_keeps_working_after_a_producer_panics_while_holding_it() {
