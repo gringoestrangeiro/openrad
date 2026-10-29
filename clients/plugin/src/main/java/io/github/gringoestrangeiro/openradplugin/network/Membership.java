@@ -200,7 +200,7 @@ public final class Membership {
         var ids = f.stream().filter(r -> r.tag() == 0x020001e1).toList();
         require(!ids.isEmpty() && ids.size() <= 2, "event member count");
         for (var r : ids) TlvCodec.int64(r.value());
-        return TlvCodec.int64(ids.getFirst().value());
+        return TlvCodec.int64(ids.get(0).value());
     }
 
     public List<Peer> eligible(Set<String> names, Set<Long> allowed, Set<Long> denied) {

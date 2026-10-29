@@ -96,8 +96,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
         }
         stopped.set(false);
         state = new Snapshot("CONNECTING", "", List.of(), 0, "");
-        thread = Thread.ofPlatform().name("openrad-client-control")
-                .daemon().unstarted(this::worker);
+        thread = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-control", this::worker);
         thread.start();
         return true;
     }

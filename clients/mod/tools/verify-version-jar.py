@@ -30,17 +30,23 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             class_path = mixins["package"].replace(".", "/") + "/" + name + ".class"
             if class_path not in files:
                 raise ValueError(f"Missing mixin {class_path}")
-        for name in ("io/github/gringoestrangeiro/openradclient/fabric/OpenRadClientMod.class",
-                     "io/github/gringoestrangeiro/openradclient/ClientVpnRuntime.class"):
+        for name in sorted(files):
+            if not name.endswith(".class"):
+                continue
             bytecode = z.read(name)
             if len(bytecode) < 8 or bytecode[:4] != b"\xca\xfe\xba\xbe":
                 raise ValueError(f"Invalid Java class {name}")
             major = struct.unpack(">H", bytecode[6:8])[0]
-            expected_major = 69 if expected_minecraft.startswith("26.") else 65
+            expected_java = 16 if expected_minecraft in ("1.17", "1.17.1") else (25 if expected_minecraft.startswith("26.") else (17 if expected_minecraft in ("1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4") else 21))
+            expected_major = expected_java + 44
             if major != expected_major:
                 raise ValueError(f"Unexpected Java bytecode major {major}; expected {expected_major}")
+        if metadata.get("depends", {}).get("java") != f">={expected_java}":
+            raise ValueError(f"Unexpected Java metadata: {metadata.get('depends', {}).get('java')}")
+        if mixins.get("compatibilityLevel") != f"JAVA_{expected_java}":
+            raise ValueError(f"Unexpected mixin Java compatibility: {mixins.get('compatibilityLevel')}")
         print(f"VERIFIED {jar.name}: Fabric Minecraft {actual_target}, "
-              f"mod {metadata['version']}, Java {25 if expected_minecraft.startswith('26.') else 21}, classes and mixins included")
+              f"mod {metadata['version']}, Java {expected_java}, classes and mixins included")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:

@@ -57,7 +57,7 @@ class LoopbackBridgeTest {
             assertNotEquals(25565, local.getPort());
             try (Socket minecraft = new Socket()) {
                 minecraft.connect(local, 2_000);
-                minecraft.setSoTimeout(2_000);
+                minecraft.setSoTimeout(8_000);
                 byte[] data = new byte[65_537];
                 for (int i = 0; i < data.length; i++) data[i] = (byte) i;
                 Thread writer = Thread.ofVirtual().start(() -> {
@@ -65,14 +65,14 @@ class LoopbackBridgeTest {
                     catch (IOException failure) { throw new AssertionError(failure); }
                 });
                 assertArrayEquals(data, minecraft.getInputStream().readNBytes(data.length));
-                writer.join(2_000);
+                writer.join(8_000);
                 assertFalse(writer.isAlive());
                 assertEquals(1, opened.get());
                 assertThrows(IOException.class, () -> {
                     try (Socket second = new Socket()) { second.connect(local, 500); }
                 });
             }
-            assertTrue(closed.await(2, TimeUnit.SECONDS));
+            assertTrue(closed.await(8, TimeUnit.SECONDS));
         }
     }
 

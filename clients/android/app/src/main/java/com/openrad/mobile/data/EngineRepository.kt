@@ -141,14 +141,19 @@ class EngineRepository(
         _publicQuery.value = query
         if (engine() == null) {
             catalog.value = emptyList()
+            _publicBusy.value = false
             _publicHasMore.value = false
+            publicCursor = 0L
             return
         }
         _publicBusy.value = true
-        val result = await { e, done -> e.search(query.trim(), 0, done) }
+        val result = try {
+            await { e, done -> e.search(query.trim(), 0, done) }
+        } finally {
+            if (generation == searchGeneration.get()) _publicBusy.value = false
+        }
         // Responses to stale queries are discarded (300 ms debounce in the ViewModel).
         if (generation != searchGeneration.get()) return
-        _publicBusy.value = false
         when (result) {
             is CommandResult.Listing -> {
                 catalog.value = result.networks

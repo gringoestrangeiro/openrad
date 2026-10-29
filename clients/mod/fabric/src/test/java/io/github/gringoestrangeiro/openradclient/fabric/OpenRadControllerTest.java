@@ -18,6 +18,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class OpenRadControllerTest {
     @TempDir Path directory;
 
+    @Test void stoppingImmediatelyAfterAnAdmittedActionDoesNotRejectCleanup() throws Exception {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            var controller = new OpenRadController(directory, Logger.getAnonymousLogger());
+            try {
+                controller.initialize();
+                idle(controller);
+                assertTrue(controller.disconnect());
+                assertDoesNotThrow(controller::close);
+            } finally { controller.close(); }
+        }
+    }
+
     @Test void loadsExistingProfileAndSavesWithoutStartingVpn() throws Exception {
         ClientConfig previous = new ClientConfig(false, List.of("Minecraft [Português 1]"));
         previous.save(directory);

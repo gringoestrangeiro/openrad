@@ -584,7 +584,9 @@ class VpnRuntimeTest {
                                     42,
                                     receivedLan.length - 42,
                                     StandardCharsets.UTF_8));
-                    assertEquals(1, runtime.lanSnapshot().sent());
+                    // Delivery can reach the peer before the sender worker increments
+                    // its accounting counter. Assert eventual accounting, not the race.
+                    await(() -> runtime.lanSnapshot().sent() == 1);
                 }
                 VirtualClient client = new VirtualClient(remoteChannel);
                 client.handshake();

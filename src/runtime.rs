@@ -412,6 +412,25 @@ fn is_join_command(command: &Command) -> bool {
         _ => false,
     }
 }
+/// Pace writes using the sender's clock, independent of when a remote reader
+/// gets scheduled to consume records that may already be buffered together.
+struct JoinPacer {
+    next_start: Instant,
+}
+impl JoinPacer {
+    fn new(now: Instant) -> Self {
+        Self { next_start: now }
+    }
+    fn ready(&self, now: Instant) -> bool {
+        now >= self.next_start
+    }
+    fn started(&mut self, now: Instant) {
+        self.next_start = now + NETWORK_JOIN_DELAY;
+    }
+    fn remaining(&self, now: Instant) -> Duration {
+        self.next_start.saturating_duration_since(now)
+    }
+}
 struct ControlConfig {
     diagnostics: Diagnostics,
     heartbeat_interval: Duration,
@@ -474,7 +493,7 @@ fn control_loop(
         let mut sequence = 0u32;
         let mut pending: Vec<Pending> = Vec::new();
         let mut deferred = None;
-        let mut next_join = Instant::now();
+        let mut joins = JoinPacer::new(Instant::now());
         let mut heartbeat = Instant::now();
         let mut health = Instant::now() + Duration::from_secs(30);
         loop {
@@ -538,7 +557,7 @@ fn control_loop(
                         && pending
                             .iter()
                             .all(|p| matches!(&p.kind, PendingKind::Network(n) if n.is_join()))))
-                    && (!join || Instant::now() >= next_join)
+                    && (!join || joins.ready(Instant::now()))
                     && pending.len() < MAX_CONCURRENT_JOINS
             }) {
                 if let Some(command) = deferred.take() {
@@ -567,7 +586,7 @@ fn control_loop(
                         Ok((kind, bytes)) => {
                             session.send(&bytes).context("sending network command")?;
                             if matches!(&kind, PendingKind::Network(n) if n.is_join()) {
-                                next_join = Instant::now() + NETWORK_JOIN_DELAY;
+                                joins.started(Instant::now());
                             }
                             diagnostics.event("control_operation_started", json!({
                                 "request_id": next_id,
@@ -625,11 +644,8 @@ fn control_loop(
                 bail!("network operation timed out; reconnect to reload server membership");
             }
             let poll_ms =
-                if deferred.as_ref().is_some_and(is_join_command) && Instant::now() < next_join {
-                    next_join
-                        .saturating_duration_since(Instant::now())
-                        .as_millis()
-                        .clamp(1, 20) as i32
+                if deferred.as_ref().is_some_and(is_join_command) && !joins.ready(Instant::now()) {
+                    joins.remaining(Instant::now()).as_millis().clamp(1, 20) as i32
                 } else {
                     20
                 };
@@ -2527,6 +2543,24 @@ mod control_tests {
         .concat()
     }
     #[test]
+    fn join_pacing_requires_fifty_milliseconds_after_each_completed_write() {
+        let now = Instant::now();
+        let mut joins = JoinPacer::new(now);
+        assert_eq!(NETWORK_JOIN_DELAY, Duration::from_millis(50));
+        assert!(joins.ready(now));
+        for completed_write in [now, now + Duration::from_secs(1)] {
+            joins.started(completed_write);
+            assert!(!joins.ready(completed_write));
+            assert!(!joins.ready(completed_write + NETWORK_JOIN_DELAY - Duration::from_nanos(1)));
+            assert_eq!(joins.remaining(completed_write), NETWORK_JOIN_DELAY);
+            assert!(joins.ready(completed_write + NETWORK_JOIN_DELAY));
+            assert_eq!(
+                joins.remaining(completed_write + NETWORK_JOIN_DELAY),
+                Duration::ZERO
+            );
+        }
+    }
+    #[test]
     fn overlapping_public_joins_are_paced_and_acknowledged_out_of_order() {
         let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
         for (id, name) in [(21, "First LAN"), (22, "Second LAN")] {
@@ -2538,12 +2572,9 @@ mod control_tests {
                 .unwrap();
         }
         h.receive_operation(39);
-        let first = Instant::now();
         h.receive_operation(39);
-        assert!(
-            first.elapsed() >= Duration::from_millis(45),
-            "join starts must be spaced by 50 ms (allowing socket observation jitter)"
-        );
+        // Exact spacing is checked against the sender clock above. Arrival
+        // observations can coalesce if this test thread is descheduled.
         // Both requests are on the wire before either server response arrives.
         for (id, name, guid) in [(102, "Second LAN", [2; 16]), (101, "First LAN", [1; 16])] {
             h.remote

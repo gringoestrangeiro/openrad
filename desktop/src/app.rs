@@ -635,6 +635,7 @@ pub struct App {
     pings: BTreeMap<u64, PingState>,
     next_ping_id: u64,
     release: Option<openrad::releases::Release>,
+    release_details_open: bool,
     dismissed_releases: BTreeSet<String>,
     toast: Option<(String, bool, Instant)>,
     activity: VecDeque<Activity>,
@@ -740,6 +741,7 @@ impl App {
             pings: BTreeMap::new(),
             next_ping_id: 0,
             release: None,
+            release_details_open: false,
             dismissed_releases: BTreeSet::new(),
             toast: None,
             activity: VecDeque::new(),
@@ -854,6 +856,13 @@ impl App {
                 Notice::BlockList(blocked) => self.blocked = blocked,
                 Notice::Release(release) => {
                     if !self.dismissed_releases.contains(&release.version) {
+                        if self
+                            .release
+                            .as_ref()
+                            .is_some_and(|shown| shown.version != release.version)
+                        {
+                            self.release_details_open = false;
+                        }
                         self.release = Some(release);
                     }
                 }
@@ -3313,16 +3322,52 @@ impl App {
                     ))
                     .color(BLUE),
                 );
-                ui.hyperlink_to(language.text("View release"), &release.url);
-                if ui
+                let view_release = ui.button(language.text("View release"));
+                if view_release.clicked() {
+                    // A native browser may be unavailable or fail to start. Keep
+                    // the release details accessible inside the desktop window.
+                    self.release_details_open = !self.release_details_open;
+                }
+                ui.ctx().accesskit_node_builder(view_release.id, |node| {
+                    node.set_expanded(self.release_details_open);
+                });
+                let dismiss = ui
                     .button(language.text("×"))
-                    .on_hover_text(language.text("Dismiss update notice"))
-                    .clicked()
-                {
+                    .on_hover_text(language.text("Dismiss update notice"));
+                dismiss.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        dismiss.enabled(),
+                        language.text("Dismiss update notice"),
+                    )
+                });
+                if dismiss.clicked() {
                     self.dismissed_releases.insert(release.version.clone());
                     self.release = None;
+                    self.release_details_open = false;
                 }
             });
+            if self.release_details_open {
+                ui.add_space(8.);
+                // A wrapping label keeps the full link visible at narrow window sizes.
+                ui.add(egui::Label::new(release.url.as_str()).wrap());
+                ui.horizontal(|ui| {
+                    let open_release =
+                        ui.hyperlink_to(language.text("Open in browser"), &release.url);
+                    // egui's selectable link text overwrites the AccessKit role
+                    // with Label; retain the actionable link name and role.
+                    open_release.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Link,
+                            open_release.enabled(),
+                            language.text("Open in browser"),
+                        )
+                    });
+                    if ui.button(language.text("Copy")).clicked() {
+                        ui.ctx().copy_text(release.url.clone());
+                    }
+                });
+            }
         });
         ui.add_space(12.);
     }
@@ -3872,13 +3917,17 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            // Windows wall-clock readings can repeat across parallel test threads.
+            static NEXT_FIXTURE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             let directory = std::env::temp_dir().join(format!(
-                "openrad-language-ui-{}-{}",
+                "openrad-language-ui-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos(),
+                NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ));
             let paths = Paths::new(Some(directory.clone())).unwrap();
             let lock = paths.lock().unwrap();
@@ -5281,7 +5330,12 @@ mod tests {
     fn click_button(ctx: &egui::Context, app: &mut App, text: &str) {
         click_control(ctx, app, text, egui::accesskit::Role::Button);
     }
-    fn click_control(ctx: &egui::Context, app: &mut App, text: &str, role: egui::accesskit::Role) {
+    fn click_control(
+        ctx: &egui::Context,
+        app: &mut App,
+        text: &str,
+        role: egui::accesskit::Role,
+    ) -> egui::FullOutput {
         tall_frame(ctx, app, vec![]);
         let output = tall_frame(ctx, app, vec![]);
         let bounds = output
@@ -5299,21 +5353,32 @@ mod tests {
             ((bounds.x0 + bounds.x1) / 2.) as f32,
             ((bounds.y0 + bounds.y1) / 2.) as f32,
         );
-        for pressed in [true, false] {
-            tall_frame(
-                ctx,
-                app,
-                vec![
-                    egui::Event::PointerMoved(pos),
-                    egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    },
-                ],
-            );
-        }
+        tall_frame(
+            ctx,
+            app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        tall_frame(
+            ctx,
+            app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                },
+            ],
+        )
     }
     #[test]
     fn peer_ip_toggle_saves_and_shows_only_active_transport_addresses_in_every_language() {
@@ -5566,6 +5631,100 @@ mod tests {
     }
 
     #[test]
+    fn update_notice_controls_are_accessible_and_emit_exact_urls_in_every_language() {
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.settings.language = preference;
+            let language = app.language();
+            let release = openrad::releases::Release {
+                version: "v99.0.0".into(),
+                url: "https://github.com/gringoestrangeiro/openrad/releases/tag/v99.0.0".into(),
+            };
+            app.release = Some(release.clone());
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let expanded = |output: &egui::FullOutput| {
+                output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some(language.text("View release")))
+                    .unwrap()
+                    .1
+                    .is_expanded()
+            };
+            tall_frame(&ctx, app, vec![]);
+            assert_eq!(expanded(&tall_frame(&ctx, app, vec![])), Some(false));
+            let output = click_control(
+                &ctx,
+                app,
+                language.text("View release"),
+                egui::accesskit::Role::Button,
+            );
+            assert_eq!(expanded(&output), Some(true));
+            assert!(
+                output.platform_output.commands.is_empty(),
+                "expanding details does not launch a browser"
+            );
+            let output = click_control(
+                &ctx,
+                app,
+                language.text("Copy"),
+                egui::accesskit::Role::Button,
+            );
+            assert_eq!(
+                output.platform_output.commands,
+                vec![egui::OutputCommand::CopyText(release.url.clone())]
+            );
+            let output = click_control(
+                &ctx,
+                app,
+                language.text("Open in browser"),
+                egui::accesskit::Role::Link,
+            );
+            assert!(
+                matches!(output.platform_output.commands.as_slice(), [egui::OutputCommand::OpenUrl(url)] if url.url == release.url)
+            );
+            for phase in [
+                Phase::Disconnected,
+                Phase::Connecting,
+                Phase::Connected,
+                Phase::Error,
+            ] {
+                app.phase = phase;
+                let output = tall_frame(&ctx, app, vec![]);
+                assert!(labels(&output).iter().any(|label| label == &release.url));
+                assert_eq!(expanded(&output), Some(true));
+            }
+            // A periodic check for the same release preserves the open details.
+            app.backend.notices.send(Notice::Release(release));
+            app.consume(&ctx);
+            assert!(app.release_details_open);
+            // A different release starts collapsed rather than reusing stale details.
+            app.backend
+                .notices
+                .send(Notice::Release(openrad::releases::Release {
+                    version: "v99.1.0".into(),
+                    url: "https://github.com/gringoestrangeiro/openrad/releases/tag/v99.1.0".into(),
+                }));
+            app.consume(&ctx);
+            assert!(!app.release_details_open);
+            click_button(&ctx, app, language.text("Dismiss update notice"));
+            assert!(app.release.is_none());
+        }
+    }
+
+    #[test]
     fn update_notice_survives_navigation_and_snapshots_until_manually_dismissed() {
         let mut fixture = Fixture::new();
         let app = fixture.app();
@@ -5601,8 +5760,23 @@ mod tests {
         app.page = Page::Networks;
         frame(&ctx, app, vec![]);
         assert!(app.release.is_some());
-        click_button(&ctx, app, "×");
+        click_button(&ctx, app, "View release");
+        assert!(
+            app.release_details_open,
+            "the button must expand in-app details"
+        );
+        let expanded = labels(&tall_frame(&ctx, app, vec![]));
+        assert!(
+            expanded.iter().any(|label| label.contains(&release.url)),
+            "the exact release URL must remain visible without a browser"
+        );
+        assert!(expanded.iter().any(|label| label == "Open in browser"));
+        assert!(expanded.iter().any(|label| label == "Copy"));
+        click_button(&ctx, app, "View release");
+        assert!(!app.release_details_open, "second click collapses details");
+        click_button(&ctx, app, "Dismiss update notice");
         assert!(app.release.is_none());
+        assert!(!app.release_details_open);
         app.backend.notices.send(Notice::Release(release));
         app.consume(&ctx);
         assert!(

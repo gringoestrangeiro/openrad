@@ -2,11 +2,28 @@ plugins {
     id("fabric-loom") version "1.13.6"
     java
 }
-java { toolchain.languageVersion.set(JavaLanguageVersion.of(21)) }
+val legacyJava16 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.17", "1.17.1")
+val legacyJava17 = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get() in setOf("1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")
+java { toolchain.languageVersion.set(JavaLanguageVersion.of(if (legacyJava16 || legacyJava17) 25 else 21)) }
 // Each Minecraft version gets its own remapped JAR. Never claim cross-version
 // compatibility simply by widening fabric.mod.json's Minecraft constraint.
 val minecraftTarget = providers.gradleProperty("openradMinecraftVersion").orElse("1.21.1").get()
 val supportedTargets = mapOf(
+    "1.17" to "0.36.0+1.17",
+    "1.17.1" to "0.46.1+1.17",
+    "1.18" to "0.46.6+1.18",
+    "1.18.1" to "0.46.6+1.18",
+    "1.18.2" to "0.59.1+1.18.2",
+    "1.19" to "0.58.0+1.19",
+    "1.19.1" to "0.58.5+1.19.1",
+    "1.19.2" to "0.77.0+1.19.2",
+    "1.19.3" to "0.76.1+1.19.3",
+    "1.19.4" to "0.87.2+1.19.4",
+    "1.20.1" to "0.92.12+1.20.1",
+    "1.20.2" to "0.91.6+1.20.2",
+    "1.20.3" to "0.91.1+1.20.3",
+    "1.20.4" to "0.97.3+1.20.4",
+    "1.20.5" to "0.97.8+1.20.5",
     "1.20.6" to "0.100.8+1.20.6",
     "1.21" to "0.102.0+1.21",
     "1.21.1" to "0.116.17+1.21.1",
@@ -40,21 +57,124 @@ sourceSets.main {
     else
         java.exclude("**/ConnectionRoutingMixin.java")
 }
+// Minecraft 1.19.4 uses PoseStack in Screen.render rather than GuiGraphics.
+// Generate a source-only compatibility copy; never modify new-version UI sources.
+if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
+    val generated1194 = layout.buildDirectory.dir("generated/java1194")
+    val generate1194 by tasks.registering(Sync::class) {
+        inputs.property("compatibilityAdapterVersion", "1182-v3")
+        // Filters differ across 1.17/1.18, 1.19.2 and 1.19.3/4. Without this
+        // input a matrix build can reuse source transformed for the prior target.
+        inputs.property("minecraftTarget", minecraftTarget)
+        from("src/main/java")
+        into(generated1194)
+        filteringCharset = "UTF-8"
+        if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2")) {
+            exclude("**/mixin/MultiplayerScreenMixin.java")
+            filesMatching("**/*.java") {
+                filter { line: String ->
+                    line.replace("Button.builder(", "LegacyButtonFactory.builder(")
+                        .replace("import net.minecraft.client.gui.components.Tooltip;", "// Tooltip was introduced after Minecraft 1.19.2")
+                        .replace("save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr(\"openrad.menu.reconnect_note\")) : null);", ";")
+                        .replace("option.setTooltip(Tooltip.create(Component.literal(item.entry().name())));", ";")
+                        .replace("ScreenEvents.afterTick(screen).register(ignored -> button.setTooltip(Tooltip.create(", "/* Legacy 1.19.2 has no dynamic Tooltip API")
+                        .replace("OpenRadI18n.tr(\"openrad.menu.status\", phase(controller.status().phase())))));", "*/")
+                        .replace("box.getX()", "box.x")
+                        .replace("box.getY()", "box.y")
+                }
+            }
+        }
+        if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2")) {
+            filesMatching("**/*.java") {
+                filter { source: String ->
+                    source.replace("Component.literal(", "new net.minecraft.network.chat.TextComponent(")
+                        .replace("Component.translatable(", "new net.minecraft.network.chat.TranslatableComponent(")
+                        .replace("Component.empty()", "new net.minecraft.network.chat.TextComponent(\"\")")
+                        .replace("rebuildWidgets();", "clearWidgets(); init();")
+                        .replace("net.fabricmc.fabric.api.client.command.v2.", "net.fabricmc.fabric.api.client.command.v1.")
+                        .replace("import net.fabricmc.fabric.api.client.command.v1.ClientCommandRegistrationCallback;", "")
+                        .replace("ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(", "net.fabricmc.fabric.api.client.command.v1.ClientCommandManager.DISPATCHER.register(")
+                        .replace("}))))", "})))")
+                }
+            }
+        }
+        // Mixin uses a different static connection entrypoint before MC 1.20.
+        filesMatching("**/ConnectionMixin.java") {
+            filter { line: String ->
+                line.replace("connect(Ljava/net/InetSocketAddress;ZLnet/minecraft/network/Connection;)Lio/netty/channel/ChannelFuture;",
+                    "connectToServer(Ljava/net/InetSocketAddress;Z)Lnet/minecraft/network/Connection;")
+            }
+        }
+        // 1.19.3 returns a LanguageInfo rather than a locale String.
+        if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3")) {
+            filesMatching("**/OpenRad*Screen.java") {
+                filter { line: String ->
+                    line.replace("minecraft.getLanguageManager().getSelected()",
+                        "minecraft.getLanguageManager().getSelected().getCode()")
+                }
+            }
+        }
+        filesMatching("**/OpenRad*Screen.java") {
+            filter { sourceLine: String ->
+                sourceLine.replace("net.minecraft.client.gui.GuiGraphics", "com.mojang.blaze3d.vertex.PoseStack")
+                    .replace("GuiGraphics ", "PoseStack ")
+                    .replace("graphics.drawCenteredString(font,", "drawCenteredString(graphics, font,")
+                    .replace("graphics.drawString(font,", "drawString(graphics, font,")
+            }
+        }
+    }
+    val generateCore1171 = if (minecraftTarget in setOf("1.17", "1.17.1")) {
+        tasks.register<Sync>("generateCore1171") {
+            from("../core/src/main/java")
+            from("../../plugin/src/compat16/java") { include("**/util/HexFormatCompat.java") }
+            into(layout.buildDirectory.dir("generated/core1171"))
+            filteringCharset = "UTF-8"
+            inputs.property("openradCoreCompatVersion", "java16-v1")
+            filesMatching("**/*.java") {
+                filter { line: String ->
+                    line.replace("import java.util.HexFormat;", "import io.github.gringoestrangeiro.openradplugin.util.HexFormatCompat;")
+                        .replace("java.util.HexFormat.of()", "io.github.gringoestrangeiro.openradplugin.util.HexFormatCompat.of()")
+                        .replace("HexFormat.of()", "HexFormatCompat.of()")
+                        .replace("public sealed interface Packet permits Frames, Keepalive, Other {}", "public interface Packet {}")
+                        .replace("public sealed interface Result permits Rejected, ArpResponse, AdmittedTcp {}", "public interface Result {}")
+                        .replace("import java.util.random.RandomGenerator;", "import java.util.Random;")
+                        .replace("RandomGenerator random", "Random random")
+                }
+            }
+        }
+    } else null
+    sourceSets.main {
+        val legacyRoots = mutableListOf(generated1194.get().asFile)
+        if (generateCore1171 != null) legacyRoots.add(layout.buildDirectory.dir("generated/core1171").get().asFile)
+        else legacyRoots.add(file("../core/src/main/java"))
+        if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2")) legacyRoots.add(file("src/compat1192/java"))
+        java.setSrcDirs(legacyRoots)
+    }
+    tasks.named<JavaCompile>("compileJava") {
+        dependsOn(generate1194)
+        if (generateCore1171 != null) dependsOn(generateCore1171)
+    }
+}
 tasks.withType<JavaCompile>().configureEach {
-    options.release.set(21)
+    options.release.set(if (legacyJava16) 16 else if (legacyJava17) 17 else 21)
     options.encoding = "UTF-8"
+}
+tasks.named<JavaCompile>("compileTestJava") {
+    if (legacyJava16 || legacyJava17) options.release.set(21)
 }
 tasks.processResources {
     // Track the version as a task input so Gradle refreshes fabric.mod.json on updates.
     inputs.property("openradModVersion", project.version.toString())
     inputs.property("openradMinecraftVersion", minecraftTarget)
+    inputs.property("openradTargetJavaVersion", if (legacyJava16) 16 else if (legacyJava17) 17 else 21)
     filesMatching("fabric.mod.json") {
-        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget)
+        expand("version" to project.version.toString(), "minecraftVersion" to minecraftTarget, "javaVersion" to (if (legacyJava16) 16 else if (legacyJava17) 17 else 21))
     }
     val newerRouting = minecraftTarget == "1.21.11"
     inputs.property("openradRouteMixin", newerRouting)
     filesMatching("openrad-client.mixins.json") {
-        expand("connectionMixin" to (if (newerRouting) "ConnectionRoutingMixin" else "ConnectionMixin"))
+        expand("connectionMixin" to (if (newerRouting) "ConnectionRoutingMixin" else "ConnectionMixin"),
+            "javaVersion" to (if (legacyJava16) 16 else if (legacyJava17) 17 else 21))
     }
 }
 tasks.jar { from("../LICENSE") { into("META-INF") } }

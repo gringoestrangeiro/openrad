@@ -70,8 +70,7 @@ public final class LoopbackBridge implements AutoCloseable {
             leases.add(lease);
             if (closed.get()) throw new IOException("OpenRad bridge closed");
             Lease running = lease;
-            Thread worker = Thread.ofVirtual().name("openrad-minecraft-bridge")
-                    .unstarted(() -> serve(running, address, destination.getPort()));
+            Thread worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualUnstarted("openrad-minecraft-bridge",() -> serve(running, address, destination.getPort()));
             lease.start(worker);
             return new InetSocketAddress(LOOPBACK, listener.getLocalPort());
         } catch (IOException | RuntimeException failure) {
@@ -117,7 +116,7 @@ public final class LoopbackBridge implements AutoCloseable {
             Tunnel tunnel = opener.open(address, port);
             if (!lease.attach(tunnel)) return;
             pumpsStarted = true;
-            Thread.ofVirtual().name("openrad-minecraft-upload").start(() -> {
+            io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualStart("openrad-minecraft-upload",() -> {
                 try {
                     copy(socket.getInputStream(), tunnel.output());
                     tunnel.shutdownOutput();

@@ -43,7 +43,7 @@ final class ClientPeerService implements AutoCloseable {
         this.selectedNames = Set.copyOf(config.networks());
         resourceCloser = new AsyncResourceCloser(maxPeers);
         executor = new ThreadPoolExecutor(0, maxPeers, 0, TimeUnit.SECONDS,
-                new SynchronousQueue<>(), Thread.ofVirtual().name("openrad-client-peer-", 0).factory());
+                new SynchronousQueue<>(), io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("openrad-client-peer-"));
         stack = new OutboundTcpStack(attachment.vip(), this::sendFrame, config.maxConnections());
     }
 

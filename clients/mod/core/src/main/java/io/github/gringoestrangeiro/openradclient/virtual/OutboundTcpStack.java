@@ -70,8 +70,8 @@ public final class OutboundTcpStack implements AutoCloseable {
         nextPort += random.nextInt(16384);
         if (workers) {
             timer = Executors.newSingleThreadScheduledExecutor(r ->
-                    Thread.ofPlatform().daemon().name("openrad-client-tcp-timer").unstarted(r));
-            sender = Thread.ofPlatform().daemon().name("openrad-client-tcp-frames").unstarted(() -> {
+                    io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-tcp-timer", r));
+            sender = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-tcp-frames",() -> {
                 while (!closed) {
                     try {
                         Frame frame = frames.poll(100, TimeUnit.MILLISECONDS);

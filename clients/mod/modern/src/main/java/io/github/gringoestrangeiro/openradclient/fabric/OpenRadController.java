@@ -22,7 +22,9 @@ public final class OpenRadController implements AutoCloseable {
     private final Path directory;
     private final Logger logger;
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
-            new ArrayBlockingQueue<>(1), Thread.ofPlatform().daemon().name("openrad-client-settings").factory());
+            // One admitted UI action plus a reserved shutdown task. close() can race
+            // a queued action before the worker has dequeued it.
+            new ArrayBlockingQueue<>(2), Thread.ofPlatform().daemon().name("openrad-client-settings").factory());
     private final AtomicBoolean busy = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile ClientConfig config = new ClientConfig(false, List.of());

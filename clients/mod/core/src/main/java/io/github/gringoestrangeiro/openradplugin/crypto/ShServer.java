@@ -31,7 +31,7 @@ public final class ShServer implements AutoCloseable {
     public byte[] hello(byte[] data) {
         require(state == 1, "SH unexpected hello");
         require(
-                Arrays.equals(ShRecord.parse(data, 1, 0x20000000).getFirst(), le64(rid)),
+                Arrays.equals(ShRecord.parse(data, 1, 0x20000000).get(0), le64(rid)),
                 "SH identity mismatch");
         state = 3;
         return concat(
@@ -42,7 +42,7 @@ public final class ShServer implements AutoCloseable {
 
     public byte[] clientPublic(byte[] data) {
         require(state == 3, "SH unexpected client public");
-        byte[] a = ShRecord.parse(data, 3, 0x60000000).getFirst();
+        byte[] a = ShRecord.parse(data, 3, 0x60000000).get(0);
         BigInteger av = ShMath.peerPublic(a), x = ShMath.x(rid, password, salt), v = G.modPow(x, N);
         byte[] b = serial(ShMath.multiplier().multiply(v).add(G.modPow(privateValue, N)).mod(N));
         BigInteger u = ShMath.scrambling(a, b);
@@ -58,7 +58,7 @@ public final class ShServer implements AutoCloseable {
         require(state == 5, "SH unexpected client proof");
         state = 7;
         require(
-                MessageDigest.isEqual(ShRecord.parse(data, 5, 0x70000000).getFirst(), m1),
+                MessageDigest.isEqual(ShRecord.parse(data, 5, 0x70000000).get(0), m1),
                 "SH client proof rejected");
         return new Proof(ShRecord.message(6, 0x70000000, m2), key);
     }

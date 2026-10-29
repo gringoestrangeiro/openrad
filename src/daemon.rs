@@ -1457,10 +1457,11 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         payload.len() as u64 <= REPLY_LIMIT,
         "control reply too large"
     );
-    write_bounded(&mut stream, &payload, Duration::from_secs(5))?;
+    let written = write_bounded(&mut stream, &payload, Duration::from_secs(5));
     if stopping {
         shared.stop();
     }
+    written?;
     Ok(())
 }
 
@@ -1586,8 +1587,11 @@ fn serve_connection(mut stream: windows_pipe::Connection, shared: Arc<Shared>) -
         payload.len() as u64 <= REPLY_LIMIT,
         "control reply too large"
     );
-    stream.write_message(&payload, Duration::from_secs(5))?;
-    let acknowledged = stream.wait_for_acknowledgement();
+    // A fully received Stop remains effective if the frontend closes before
+    // reading its reply. Preserve reply/ack ordering when it stays connected.
+    let acknowledged = stream
+        .write_message(&payload, Duration::from_secs(5))
+        .and_then(|()| stream.wait_for_acknowledgement());
     if stopping {
         shared.stop();
     }
@@ -1747,6 +1751,48 @@ mod tests {
     fn shared() -> Shared {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
+    }
+    #[cfg(unix)]
+    #[test]
+    fn a_received_stop_survives_a_closed_control_client() {
+        let shared = Arc::new(shared());
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .write_all(&serde_json::to_vec(&Request::Stop).unwrap())
+            .unwrap();
+        client.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(client);
+        assert!(serve_connection(server, shared.clone()).is_err());
+        assert!(shared.shutdown.load(Ordering::Relaxed));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn a_received_stop_survives_a_closed_control_client() {
+        let shared = Arc::new(shared());
+        let path = std::env::temp_dir().join(format!(
+            "openrad-stop-pipe-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let mut listener = windows_pipe::Listener::bind(&path).unwrap();
+        let mut client = windows_pipe::Connection::connect(&path).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        let server = loop {
+            if let Some(server) = listener.accept().unwrap() {
+                break server;
+            }
+            assert!(Instant::now() < until);
+            thread::yield_now();
+        };
+        client
+            .write_message(
+                &serde_json::to_vec(&Request::Stop).unwrap(),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        drop(client);
+        assert!(serve_connection(server, shared.clone()).is_err());
+        assert!(shared.shutdown.load(Ordering::Relaxed));
     }
     #[test]
     fn a_panic_while_holding_the_state_lock_does_not_disable_the_service() {
