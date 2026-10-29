@@ -37,7 +37,13 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq iproute2 iptables iputils-ping
+          sudo apt-get install -y -qq iproute2 iptables iputils-ping dbus gnome-keyring
+          dbus-run-session -- bash <<'TAP_QA_SESSION'
+          set -euo pipefail
+          keyring_pass="$(openssl rand -hex 24)"
+          printf '%s' "$keyring_pass" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+          unset keyring_pass
+          echo "PASS: isolated D-Bus Secret Service available for headless profiles"
           binary="$RUNNER_TEMP/openrad-qa/openrad-v2.2.0-linux-x86_64/openrad"
           test -c /dev/net/tun
           test -x "$binary"
@@ -54,12 +60,12 @@ jobs:
           cleanup() {
             set +e
             if test "$created" -eq 1; then
-              sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" delete "$network_name" --yes --data-dir "$owner" >/dev/null 2>&1
+              sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" delete "$network_name" --yes --data-dir "$owner" >/dev/null 2>&1
             fi
             for n in "$namespace_a" "$namespace_b"; do
               profile="$owner"
               if test "$n" = "$namespace_b"; then profile="$guest"; fi
-              sudo ip netns exec "$n" runuser -u "$user_name" -- "$binary" stop --data-dir "$profile" >/dev/null 2>&1
+              sudo ip netns exec "$n" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" stop --data-dir "$profile" >/dev/null 2>&1
               sudo ip netns del "$n" >/dev/null 2>&1
             done
             sudo ip link del orqa-host-a >/dev/null 2>&1
@@ -112,10 +118,10 @@ jobs:
               exit 1
             fi
           done
-          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" init --node-name "OpenRadTAPQA-A-$GITHUB_RUN_ID" --data-dir "$owner"
-          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" init --node-name "OpenRadTAPQA-B-$GITHUB_RUN_ID" --data-dir "$guest"
-          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" start --data-dir "$owner"
-          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" start --data-dir "$guest"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" init --node-name "OpenRadTAPQA-A-$GITHUB_RUN_ID" --data-dir "$owner"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" init --node-name "OpenRadTAPQA-B-$GITHUB_RUN_ID" --data-dir "$guest"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" start --data-dir "$owner"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" start --data-dir "$guest"
           ready=0
           for attempt in $(seq 1 80); do
             if sudo ip netns exec "$namespace_a" ip -4 addr show radminvpn0 | grep -q 'inet 26\.' &&
@@ -126,17 +132,17 @@ jobs:
             sleep 2
           done
           if test "$ready" -ne 1; then
-            sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" status --data-dir "$owner" || true
-            sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" status --data-dir "$guest" || true
+            sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" status --data-dir "$owner" || true
+            sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" status --data-dir "$guest" || true
             echo 'FAIL: both real TAP devices never became ready'
             exit 1
           fi
           vip_a="$(sudo ip netns exec "$namespace_a" ip -4 -o addr show dev radminvpn0 | awk '{print $4}' | cut -d/ -f1)"
           vip_b="$(sudo ip netns exec "$namespace_b" ip -4 -o addr show dev radminvpn0 | awk '{print $4}' | cut -d/ -f1)"
           test -n "$vip_a" && test -n "$vip_b" && test "$vip_a" != "$vip_b"
-          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" create "$network_name" --password-file "$secret_file" --data-dir "$owner"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" create "$network_name" --password-file "$secret_file" --data-dir "$owner"
           created=1
-          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" join "$network_name" --password-file "$secret_file" --data-dir "$guest"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- env DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$binary" join "$network_name" --password-file "$secret_file" --data-dir "$guest"
           ping_ok=0
           for attempt in $(seq 1 25); do
             if sudo ip netns exec "$namespace_a" ping -I radminvpn0 -c 2 -W 3 "$vip_b" &&
@@ -155,3 +161,4 @@ jobs:
           echo "PASS: two independently routed Linux network namespaces with separate TAP devices, real service authentication, private membership and bidirectional IP/ICMP traffic"
           sudo ip netns exec "$namespace_a" ip -s link show radminvpn0
           sudo ip netns exec "$namespace_b" ip -s link show radminvpn0
+          TAP_QA_SESSION
