@@ -68,6 +68,12 @@ jobs:
             rm -rf "$owner" "$guest"
           }
           trap cleanup EXIT
+          if timeout 8 bash -c 'echo > /dev/tcp/148.113.190.78/17301'; then
+            echo "PASS: GitHub runner can reach live service"
+          else
+            echo "FAIL: GitHub runner itself cannot reach live service TCP/17301"
+            exit 1
+          fi
           sudo ip netns add "$namespace_a"
           sudo ip netns add "$namespace_b"
           sudo ip link add orqa-host-a type veth peer name orqa-guest-a
@@ -92,8 +98,19 @@ jobs:
           test -n "$uplink"
           sudo iptables -t nat -A POSTROUTING -s 10.253.71.0/30 -o "$uplink" -j MASQUERADE
           sudo iptables -t nat -A POSTROUTING -s 10.253.72.0/30 -o "$uplink" -j MASQUERADE
+          sudo iptables -I FORWARD 1 -i orqa-host-a -o "$uplink" -j ACCEPT
+          sudo iptables -I FORWARD 1 -i orqa-host-b -o "$uplink" -j ACCEPT
+          sudo iptables -I FORWARD 1 -i "$uplink" -o orqa-host-a -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          sudo iptables -I FORWARD 1 -i "$uplink" -o orqa-host-b -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
           for n in "$namespace_a" "$namespace_b"; do
-            sudo ip netns exec "$n" timeout 8 bash -c 'echo > /dev/tcp/148.113.190.78/17301'
+            if sudo ip netns exec "$n" timeout 8 bash -c 'echo > /dev/tcp/148.113.190.78/17301'; then
+              echo "PASS: outbound TCP from $n"
+            else
+              echo "FAIL: outbound TCP from $n; routes and firewall diagnostics:"
+              sudo ip netns exec "$n" ip route
+              sudo iptables -vnL FORWARD
+              exit 1
+            fi
           done
           sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" init --node-name "OpenRadTAPQA-A-$GITHUB_RUN_ID" --data-dir "$owner"
           sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" init --node-name "OpenRadTAPQA-B-$GITHUB_RUN_ID" --data-dir "$guest"
