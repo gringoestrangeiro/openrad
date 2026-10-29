@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.2.0 — candidata de release (2026-10-28; ainda nao publicada)
+## 2.2.0 — em desenvolvimento na branch `2.2.0-dev` (candidata de 2026-10-28; ainda nao publicada)
 
 Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto
 do servico Rust quando o cliente encerra o IPC; teste deterministico de pacing;
@@ -15,6 +15,15 @@ end-to-end dentro do Minecraft, em Android fisico ou na rede Radmin real.**
 Windows permanece experimental, Android beta, Minecraft alpha, Python research/Linux-only.
 Fora do escopo implementado: Minecraft 1.14-1.16.5, 1.20 sem patch; nenhum
 loader novo foi adicionado.
+
+Revisao do PR #18 (integrado em `2.2.0-dev`): a busca publica Android passa por um
+portao que mantem no maximo uma busca pendente no engine (um `collectLatest` sozinho deixava
+buscas descartadas encherem a fila de comandos); `sign-android-local.ps1` recusa um
+`-OutputApk` igual ao keystore ou a qualquer entrada e aceita `-ExpectedCommit`; os workflows
+de qualificacao Windows/TAP/APK passam a testar o commit sob teste em vez de execucoes fixas;
+`build-full-range.ps1` e `build-paper-targets.ps1` usam 2.2.0; o gerador Paper legado usa `Sync`;
+o catalogo Minecraft declara `baseVersion` 2.2.0; os testes do verificador de JAR rodam no CI;
+`package-windows.py --native-msvc` exige um `objdump` utilizavel.
 
 Veja [notas 2.2.0](docs/releases/2.2.0.md) e
 [inventario 2.2.0](docs/releases/2.2.0-changes.md).

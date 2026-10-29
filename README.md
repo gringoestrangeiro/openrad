@@ -16,11 +16,11 @@ This repository is a monorepo with five clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.1.5 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.1.5 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.1.5 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.1.5 |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README-2.1.5.md) | alpha | 2.1.5 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.2.0 (dev; latest release 2.1.5) |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.2.0 (dev; latest release 2.1.5) |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.2.0 (dev) |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.2.0 (dev; latest release 2.1.5) |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README-2.1.5.md) | alpha | 2.2.0 (dev; latest release 2.1.5) |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -77,14 +77,21 @@ network conditions, including NAT or firewall restrictions; OpenRad can use a
 relay when a direct path is unavailable. See the [architecture guide](docs/architecture.md)
 for protocol and transport details.
 
-## Candidata 2.2.0 (ainda nao publicada)
+## 2.2.0 (in development, not released)
 
-A atualizacao **2.2.0** esta sendo preparada na branch `release/2.2.0-candidates`.
-Ela corrige o aviso **Ver versao**, reforca o shutdown do servico, a validacao do
-cliente Python, a busca Android e a compatibilidade de mixins Fabric e de testes Paper.
-Os detalhes, a matriz de builds e os limites sao documentados nas
-[notas da candidata 2.2.0](docs/releases/2.2.0.md). **Nao trate builds
-experimentais Minecraft/Android como testados em dispositivo/jogo apenas pelo Gradle.**
+**2.2.0** is being integrated on the `2.2.0-dev` branch (merged from
+[PR #18](https://github.com/gringoestrangeiro/openrad/pull/18)). It fixes the desktop
+**View release** notice (release URL shown in-window with *Open in browser* and *Copy*),
+keeps a received `Stop` effective when the IPC client closes early, rejects invalid Python
+API tokens before opening a socket, makes Android public search cancel superseded queries
+(at most one search outstanding in the engine), and extends the Minecraft Fabric/Paper build
+matrix to 1.17–26.3. Wire format and VPN identity are unchanged.
+
+The packages linked under **Download** are still **2.1.5**: no 2.2.0 tag or stable release
+exists, and Windows stays experimental. Remaining release blockers (real-device and
+multiplayer validation, official Android signing with the original key) are listed in the
+[2.2.0 notes](docs/releases/2.2.0.md); a Gradle/CI build of an experimental Minecraft
+target does not prove it works in-game.
 
 ## Download
 
@@ -269,6 +276,8 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
+| [2.2.0 notes (in development)](docs/releases/2.2.0.md) | Candidate fixes, qualification evidence, review findings, and release blockers |
+| [2.2.0 change inventory](docs/releases/2.2.0-changes.md) | File-by-file account of all changes since v2.1.5 |
 | [2.1.5 release](docs/releases/2.1.5.md) | Stealth block, Fabric mod, multiversion plugin, RAM, packages, upgrading, validation, and limitations |
 | [2.1.5 change inventory](docs/releases/2.1.5-changes.md) | File-by-file account of all changes since v2.1.0 |
 | [2.1.0 release](docs/releases/2.1.0.md) | Paper plugin, presence fix, packages, upgrading, validation, and limitations |
