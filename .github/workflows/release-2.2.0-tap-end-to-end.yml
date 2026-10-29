@@ -3,7 +3,7 @@ name: release-2.2.0-tap-end-to-end
 on:
   push:
     branches: ['release/2.2.0-candidates']
-    paths: ['.github/workflows/release-2.2.0-tap-end-to-end.yml']
+    paths: ['.github/workflows/release-2.2.0-tap-end-to-end.yml', 'scripts/qa-live-java-provision/**']
   workflow_dispatch:
 
 permissions:
