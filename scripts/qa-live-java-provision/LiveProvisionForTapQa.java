@@ -1,5 +1,4 @@
 import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
-import io.github.gringoestrangeiro.openradplugin.session.Attachment;
 import io.github.gringoestrangeiro.openradplugin.session.Provisioner;
 import io.github.gringoestrangeiro.openradplugin.session.ServiceConfig;
 import java.nio.file.Files;
@@ -16,17 +15,15 @@ public final class LiveProvisionForTapQa {
         }
         Files.createDirectories(directory);
         try (Identity identity = Provisioner.loadOrRegister(
-                        directory,
-                        args[1],
-                        ServiceConfig.BOOTSTRAP,
-                        ServiceConfig.PORT,
-                        session -> {});
-                Attachment attached = Attachment.connect(
-                        identity, ServiceConfig.PORT, args[1], session -> {})) {
+                directory,
+                args[1],
+                ServiceConfig.BOOTSTRAP,
+                ServiceConfig.PORT,
+                session -> {})) {
             if (!Files.isRegularFile(directory.resolve("identity.json"))) {
                 throw new IllegalStateException("Issued identity not durably persisted");
             }
-            System.out.println("PASS: isolated Java 2.2.0 provision, authenticated control attachment, issued identity");
+            System.out.println("PASS: isolated Java 2.2.0 live identity registration and durable persistence");
         }
     }
 }
