@@ -984,6 +984,11 @@
     "Не удалось загрузить настройки. Исправьте settings.json и перезапустите приложение.",
     "Không thể tải cài đặt. Sửa settings.json và khởi động lại."
   ],
+  "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.": [
+    "A identidade salva foi alterada em outro cliente. Mantenha esta janela aberta para recuperar a substituição pendente.",
+    "Сохранённые данные устройства изменены в другом клиенте. Не закрывайте это окно, чтобы восстановить ожидающую сохранения замену.",
+    "Danh tính đã lưu đã được thay đổi trong một ứng dụng khách khác. Giữ cửa sổ này mở để khôi phục danh tính thay thế đang chờ."
+  ],
   "This profile already has an identity; use another data directory to import a different one": [
     "Este perfil já tem uma identidade; use outro diretório de dados para importar uma diferente",
     "В этом профиле уже есть данные устройства; для импорта других используйте иной каталог данных",
