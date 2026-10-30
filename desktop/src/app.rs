@@ -3113,54 +3113,28 @@ impl App {
                     .color(muted()),
             );
             ui.add_space(12.);
-            ui.label(if language == Language::Portuguese {
-                "Tema"
-            } else {
-                "Theme"
-            });
+            ui.label(language.text("Theme"));
             egui::ComboBox::from_id_salt("appearance_theme")
-                .selected_text(match self.settings.theme {
-                    ThemePreference::Dark => {
-                        if language == Language::Portuguese {
-                            "Escuro"
-                        } else {
-                            "Dark"
-                        }
-                    }
-                    ThemePreference::Light => {
-                        if language == Language::Portuguese {
-                            "Claro"
-                        } else {
-                            "Light"
-                        }
-                    }
-                })
+                .selected_text(language.text(match self.settings.theme {
+                    ThemePreference::Dark => "Dark",
+                    ThemePreference::Light => "Light",
+                }))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut self.settings.theme,
                         ThemePreference::Dark,
-                        if language == Language::Portuguese {
-                            "Escuro"
-                        } else {
-                            "Dark"
-                        },
+                        language.text("Dark"),
                     );
                     ui.selectable_value(
                         &mut self.settings.theme,
                         ThemePreference::Light,
-                        if language == Language::Portuguese {
-                            "Claro"
-                        } else {
-                            "Light"
-                        },
+                        language.text("Light"),
                     );
                 });
             ui.label(
-                RichText::new(if language == Language::Portuguese {
-                    "A alteração é aplicada imediatamente. Salve para manter a preferência."
-                } else {
-                    "The change applies immediately. Save to keep your preference."
-                })
+                RichText::new(
+                    language.text("The change applies immediately. Save to keep your preference."),
+                )
                 .size(11.)
                 .color(muted()),
             );
@@ -3571,7 +3545,7 @@ impl eframe::App for App {
 }
 impl App {
     fn welcome(&mut self, ui: &mut egui::Ui) {
-        let pt = self.language() == Language::Portuguese;
+        let language = self.language();
         let elapsed = self.welcome_started.elapsed().as_secs_f32();
         let splash = !self.welcome_skipped && elapsed < 9.0;
         if splash {
@@ -3593,8 +3567,8 @@ impl App {
                         (ui.available_height() * if splash { 0.23 } else { 0.08 }).min(150.0),
                     );
                     if splash {
-                        // Draw the official SVG mark, revealing it vertically
-                        // without loading a video decoder or audio playback.
+                        // Reveal the unchanged official mark directly in egui, without
+                        // an external video decoder or audio playback.
                         let reveal = ((elapsed - 0.30) / 2.75).clamp(0.0, 1.0);
                         let start = ui.cursor().min;
                         let clip_before = ui.clip_rect();
@@ -3617,68 +3591,42 @@ impl App {
                             ui.add_space(55.);
                         }
                         ui.add_space(35.);
-                        if ui
-                            .button(if pt {
-                                "Pular animação"
-                            } else {
-                                "Skip animation"
-                            })
-                            .clicked()
-                        {
+                        if ui.button(language.text("Skip animation")).clicked() {
                             self.welcome_skipped = true;
                         }
                         return;
                     }
                     logo(ui, 112.);
                     ui.add_space(10.);
-                    ui.heading(if pt {
-                        "Bem-vindo ao OpenRad"
-                    } else {
-                        "Welcome to OpenRad"
-                    });
+                    ui.heading(language.text("Welcome to OpenRad"));
                     ui.add_space(6.);
-                    ui.label(if pt {
-                        "Escolha suas preferências antes de começar."
-                    } else {
-                        "Choose your preferences before getting started."
-                    });
+                    ui.label(language.text("Choose your preferences before getting started."));
                     ui.add_space(24.);
-                    ui.label(if pt { "Aparência" } else { "Appearance" });
+                    ui.label(language.text("Appearance"));
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut self.settings.theme,
                             ThemePreference::Dark,
-                            if pt { "Escuro" } else { "Dark" },
+                            language.text("Dark"),
                         );
                         ui.selectable_value(
                             &mut self.settings.theme,
                             ThemePreference::Light,
-                            if pt { "Claro" } else { "Light" },
+                            language.text("Light"),
                         );
                     });
                     ui.add_space(16.);
                     #[cfg(windows)]
                     ui.checkbox(
                         &mut self.welcome_create_shortcut,
-                        if pt {
-                            "Criar atalho OpenRad na área de trabalho"
-                        } else {
-                            "Create OpenRad desktop shortcut"
-                        },
+                        language.text("Create OpenRad desktop shortcut"),
                     );
                     ui.checkbox(
                         &mut self.settings.auto_connect,
-                        if pt {
-                            "Conectar automaticamente ao abrir"
-                        } else {
-                            "Connect automatically on launch"
-                        },
+                        language.text("Connect when OpenRad launches"),
                     );
                     ui.add_space(20.);
-                    if ui
-                        .add(primary(if pt { "Começar" } else { "Get started" }))
-                        .clicked()
-                    {
+                    if ui.add(primary(language.text("Get started"))).clicked() {
                         #[cfg(windows)]
                         if self.welcome_create_shortcut {
                             if let Err(err) = crate::shortcut::create_desktop_shortcut() {
@@ -4239,7 +4187,15 @@ mod tests {
             ));
             let paths = Paths::new(Some(directory.clone())).unwrap();
             let lock = paths.lock().unwrap();
-            let mut app = App::from_parts(Backend::fixture(), paths, lock, Settings::default());
+            let mut app = App::from_parts(
+                Backend::fixture(),
+                paths,
+                lock,
+                Settings {
+                    onboarding_complete: true,
+                    ..Settings::default()
+                },
+            );
             app.system_language = Language::Portuguese;
             app.phase = Phase::Disconnected;
             Self {
