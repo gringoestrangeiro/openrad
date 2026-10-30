@@ -669,6 +669,7 @@ pub struct App {
     first_frame: bool,
     welcome_started: Instant,
     welcome_skipped: bool,
+    #[cfg(windows)]
     welcome_create_shortcut: bool,
     rendered_theme: ThemePreference,
     #[cfg(test)]
@@ -780,6 +781,7 @@ impl App {
             first_frame: true,
             welcome_started: Instant::now(),
             welcome_skipped: false,
+            #[cfg(windows)]
             welcome_create_shortcut: false,
             rendered_theme: settings.theme,
             #[cfg(test)]
