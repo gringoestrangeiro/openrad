@@ -6,16 +6,28 @@ on:
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
       - '.github/workflows/minecraft-version-compat.yml'
+  # Candidate branches are validated by pull_request, not a duplicate push matrix.
   push:
     branches:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'
-      - 'release/2.2.0-candidates'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
       - '.github/workflows/minecraft-version-compat.yml'
   workflow_dispatch:
@@ -24,6 +36,24 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Minecraft changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fabric: ${{ steps.scope.outputs.fabric }}
+      paper: ${{ steps.scope.outputs.paper }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check latest event's changed files (fail closed)
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python3 scripts/ci-changed-components.py
+
   inventory:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -34,8 +64,11 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_ci_scope.py -v
 
   fabric:
+    needs: changes
+    if: ${{ needs.changes.outputs.fabric == 'true' }}
     name: Fabric ${{ matrix.minecraft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -95,6 +128,8 @@ jobs:
           retention-days: 14
 
   paper:
+    needs: changes
+    if: ${{ needs.changes.outputs.paper == 'true' }}
     name: Paper ${{ matrix.minecraft }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
