@@ -94,6 +94,41 @@ class PeerConnectorTest {
     }
 
     @Test
+    void coordinatorDnsTimeoutsCannotAccumulateUninterruptibleLookupWorkers() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger started = new java.util.concurrent.atomic.AtomicInteger();
+        PeerConnector.CoordinatorLookup blockedLookup = host -> {
+            started.incrementAndGet();
+            active.incrementAndGet();
+            try {
+                // Native name resolution may not react to Thread.interrupt().
+                while (release.getCount() != 0) {
+                    try { release.await(); }
+                    catch (InterruptedException ignored) {}
+                }
+                return InetAddress.getLoopbackAddress();
+            } finally {
+                active.decrementAndGet();
+            }
+        };
+        try {
+            for (int i = 0; i < 8; i++) {
+                assertThrows(IOException.class, () -> PeerConnector.coordinatorAddress(
+                        "synthetic.invalid", blockedLookup, Duration.ofMillis(50)));
+            }
+            assertTrue(started.get() > 0, "the test must execute an actual lookup worker");
+            assertTrue(active.get() <= 4,
+                    "timed-out lookups must remain bounded; still active=" + active.get());
+        } finally {
+            release.countDown();
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (active.get() != 0 && System.nanoTime() < until) Thread.sleep(5);
+            assertEquals(0, active.get(), "all synthetic lookup workers must finish");
+        }
+    }
+
+    @Test
     void relayHostOnPrivateAddressIsAccepted() throws Exception {
         List<AutoCloseable> resources = new CopyOnWriteArrayList<>();
         BlockingQueue<byte[]> advertisements = new LinkedBlockingQueue<>();
