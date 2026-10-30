@@ -1,4 +1,5 @@
 from contextlib import closing
+from pathlib import Path
 import queue
 import socket
 import struct
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import radproto as p
-from radvpn import Engine, Framed, PeerChannel, PeerWorker, Profile, tcp_candidates, rendezvous_checksum
+from radvpn import Engine, Framed, PeerChannel, PeerWorker, Profile, tcp_candidates, rendezvous_checksum, ensure_identity
 
 
 def offer(cid=123, rid=10, password=b'synthetic-password'):
@@ -197,6 +198,89 @@ class IncomingTests(unittest.TestCase):
 
     def test_delayed_direct_connection_wins_while_relay_pairing_waits(self):
         self.direct_handshake(relay=True)
+
+
+class RegistrationIntentTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.profile = SimpleNamespace(path=Path(self.directory.name))
+        self.identity = p.Identity(20, '26.0.0.1', 'fixture', b'a' * 16,
+                                   b'fixture-password', '127.0.0.1')
+
+    def registration(self, response=None, error=None):
+        from unittest.mock import MagicMock
+        stream, control = MagicMock(), MagicMock()
+        control.receive.side_effect = error
+        with patch('radvpn.Framed.connect', return_value=stream), \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)), \
+                patch('radvpn.p.SessionCrypto'), patch('radvpn.authenticate'), \
+                patch('radvpn.Control', return_value=control), \
+                patch('radvpn.p.Provisioning') as receiver:
+            receiver.return_value.receive.return_value = (8, response)
+            try:
+                return ensure_identity(self.profile, 'fixture')
+            finally:
+                self.control, self.stream = control, stream
+
+    def test_ambiguous_registration_blocks_restart_before_connect(self):
+        with self.assertRaises(ConnectionError):
+            self.registration(error=ConnectionError('synthetic drop after login'))
+        self.control.send.assert_called_once()
+        intent = self.profile.path / 'registration.pending'
+        self.assertTrue(intent.is_file())
+        self.assertEqual(intent.stat().st_mode & 0o777, 0o600)
+        with patch('radvpn.Framed.connect') as connect:
+            with self.assertRaisesRegex(ValueError, 'registration outcome unknown'):
+                ensure_identity(self.profile, 'fixture')
+            connect.assert_not_called()
+
+    def test_authentication_failure_before_login_does_not_leave_marker(self):
+        with patch('radvpn.Framed.connect') as connect, \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)), \
+                patch('radvpn.p.SessionCrypto'), \
+                patch('radvpn.authenticate', side_effect=ConnectionError('pre-login')):
+            with self.assertRaises(ConnectionError):
+                ensure_identity(self.profile, 'fixture')
+            connect.return_value.close.assert_called_once()
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+
+    def test_success_persists_identity_and_removes_marker(self):
+        identity = self.registration(response=self.identity)
+        self.assertEqual(identity, self.identity)
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+        self.assertEqual(p.Identity.load(self.profile.path / 'identity.json'), identity)
+
+    def test_issued_identity_storage_failure_leaves_marker(self):
+        with patch('radvpn.save_identity', side_effect=OSError('synthetic disk failure')):
+            with self.assertRaises(OSError):
+                self.registration(response=self.identity)
+        self.assertTrue((self.profile.path / 'registration.pending').is_file())
+
+    def test_authenticated_redirect_reuses_bootstrap_and_clears_intent(self):
+        from unittest.mock import MagicMock
+        stream, control = MagicMock(), MagicMock()
+        control.receive.side_effect = [p.ServerRedirect('127.0.0.2'), b'assigned']
+        with patch('radvpn.Framed.connect', return_value=stream) as connect, \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)) as bootstrap, \
+                patch('radvpn.p.SessionCrypto'), patch('radvpn.authenticate'), \
+                patch('radvpn.Control', return_value=control), \
+                patch('radvpn.p.Provisioning') as receiver:
+            receiver.return_value.receive.return_value = (8, self.identity)
+            self.assertEqual(ensure_identity(self.profile, 'fixture'), self.identity)
+            self.assertEqual(connect.call_count, 2)
+            bootstrap.assert_called_once()
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+
+    def test_pending_symlink_cannot_be_overwritten(self):
+        target = self.profile.path / 'unrelated'
+        target.write_text('preserve')
+        (self.profile.path / 'registration.pending').symlink_to(target)
+        with patch('radvpn.Framed.connect') as connect:
+            with self.assertRaisesRegex(ValueError, 'registration outcome unknown'):
+                ensure_identity(self.profile, 'fixture')
+            connect.assert_not_called()
+        self.assertEqual(target.read_text(), 'preserve')
 
 
 if __name__ == '__main__':

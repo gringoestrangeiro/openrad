@@ -155,6 +155,11 @@ uma identidade sua e inativa para um perfil novo:
 python3 openrad.py --data-dir ./profiles/meu-cliente run --identity /caminho/identity.json
 ```
 
+Um cadastro interrompido deixa o marcador privado `registration.pending`.
+Ao reiniciar, o cliente preserva essa incerteza e recusa outro cadastro automatico.
+Preserve o marcador e recupere/importe a identidade emitida; nao o apague apenas
+para repetir um cadastro cujo resultado e desconhecido.
+
 O perfil tem permissão `0700`; identidade, configurações e descoberta da API
 têm permissão `0600`. Cada perfil permite somente um motor ativo. Senhas de
 redes privadas não são salvas nas configurações. O perfil é separado do OpenRAD

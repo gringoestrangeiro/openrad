@@ -170,6 +170,11 @@ into a fresh profile:
 python3 openrad.py --data-dir ./profiles/my-client run --identity /path/identity.json
 ```
 
+An interrupted registration leaves a private `registration.pending` marker.
+Restarting preserves that uncertainty and refuses another automatic registration.
+Keep the marker and recover/import the issued identity; do not delete it merely
+to retry a registration whose outcome is unknown.
+
 The profile directory is mode `0700`; identity, settings, and API discovery
 are mode `0600`. Each profile allows only one active engine. Private-network
 passwords are never saved to settings. The profile is separate from the Rust

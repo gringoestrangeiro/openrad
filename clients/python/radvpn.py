@@ -263,14 +263,20 @@ class Control:
 
 def ensure_identity(profile, name, *, import_path=None, host=p.DEFAULT_HOST, port=p.DEFAULT_PORT, modulus=p.SERVER_MODULUS, stop=None):
     path = profile.path / 'identity.json'
+    intent = profile.path / 'registration.pending'
     if path.exists():
         if import_path:
             raise ValueError('this profile already has an identity')
-        return p.Identity.load(path)
+        identity = p.Identity.load(path)
+        intent.unlink(missing_ok=True)
+        return identity
     if import_path:
         identity = p.Identity.load(Path(import_path))
         save_identity(path, identity)
+        intent.unlink(missing_ok=True)
         return identity
+    if os.path.lexists(intent):
+        raise ValueError('registration outcome unknown: preserve registration.pending and recover identity before another registration')
     p.build_login(name, 0, purpose=3)
     bootstrap_rid, _ = p.bootstrap_session(modulus)
     visited, deadline = set(), time.monotonic() + 60
@@ -285,15 +291,29 @@ def ensure_identity(profile, name, *, import_path=None, host=p.DEFAULT_HOST, por
             control = Control(stream, crypto)
             # Only an authenticated redirect may restart registration. An
             # ambiguous failure after this Login is never retried automatically.
-            control.send(p.build_login(name, 0, purpose=3))
+            login = p.build_login(name, 0, purpose=3)
+            # Persist uncertainty before any registering bytes can reach the service.
+            fd = os.open(intent, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w') as out:
+                out.write('Registration may have reached the service; recover the issued identity before registering again.\n')
+                out.flush()
+                os.fsync(out.fileno())
+            directory_fd = os.open(profile.path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            control.send(login)
             receiver = p.Provisioning()
             for _ in range(16):
                 _, identity = receiver.receive(control.receive(deadline))
                 if identity:
                     save_identity(path, identity)
+                    intent.unlink()
                     return identity
             raise ValueError('registration did not return an identity')
         except p.ServerRedirect as exc:
+            intent.unlink(missing_ok=True)
             host = exc.host
         finally:
             stream.close()
