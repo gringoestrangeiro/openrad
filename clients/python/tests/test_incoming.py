@@ -283,5 +283,59 @@ class RegistrationIntentTests(unittest.TestCase):
         self.assertEqual(target.read_text(), 'preserve')
 
 
+class WorkerBindingTests(unittest.TestCase):
+    def setUp(self):
+        IncomingTests.setUp(self)
+        self.worker = SimpleNamespace(peer=dict(self.peer), state='connected',
+            stop=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+            channel=SimpleNamespace(mac=p.mac_for_ip(self.peer['vip'])), tx=queue.Queue(), last_use=0)
+        self.engine.workers[10] = self.worker
+        self.delivered = []
+        self.engine.on_frame = lambda rid, frame: self.delivered.append((rid, frame))
+
+    def incoming(self, worker=None):
+        worker = worker or self.worker
+        frame = p.ipv4_frame(worker.channel.mac, p.mac_for_ip(self.identity.ipv4),
+            worker.peer['vip'], self.identity.ipv4, b'payload', protocol=253)
+        self.engine.incoming_frame(worker, frame)
+
+    def test_changed_vip_or_server_cancels_worker_and_rejects_its_frames(self):
+        for field, value in [('vip', '26.0.0.9'), ('server', '127.0.0.2')]:
+            with self.subTest(field=field):
+                self.worker.stop.clear()
+                self.engine.membership.peers[10] = dict(self.peer, **{field: value})
+                self.engine.schedule()
+                self.assertTrue(self.worker.stop.is_set())
+                self.incoming()
+                self.assertFalse(self.delivered)
+
+    def test_replaced_generation_and_cancelled_worker_cannot_deliver(self):
+        old = self.worker
+        self.engine.workers[10] = SimpleNamespace(**dict(vars(old), stop=threading.Event()))
+        self.incoming(old)
+        self.assertFalse(self.delivered)
+        self.engine.workers[10] = old
+        old.stop.set()
+        self.incoming(old)
+        self.assertFalse(self.delivered)
+
+    def test_name_only_change_preserves_current_channel(self):
+        self.engine.membership.peers[10] = dict(self.peer, name='renamed')
+        self.engine.schedule()
+        self.assertFalse(self.worker.stop.is_set())
+        self.incoming()
+        self.assertEqual(len(self.delivered), 1)
+
+    def test_stale_worker_cannot_receive_queued_outbound_frames(self):
+        self.engine.membership.peers[10] = dict(self.peer, vip='26.0.0.9')
+        frame = p.ipv4_frame(p.mac_for_ip(self.identity.ipv4), self.worker.channel.mac,
+            self.identity.ipv4, self.peer['vip'], b'payload', protocol=253)
+        with self.assertRaises(ValueError):
+            self.engine.send_ipv4(frame[14:])
+        with self.assertRaises(ValueError):
+            self.engine.send_ethernet(frame)
+        self.assertTrue(self.worker.tx.empty())
+
+
 if __name__ == '__main__':
     unittest.main()

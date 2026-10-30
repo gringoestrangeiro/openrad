@@ -665,6 +665,9 @@ class PeerWorker:
                 self.channel = self.accept()
             else:
                 self.channel, coord = self.outgoing()
+            with self.engine.lock:
+                if not self.engine._worker_current(self):
+                    raise ConnectionError('peer binding changed during setup')
             self.transport, self.state = self.channel.transport, 'connected'
             self.engine.report('peer_connected', rid=self.peer['rid'], transport=self.transport,
                                incoming=bool(self.incoming))
@@ -684,6 +687,10 @@ class PeerWorker:
                         frame = self.tx.get_nowait()
                     except queue.Empty:
                         break
+                    with self.engine.lock:
+                        if not self.engine._worker_current(self):
+                            self.stop.set()
+                            break
                     self.channel.send(p.encode_frame(frame))
                     self.tx_packets += 1
                     self.engine.count('peer_tx')
@@ -836,10 +843,19 @@ class Engine:
             finally:
                 self._schedule_capacity = None
 
+    def _worker_current(self, worker):
+        """Check the authenticated binding and worker generation while holding lock."""
+        rid = worker.peer['rid']
+        current = self.membership.peers.get(rid)
+        return (self.workers.get(rid) is worker and not worker.stop.is_set()
+            and self.membership.permits(rid, self.selected) and current is not None
+            and current['vip'] == worker.peer['vip']
+            and current['server'] == worker.peer['server'])
+
     def _schedule_peers(self, now, eligible):
         self.desired = {rid: until for rid, until in self.desired.items() if now < until and rid in eligible}
         for rid, worker in list(self.workers.items()):
-            if rid not in eligible:
+            if rid not in eligible or not self._worker_current(worker):
                 worker.stop.set()
                 if not worker.thread.is_alive():
                     del self.workers[rid]
@@ -1150,6 +1166,7 @@ class Engine:
             eligible = self.membership.eligible(self.selected) if not rid else None
             candidates = self.workers.items() if not rid else ((rid, self.workers[rid]),) if rid in self.workers else ()
             ready = [w for key, w in candidates if w.state == 'connected' and not w.stop.is_set()
+                and self._worker_current(w)
                 and (key in eligible if eligible is not None else self.membership.permits(key, self.selected))
                 and (group is not None or w.peer['vip'] == target)]
             if not ready:
@@ -1176,7 +1193,7 @@ class Engine:
             candidates = self.workers.items() if not rid else ((rid, self.workers[rid]),) if rid in self.workers else ()
             for key, worker in candidates:
                 permitted = key in eligible if eligible is not None else self.membership.permits(key, self.selected)
-                if not permitted or worker.state != 'connected' or worker.stop.is_set():
+                if not permitted or worker.state != 'connected' or not self._worker_current(worker):
                     continue
                 if not valid_frame(frame, self.identity.ipv4, p.mac_for_ip(self.identity.ipv4), worker.peer['vip'], worker.channel.mac):
                     continue
@@ -1193,7 +1210,7 @@ class Engine:
     def incoming_frame(self, worker, frame):
         identity = self.identity
         with self.lock:
-            permitted = self.membership.permits(worker.peer['rid'], self.selected)
+            permitted = self._worker_current(worker)
             listeners = (self.on_frame, *self.frame_listeners)
         if not permitted or not valid_frame(frame, worker.peer['vip'], worker.channel.mac, identity.ipv4, p.mac_for_ip(identity.ipv4)):
             self.count('invalid_rx')
