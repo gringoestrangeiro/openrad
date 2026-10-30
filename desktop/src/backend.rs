@@ -566,13 +566,8 @@ fn manager(
                 // Closing a frontend leaves the shared service available to CLI
                 // clients. Disconnect/Stop are explicit, shared session actions.
                 if replacement.is_pending() {
-                    let result = if dir.identity_file_present() {
-                        replacement.commit(&ProfileVault(dir.clone()), &mut identity)
-                    } else {
-                        paths
-                            .entry()
-                            .and_then(|vault| replacement.commit(&vault, &mut identity))
-                    };
+                    let result =
+                        commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut identity);
                     if let Err(error) = result {
                         report(Notice::CloseBlocked(error.to_string()));
                         continue;
@@ -896,6 +891,36 @@ fn import_identity(
     Ok(imported)
 }
 
+fn commit_shutdown_replacement(
+    paths: &Paths,
+    dir: &openrad::daemon::DataDir,
+    replacement: &mut storage::Replacement,
+    identity: &mut Option<Identity>,
+) -> Result<()> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let saved = if dir.identity_file_present() {
+        Some(dir.load_identity()?)
+    } else {
+        storage::load_for_import(&paths.entry()?)?
+    };
+    let unchanged = match (saved.as_ref(), identity.as_ref()) {
+        (None, None) => true,
+        (Some(saved), Some(expected)) => {
+            saved.rid == expected.rid
+                && zeroize::Zeroizing::new(saved.password()?)
+                    == zeroize::Zeroizing::new(expected.password()?)
+        }
+        _ => false,
+    };
+    ensure!(unchanged, "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.");
+    if dir.identity_file_present() {
+        replacement.commit(&ProfileVault(dir.clone()), identity)
+    } else {
+        replacement.commit(&paths.entry()?, identity)
+    }
+}
+
 // Move owned JSON subtrees into deserialization. Missing fields retain the
 // read-only indexing behavior (null), including malformed non-object replies.
 fn take_reply_field(data: &mut serde_json::Value, field: &str) -> serde_json::Value {
@@ -1024,6 +1049,59 @@ impl storage::Vault for ProfileVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_replacement_waits_for_profile_ownership_and_retries_the_same_identity() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-shutdown-replacement-{}-{}",
+                std::process::id(),
+                u64::from_le_bytes(openrad::crypto::random_array())
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let mut next = original.clone();
+            next.rid = 456;
+            let mut replacement = storage::Replacement::default();
+            replacement.prepare(|| Ok(next)).unwrap();
+            let mut current = Some(original.clone());
+            let held = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            assert!(
+                commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).is_err()
+            );
+            assert!(replacement.is_pending());
+            assert_eq!(current.as_ref().unwrap().rid, 123);
+            assert_eq!(std::fs::read(dir.identity()).unwrap(), before);
+            drop(held);
+            commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).unwrap();
+            assert!(!replacement.is_pending());
+            assert_eq!(current.as_ref().unwrap().rid, 456);
+            assert_eq!(dir.load_identity().unwrap().rid, 456);
+
+            // Another frontend may have replaced the old identity between retries.
+            let mut concurrent = original.clone();
+            concurrent.rid = 789;
+            dir.save_identity(&concurrent).unwrap();
+            replacement.prepare(|| Ok(original)).unwrap();
+            assert!(
+                commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).is_err()
+            );
+            assert!(replacement.is_pending());
+            assert_eq!(dir.load_identity().unwrap().rid, 789);
+            assert_eq!(current.as_ref().unwrap().rid, 456);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
 
     #[test]
     fn startup_import_preserves_identity_when_another_frontend_owns_the_profile() {
