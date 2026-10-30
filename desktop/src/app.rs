@@ -3545,53 +3545,6 @@ impl eframe::App for App {
         }
     }
 }
-const SPLASH_GRADIENT_WIDTH: usize = 49;
-const SPLASH_GRADIENT_HEIGHT: usize = 28;
-const SPLASH_GRADIENT: &[u8] = include_bytes!("../assets/splash-gradient.rgb");
-
-fn paint_splash_gradient(ui: &egui::Ui) {
-    let rect = ui.max_rect();
-    if !rect.is_positive() {
-        return;
-    }
-
-    let mut mesh = egui::epaint::Mesh::default();
-    mesh.vertices
-        .reserve(SPLASH_GRADIENT_WIDTH * SPLASH_GRADIENT_HEIGHT);
-    mesh.indices
-        .reserve((SPLASH_GRADIENT_WIDTH - 1) * (SPLASH_GRADIENT_HEIGHT - 1) * 6);
-
-    for y in 0..SPLASH_GRADIENT_HEIGHT {
-        for x in 0..SPLASH_GRADIENT_WIDTH {
-            let offset = (y * SPLASH_GRADIENT_WIDTH + x) * 3;
-            let color = Color32::from_rgb(
-                SPLASH_GRADIENT[offset],
-                SPLASH_GRADIENT[offset + 1],
-                SPLASH_GRADIENT[offset + 2],
-            );
-            mesh.vertices.push(egui::epaint::Vertex {
-                pos: egui::pos2(
-                    rect.left() + rect.width() * (x as f32 / (SPLASH_GRADIENT_WIDTH - 1) as f32),
-                    rect.top() + rect.height() * (y as f32 / (SPLASH_GRADIENT_HEIGHT - 1) as f32),
-                ),
-                uv: egui::epaint::WHITE_UV,
-                color,
-            });
-        }
-    }
-
-    for y in 0..SPLASH_GRADIENT_HEIGHT - 1 {
-        for x in 0..SPLASH_GRADIENT_WIDTH - 1 {
-            let a = (y * SPLASH_GRADIENT_WIDTH + x) as u32;
-            let b = a + 1;
-            let d = a + SPLASH_GRADIENT_WIDTH as u32;
-            let c = d + 1;
-            mesh.indices.extend_from_slice(&[a, b, d, b, c, d]);
-        }
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
-
 impl App {
     fn welcome(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -3604,16 +3557,13 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(if splash {
-                        Color32::from_rgb(16, 22, 33)
+                        Color32::from_rgb(13, 18, 25)
                     } else {
                         bg()
                     })
-                    .inner_margin(egui::Margin::same(if splash { 0 } else { 24 })),
+                    .inner_margin(egui::Margin::same(24)),
             )
             .show(ui, |ui| {
-                if splash {
-                    paint_splash_gradient(ui);
-                }
                 ui.vertical_centered(|ui| {
                     ui.add_space(
                         (ui.available_height() * if splash { 0.23 } else { 0.08 }).min(150.0),
