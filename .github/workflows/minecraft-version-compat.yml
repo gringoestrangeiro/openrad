@@ -1,0 +1,269 @@
+name: OpenRad Minecraft version compatibility (development)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'clients/mod/**'
+      - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
+      - 'tools/minecraft_version_coverage.py'
+      - 'tests/test_minecraft_version_coverage.py'
+      - '.github/workflows/minecraft-version-compat.yml'
+  # Candidate branches are validated by pull_request, not a duplicate push matrix.
+  push:
+    branches:
+      - 'feature/minecraft-1.8-to-26.3-version-coverage'
+    paths:
+      - 'clients/mod/**'
+      - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
+      - 'tools/minecraft_version_coverage.py'
+      - '.github/workflows/minecraft-version-compat.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect Minecraft changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fabric: ${{ steps.scope.outputs.fabric }}
+      paper: ${{ steps.scope.outputs.paper }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check latest event's changed files (fail closed)
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python3 scripts/ci-changed-components.py
+
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_ci_scope.py -v
+
+  fabric:
+    needs: changes
+    if: ${{ needs.changes.outputs.fabric == 'true' }}
+    name: Fabric ${{ matrix.minecraft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        minecraft: ['1.17', '1.17.1', '1.18', '1.18.1', '1.18.2', '1.19', '1.19.1', '1.19.2', '1.19.3', '1.19.4', '1.20.1', '1.20.2', '1.20.3', '1.20.4', '1.20.5', '1.20.6', '1.21', '1.21.1', '1.21.2', '1.21.3', '1.21.4', '1.21.5', '1.21.6', '1.21.7', '1.21.8', '1.21.9', '1.21.10', '1.21.11', '26.1', '26.1.1', '26.1.2', '26.2', '26.3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile, remap and test regular Fabric target
+        if: ${{ !startsWith(matrix.minecraft, '26.') }}
+        working-directory: clients/mod
+        run: |
+          ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" :core:test :fabric:build :fabric:test --console=plain
+      - name: Verify regular Fabric version, bytecode, mixins and metadata
+        if: ${{ !startsWith(matrix.minecraft, '26.') }}
+        working-directory: clients/mod
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.2.0.jar "${{ matrix.minecraft }}" 2.2.0
+      - name: Compile and test modern Fabric on Java 25
+        if: ${{ startsWith(matrix.minecraft, '26.') }}
+        working-directory: clients/mod/modern
+        run: |
+          ./gradlew --no-daemon --max-workers=2 "-PopenradMinecraftVersion=${{ matrix.minecraft }}" build --console=plain
+      - name: Verify modern Fabric version, bytecode, mixins and metadata
+        if: ${{ startsWith(matrix.minecraft, '26.') }}
+        run: |
+          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.2.0
+
+      - name: Stage version-specific verified Fabric JAR and checksum
+        shell: bash
+        env:
+          MC: ${{ matrix.minecraft }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/minecraft/fabric
+          if [[ "$MC" == 26.* ]]; then
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-$MC.jar"
+          else
+            source="clients/mod/fabric/build/libs/fabric-2.2.0.jar"
+          fi
+          test -s "$source"
+          output="dist/minecraft/fabric/OpenRadClientMod-2.2.0-fabric-$MC.jar"
+          cp "$source" "$output"
+          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.2.0-fabric-$MC.jar" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified
+          path: dist/minecraft/fabric/
+          if-no-files-found: error
+          retention-days: 14
+
+  paper:
+    needs: changes
+    if: ${{ needs.changes.outputs.paper == 'true' }}
+    name: Paper ${{ matrix.minecraft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minecraft: '1.17'
+            api: '1.17-R0.1-SNAPSHOT'
+            java: 16
+          - minecraft: '1.17.1'
+            api: '1.17.1-R0.1-SNAPSHOT'
+            java: 16
+          - minecraft: '1.18'
+            api: '1.18-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.18.1'
+            api: '1.18.1-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.18.2'
+            api: '1.18.2-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.19'
+            api: '1.19-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.19.1'
+            api: '1.19.1-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.19.2'
+            api: '1.19.2-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.19.3'
+            api: '1.19.3-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.19.4'
+            api: '1.19.4-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.1'
+            api: '1.20.1-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.2'
+            api: '1.20.2-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.3'
+            api: '1.20.3-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.4'
+            api: '1.20.4-R0.1-SNAPSHOT'
+            java: 17
+          - minecraft: '1.20.5'
+            api: '1.20.5-R0.1-SNAPSHOT'
+            java: 21
+          - minecraft: '1.20.6'
+            api: '1.20.6-R0.1-SNAPSHOT'
+            java: 21
+          - minecraft: '1.21'
+            api: '1.20.6-R0.1-SNAPSHOT'
+            java: 21
+          - minecraft: '26.1.1'
+            api: '26.1.1.build.+'
+            java: 25
+          - minecraft: '26.1.2'
+            api: '26.1.2.build.+'
+            java: 25
+          - minecraft: '26.2'
+            api: '26.2.build.+'
+            java: 25
+          - minecraft: '26.3'
+            api: '26.3.build.+'
+            java: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and test Java target
+        working-directory: clients/plugin
+        run: |
+          ./gradlew --no-daemon --max-workers=1 "-PopenradPaperApi=${{ matrix.api }}" check --console=plain
+      - name: Verify Java classfile and server API metadata
+        working-directory: clients/plugin
+        env:
+          MC_TARGET: ${{ matrix.minecraft }}
+          EXPECT_JAVA: ${{ matrix.java }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, struct, zipfile
+          expected_java = int(os.environ['EXPECT_JAVA'])
+          with zipfile.ZipFile('build/libs/OpenRadPlugin.jar') as jar:
+              data = jar.read('io/github/gringoestrangeiro/openradplugin/OpenRadPlugin.class')
+              major = struct.unpack('>H',data[6:8])[0]
+              assert major == expected_java + 44, (major, expected_java)
+              yml = jar.read('plugin.yml').decode('utf-8')
+              expected_api = ('1.17' if os.environ['MC_TARGET'] in ('1.17', '1.17.1') else ('1.18' if os.environ['MC_TARGET'] in ('1.18', '1.18.1', '1.18.2') else ('1.19' if os.environ['MC_TARGET'].startswith('1.19') else ('1.20.5' if os.environ['MC_TARGET'] == '1.20.5' else ('1.20' if expected_java == 17 else '1.20.6')))))
+              assert f"api-version: '{expected_api}'" in yml
+              print('Paper metadata verified:', os.environ['MC_TARGET'], 'Java', expected_java)
+          PY
+
+      - name: Execute compatibility shim on an actual JDK17 runtime
+        if: matrix.java == 17
+        working-directory: clients/plugin
+        shell: bash
+        run: |
+          mkdir -p build/java17Smoke
+          javac --release 17 -cp build/libs/OpenRadPlugin.jar \
+            -d build/java17Smoke \
+            src/jdk17Smoke/java/io/github/gringoestrangeiro/openradplugin/util/Java17ThreadCompatSmoke.java
+          "$JAVA_HOME_17_X64/bin/java" -cp "build/libs/OpenRadPlugin.jar:build/java17Smoke" \
+            io.github.gringoestrangeiro.openradplugin.util.Java17ThreadCompatSmoke
+
+
+      - name: Stage version-specific verified Paper JAR and checksum
+        shell: bash
+        env:
+          MC: ${{ matrix.minecraft }}
+          JAVA: ${{ matrix.java }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/minecraft/paper
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-paper-${{ matrix.minecraft }}-verified
+          path: dist/minecraft/paper/
+          if-no-files-found: error
+          retention-days: 14
+
+# This matrix checks all 33 configured Fabric targets and 21 Paper API targets
+# as individual jobs. It does not claim real multiplayer/VPN interoperability.
+# Verification is build-time only. This workflow never publishes JARs or releases.

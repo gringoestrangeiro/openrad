@@ -12,6 +12,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "x86_64-pc-windows-gnu"
+# Native Windows MSVC builds link to Microsoft's redistributable C runtime.
+# QA ZIPs may list it as an explicit prerequisite, never as a system DLL.
+MSVC_EXTERNAL_RUNTIME = {"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll"}
 SYSTEM_DLLS = {
     "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "combase.dll",
     "comctl32.dll", "comdlg32.dll", "crypt32.dll", "dcomp.dll", "dbghelp.dll", "dwrite.dll",
@@ -48,7 +51,7 @@ def root_release_document(text, version):
 
 def copy_release_history(destination):
     """Include the historical guides linked by the changelog and platform guides."""
-    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md', '1.3.0.md', '1.3.0-changes.md', '1.4.0.md', '1.4.0-changes.md', '1.5.0.md', '1.5.0-changes.md', '2.0.0.md', '2.0.0-changes.md', '2.0.1.md', '2.0.1-changes.md', '2.0.2.md', '2.0.2-changes.md']:
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md', '1.3.0.md', '1.3.0-changes.md', '1.4.0.md', '1.4.0-changes.md', '1.5.0.md', '1.5.0-changes.md', '2.0.0.md', '2.0.0-changes.md', '2.0.1.md', '2.0.1-changes.md', '2.0.2.md', '2.0.2-changes.md', '2.1.0.md', '2.1.0-changes.md', '2.1.5.md', '2.1.5-changes.md', '2.1.5-minecraft-integration.md']:
         target = destination / 'docs/releases' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')
@@ -109,17 +112,20 @@ def license_notices(metadata, destination, platform="Windows"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--objdump", default="x86_64-w64-mingw32-objdump")
+    parser.add_argument("--native-msvc", action="store_true", help="Package native Windows MSVC release as a portable QA candidate, without claiming an offline installer")
     parser.add_argument("--runtime-dir", type=Path, help="Directory containing any non-system runtime DLLs")
     parser.add_argument("--runtime-license", type=Path, help="Redistribution notice for supplied runtime DLLs")
     parser.add_argument("--build-date", help="Optional reported build date")
     args = parser.parse_args()
-    metadata = json.loads(command("cargo", "metadata", "--format-version", "1", "--filter-platform", TARGET, "--locked", "--offline"))
+    build_target = "x86_64-pc-windows-msvc" if args.native_msvc else TARGET
+    objdump = "objdump" if args.native_msvc and args.objdump == "x86_64-w64-mingw32-objdump" else args.objdump
+    metadata = json.loads(command("cargo", "metadata", "--format-version", "1", "--filter-platform", build_target, "--locked", "--offline"))
     version = next(p["version"] for p in metadata["packages"] if p["name"] == "openrad-client")
     name = f"openrad-{version}-windows-x86_64-test"
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     runtime = {p.name.lower(): p for p in args.runtime_dir.iterdir() if p.is_file()} if args.runtime_dir else {}
-    binaries = Path(metadata["target_directory"]) / TARGET / "release"
+    binaries = Path(metadata["target_directory"]) / ("release" if args.native_msvc else f"{TARGET}/release")
     with tempfile.TemporaryDirectory(prefix="windows-package-", dir=dist) as temp:
         output = Path(temp) / name
         output.mkdir()
@@ -130,15 +136,19 @@ def main():
             shutil.copy2(source, output / filename)
             pending.append(output / filename)
         provided = set()
+        external_prerequisites = set()
         while pending:
             path = pending.pop()
-            dependencies = imports(path, args.objdump)
+            dependencies = imports(path, objdump)
             manifest[path.name] = dependencies
             for dll in dependencies:
                 key = dll.lower()
                 if key in SYSTEM_DLLS or key.startswith(("api-ms-win-", "ext-ms-win-")):
                     continue
                 if key in provided:
+                    continue
+                if args.native_msvc and key in MSVC_EXTERNAL_RUNTIME and key not in runtime:
+                    external_prerequisites.add(dll)
                     continue
                 if key not in runtime or not args.runtime_license:
                     raise RuntimeError(f"Missing non-system DLL or its redistribution notice: {dll}; provide --runtime-dir and --runtime-license")
@@ -148,6 +158,12 @@ def main():
                 pending.append(output / dll)
         if provided:
             shutil.copy2(args.runtime_license, output / "RUNTIME-DLL-LICENSE.txt")
+        if args.native_msvc:
+            (output / "NATIVE-MSVC-QA.txt").write_text(
+                "Portable Windows MSVC QA candidate. NOT the signed offline installer.\n"
+                + ("Requires Microsoft Visual C++ Redistributable x64: " + ", ".join(sorted(external_prerequisites)) + "\n"
+                   if external_prerequisites else "")
+                + "TAP driver/UAC and real VPN interoperability require manual checks.\n", encoding="utf-8")
         # Explicit allowlist: never package credentials, captures or runtime logs.
         for source, target in [
             ("LICENSE", "LICENSE"), ("CREDITS.md", "CREDITS.md"),
@@ -205,17 +221,19 @@ def main():
         sysroot = Path(command("rustc", "--print", "sysroot"))
         shutil.copy2(sysroot / "share/doc/rust/COPYRIGHT-library.html", output / "licenses/Rust-Standard-Library.html")
         (output / "DLL-IMPORTS.json").write_text(json.dumps({
-            "target": TARGET, "audit": "Static PE imports and supplied non-system DLLs, recursively inspected on Linux",
+            "target": build_target, "audit": "Static PE imports and supplied non-system DLLs, inspected on the build host",
             "windows_system_dlls_are_not_bundled": True,
-            "application_runtime_dlls": sorted(provided), "imports": manifest,
+            "application_runtime_dlls": sorted(provided),
+            "external_vendor_runtime_dlls": sorted(external_prerequisites), "imports": manifest,
         }, indent=2) + "\n", encoding="utf-8")
         (output / "BUILD-INFO.json").write_text(json.dumps({
-            "version": version, "target": TARGET, "build_date": args.build_date,
+            "version": version, "target": build_target, "build_date": args.build_date,
             "git_base_commit": command("git", "rev-parse", "HEAD"),
             "source_commit": command("git", "rev-parse", "HEAD"),
             "worktree_dirty": bool(command("git", "status", "--porcelain")),
             "rustc": command("rustc", "--version"),
             "windows_runtime_tested": False,
+            "external_runtime_prerequisite": "Microsoft Visual C++ Redistributable x64" if external_prerequisites else None,
             "windows_support": "experimental",
             "radmin_recovery": "Administrator worker, SYSTEM fallback and final administrator retry; forced service/GUI termination and verified adapter-disable fallbacks",
         }, indent=2) + "\n", encoding="utf-8")

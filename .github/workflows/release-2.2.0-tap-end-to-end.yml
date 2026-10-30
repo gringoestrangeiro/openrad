@@ -1,0 +1,171 @@
+name: release-2.2.0-tap-end-to-end
+
+on:
+  push:
+    branches: ['release/2.2.0-candidates']
+    paths: ['.github/workflows/release-2.2.0-tap-end-to-end.yml', 'scripts/qa-live-java-provision/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  isolated-tap-ip-traffic:
+    name: Two isolated Linux TAP peers through live VPN
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile isolated Java registration helper
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/openrad-qa/java-classes"
+          javac --release 21 -sourcepath clients/plugin/src/main/java -d "$RUNNER_TEMP/openrad-qa/java-classes" scripts/qa-live-java-provision/LiveProvisionForTapQa.java
+      - name: Fetch verified 2.2.0 Linux release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/openrad-qa"
+          gh run download 40786749665 --repo mariananetto-sys/openrad --name openrad-2.2.0-linux-candidate --dir "$RUNNER_TEMP/openrad-qa"
+          cd "$RUNNER_TEMP/openrad-qa"
+          sha256sum --check openrad-v2.2.0-linux-x86_64.tar.gz.sha256
+          tar -xzf openrad-v2.2.0-linux-x86_64.tar.gz
+          "$PWD/openrad-v2.2.0-linux-x86_64/openrad" --version | grep -F '2.2.0'
+      - name: Provision namespaces and exercise real TAP-to-TAP ICMP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iproute2 iptables iputils-ping
+          binary="$RUNNER_TEMP/openrad-qa/openrad-v2.2.0-linux-x86_64/openrad"
+          test -c /dev/net/tun
+          test -x "$binary"
+          user_name="$(id -un)"
+          owner="/tmp/openrad-tap-qa-a-$GITHUB_RUN_ID"
+          guest="/tmp/openrad-tap-qa-b-$GITHUB_RUN_ID"
+          java_owner="/tmp/openrad-java-qa-a-$GITHUB_RUN_ID"
+          java_guest="/tmp/openrad-java-qa-b-$GITHUB_RUN_ID"
+          namespace_a=orqa-a
+          namespace_b=orqa-b
+          secret_file="$(mktemp)"
+          chmod 600 "$secret_file"
+          openssl rand -hex 32 > "$secret_file"
+          network_name="OpenRadTAPQA_${GITHUB_RUN_ID}_$(openssl rand -hex 4)"
+          created=0
+          cleanup() {
+            set +e
+            if test "$created" -eq 1; then
+              sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" delete "$network_name" --yes --data-dir "$owner" >/dev/null 2>&1
+            fi
+            for n in "$namespace_a" "$namespace_b"; do
+              profile="$owner"
+              if test "$n" = "$namespace_b"; then profile="$guest"; fi
+              sudo ip netns exec "$n" runuser -u "$user_name" -- "$binary" stop --data-dir "$profile" >/dev/null 2>&1
+              sudo ip netns del "$n" >/dev/null 2>&1
+            done
+            sudo ip link del orqa-host-a >/dev/null 2>&1
+            sudo ip link del orqa-host-b >/dev/null 2>&1
+            rm -f "$secret_file"
+            rm -rf "$owner" "$guest" "$java_owner" "$java_guest"
+          }
+          trap cleanup EXIT
+          if timeout 8 bash -c 'echo > /dev/tcp/148.113.190.78/17301'; then
+            echo "PASS: GitHub runner can reach live service"
+          else
+            echo "FAIL: GitHub runner itself cannot reach live service TCP/17301"
+            exit 1
+          fi
+          sudo ip netns add "$namespace_a"
+          sudo ip netns add "$namespace_b"
+          sudo ip link add orqa-host-a type veth peer name orqa-guest-a
+          sudo ip link add orqa-host-b type veth peer name orqa-guest-b
+          sudo ip link set orqa-guest-a netns "$namespace_a"
+          sudo ip link set orqa-guest-b netns "$namespace_b"
+          sudo ip addr add 10.253.71.1/30 dev orqa-host-a
+          sudo ip addr add 10.253.72.1/30 dev orqa-host-b
+          sudo ip link set orqa-host-a up
+          sudo ip link set orqa-host-b up
+          sudo ip netns exec "$namespace_a" ip addr add 10.253.71.2/30 dev orqa-guest-a
+          sudo ip netns exec "$namespace_b" ip addr add 10.253.72.2/30 dev orqa-guest-b
+          for n in "$namespace_a" "$namespace_b"; do
+            sudo ip netns exec "$n" ip link set lo up
+          done
+          sudo ip netns exec "$namespace_a" ip link set orqa-guest-a up
+          sudo ip netns exec "$namespace_b" ip link set orqa-guest-b up
+          sudo ip netns exec "$namespace_a" ip route add default via 10.253.71.1
+          sudo ip netns exec "$namespace_b" ip route add default via 10.253.72.1
+          sudo sysctl -qw net.ipv4.ip_forward=1
+          uplink="$(ip -4 route show default | awk 'NR==1 {print $5}')"
+          test -n "$uplink"
+          sudo iptables -t nat -A POSTROUTING -s 10.253.71.0/30 -o "$uplink" -j MASQUERADE
+          sudo iptables -t nat -A POSTROUTING -s 10.253.72.0/30 -o "$uplink" -j MASQUERADE
+          sudo iptables -I FORWARD 1 -i orqa-host-a -o "$uplink" -j ACCEPT
+          sudo iptables -I FORWARD 1 -i orqa-host-b -o "$uplink" -j ACCEPT
+          sudo iptables -I FORWARD 1 -i "$uplink" -o orqa-host-a -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          sudo iptables -I FORWARD 1 -i "$uplink" -o orqa-host-b -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          for n in "$namespace_a" "$namespace_b"; do
+            if sudo ip netns exec "$n" timeout 8 bash -c 'echo > /dev/tcp/148.113.190.78/17301'; then
+              echo "PASS: outbound TCP from $n"
+            else
+              echo "FAIL: outbound TCP from $n; routes and firewall diagnostics:"
+              sudo ip netns exec "$n" ip route
+              sudo iptables -vnL FORWARD
+              exit 1
+            fi
+          done
+          classes="$RUNNER_TEMP/openrad-qa/java-classes"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$JAVA_HOME/bin/java" -cp "$classes" LiveProvisionForTapQa "$java_owner" "OpenRadTAPQA-A-$GITHUB_RUN_ID"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$JAVA_HOME/bin/java" -cp "$classes" LiveProvisionForTapQa "$java_guest" "OpenRadTAPQA-B-$GITHUB_RUN_ID"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" init --identity "$java_owner/identity.json" --data-dir "$owner"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" init --identity "$java_guest/identity.json" --data-dir "$guest"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" start --data-dir "$owner"
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" start --data-dir "$guest"
+          ready=0
+          for attempt in $(seq 1 80); do
+            if sudo ip netns exec "$namespace_a" ip -4 addr show radminvpn0 | grep -q 'inet 26\.' &&
+               sudo ip netns exec "$namespace_b" ip -4 addr show radminvpn0 | grep -q 'inet 26\.'; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if test "$ready" -ne 1; then
+            sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" status --data-dir "$owner" || true
+            sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" status --data-dir "$guest" || true
+            echo 'FAIL: both real TAP devices never became ready'
+            exit 1
+          fi
+          vip_a="$(sudo ip netns exec "$namespace_a" ip -4 -o addr show dev radminvpn0 | awk '{print $4}' | cut -d/ -f1)"
+          vip_b="$(sudo ip netns exec "$namespace_b" ip -4 -o addr show dev radminvpn0 | awk '{print $4}' | cut -d/ -f1)"
+          test -n "$vip_a" && test -n "$vip_b" && test "$vip_a" != "$vip_b"
+          sudo ip netns exec "$namespace_a" runuser -u "$user_name" -- "$binary" create "$network_name" --password-file "$secret_file" --data-dir "$owner"
+          created=1
+          sudo ip netns exec "$namespace_b" runuser -u "$user_name" -- "$binary" join "$network_name" --password-file "$secret_file" --data-dir "$guest"
+          ping_ok=0
+          for attempt in $(seq 1 25); do
+            if sudo ip netns exec "$namespace_a" ping -I radminvpn0 -c 2 -W 3 "$vip_b" &&
+               sudo ip netns exec "$namespace_b" ping -I radminvpn0 -c 2 -W 3 "$vip_a"; then
+              ping_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if test "$ping_ok" -ne 1; then
+            echo 'FAIL: no bidirectional OS-level packets through TAP'
+            sudo ip netns exec "$namespace_a" ip -s link show radminvpn0
+            sudo ip netns exec "$namespace_b" ip -s link show radminvpn0
+            exit 1
+          fi
+          echo "PASS: two independently routed Linux network namespaces with separate TAP devices, real service authentication, private membership and bidirectional IP/ICMP traffic"
+          sudo ip netns exec "$namespace_a" ip -s link show radminvpn0
+          sudo ip netns exec "$namespace_b" ip -s link show radminvpn0

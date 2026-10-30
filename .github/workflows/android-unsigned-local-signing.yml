@@ -1,0 +1,68 @@
+name: android-2.2.0-unsigned-for-local-signing
+
+on:
+  push:
+    branches: ['release/2.2.0-candidates']
+    paths:
+      - '.github/workflows/android-unsigned-local-signing.yml'
+      - 'scripts/sign-android-local.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-release:
+    name: Build and test UNSIGNED production-variant APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        working-directory: clients/android
+        run: ./scripts/setup-android-sdk.sh
+      - name: Build unsigned release and run tests
+        working-directory: clients/android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease
+      - name: Verify unsigned state and production package identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          unsigned=clients/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$unsigned"
+          aapt="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          apksigner="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          package="$("$aapt" dump badging "$unsigned" | head -n 1)"
+          echo "$package"
+          [[ "$package" == *"name='com.openrad.mobile'"* ]]
+          [[ "$package" == *"versionCode='7'"* ]]
+          [[ "$package" == *"versionName='2.2.0'"* ]]
+          if "$apksigner" verify "$unsigned" >/dev/null 2>&1; then
+            echo 'Refusing to stage APK that was already signed'
+            exit 1
+          fi
+          echo 'PASS: production application ID and version; APK remains unsigned'
+      - name: Package unsigned APK (NEVER publish as an installable release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android-local-signing
+          cp clients/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+             dist/android-local-signing/openrad-2.2.0-android-UNSIGNED.apk
+          (cd dist/android-local-signing && sha256sum openrad-2.2.0-android-UNSIGNED.apk > SHA256SUMS)
+          printf '%s\n' \
+            'UNSIGNED ANDROID APK -- NOT INSTALLABLE, NOT A PRODUCTION RELEASE.' \
+            'This is only the unsigned com.openrad.mobile 2.2.0 binary.' \
+            'Only the original Android signing keystore can make an update-compatible APK.' \
+            'Sign privately on the maintainer Windows PC with scripts/sign-android-local.ps1.' \
+            "Source commit: $GITHUB_SHA" > dist/android-local-signing/README-FIRST.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.2.0-android-UNSIGNED-for-local-signing
+          path: dist/android-local-signing/
+          if-no-files-found: error
+          retention-days: 14

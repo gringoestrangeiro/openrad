@@ -3,7 +3,13 @@ use openrad::i18n::Language;
 
 fn literals(source: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let mut source = source.split("\n#[cfg(test)]\nmod ").next().unwrap();
+    // Source files checked out with CRLF on Windows must exclude unit-test
+    // fixtures exactly as LF files do on Linux CI.
+    let normalized_newlines = source.replace("\r\n", "\n");
+    let mut source = normalized_newlines
+        .split("\n#[cfg(test)]\nmod ")
+        .next()
+        .unwrap();
     while let Some(start) = source.find('"') {
         source = &source[start + 1..];
         let mut escaped = false;

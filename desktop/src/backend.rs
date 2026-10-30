@@ -225,6 +225,11 @@ impl Drop for Backend {
     }
 }
 type Report = Arc<dyn Fn(Notice) + Send + Sync>;
+/// Fresh profiles must finish onboarding before background auto-connect.
+fn should_autoconnect(settings: &Settings, identity_ready: bool, service_running: bool) -> bool {
+    settings.onboarding_complete && settings.auto_connect && identity_ready && !service_running
+}
+
 #[cfg(test)]
 fn reconnect_delay(settings: &Settings, attempt: u32) -> Duration {
     Duration::from_secs(
@@ -375,7 +380,7 @@ fn manager(
             }));
         }
     };
-    let mut connect = settings.auto_connect && loaded.is_ok() && !service_running;
+    let mut connect = should_autoconnect(&settings, loaded.is_ok(), service_running);
     let mut next_status = Instant::now();
     #[cfg(unix)]
     let mut next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
@@ -1160,6 +1165,19 @@ mod tests {
             &received[3],
             Notice::Phase(Phase::Connected, message) if message == "ready"
         ));
+    }
+
+    #[test]
+    fn onboarding_blocks_background_autoconnect_until_preferences_are_saved() {
+        let mut settings = Settings::default();
+        assert!(settings.auto_connect);
+        assert!(!should_autoconnect(&settings, true, false));
+        settings.onboarding_complete = true;
+        assert!(should_autoconnect(&settings, true, false));
+        assert!(!should_autoconnect(&settings, false, false));
+        assert!(!should_autoconnect(&settings, true, true));
+        settings.auto_connect = false;
+        assert!(!should_autoconnect(&settings, true, false));
     }
 
     #[test]

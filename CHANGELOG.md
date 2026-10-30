@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.2.0 — candidata de release (2026-10-28; ainda nao publicada)
+
+Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto
+do servico Rust quando o cliente encerra o IPC; teste deterministico de pacing;
+validacao precoce de tokens da API Python; historico de releases nos pacotes;
+cancelamento de buscas publicas Android; verificacao completa dos JARs Fabric
+(bytecode/mixins Java16/17/21/25), rebuild por alvo e shutdown; e testes Paper
+com sincronizacao adequada. **Sem alteracoes no wire format nem na identidade VPN.**
+
+Evidencia de build/teste: 329 testes Rust aprovados (1 ignorado); matriz Gradle
+local 33 Fabric + 21 Paper aprovada apos retestes. **Sem homologacao
+end-to-end dentro do Minecraft, em Android fisico ou na rede Radmin real.**
+Windows permanece experimental, Android beta, Minecraft alpha, Python research/Linux-only.
+Fora do escopo implementado: Minecraft 1.14-1.16.5, 1.20 sem patch; nenhum
+loader novo foi adicionado.
+
+Veja [notas 2.2.0](docs/releases/2.2.0.md) e
+[inventario 2.2.0](docs/releases/2.2.0-changes.md).
+
 ## 2.1.5 — 2026-10-25
 
 OpenRad 2.1.5 adds stealth block, the Minecraft Fabric client mod (alpha) and Paper plugin

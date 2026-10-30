@@ -48,47 +48,48 @@ public final class Provisioner {
             throw new IOException(
                     "registration outcome unknown: preserve registration.pending and recover"
                         + " identity before another registration");
-        Set<String> visited = new HashSet<>();
-        long until = System.nanoTime() + Duration.ofSeconds(90).toNanos();
-        for (int attempt = 0; attempt < 3; attempt++) {
-            require(visited.add(host), "registration redirect loop");
-            try (Identity bootstrap = Identity.bootstrap(name, host);
-                    ControlSession session =
-                            ControlSession.authenticate(
-                                    host,
-                                    port,
-                                    bootstrap,
-                                    3,
-                                    Duration.ofNanos(Math.max(1, until - System.nanoTime())),
-                                    modulus,
-                                    owner)) {
-                writeIntent(intent);
-                session.send(login(name, 0, 3, 0));
-                byte[] reply = session.receive();
-                if (TlvCodec.operation(reply) == 12) {
-                    var f = fields(field(fields(field(fields(reply), 0x1238)), 0x1234));
-                    host = TlvCodec.text(field(f, 0x030001c9));
-                    try {
-                        ipv4(host);
-                    } catch (IllegalArgumentException e) {
-                        throw new IllegalArgumentException(
-                                "registration redirect host must be numeric IPv4", e);
+        try (Identity bootstrap = Identity.bootstrap(name, host)) {
+            Set<String> visited = new HashSet<>();
+            long until = System.nanoTime() + Duration.ofSeconds(90).toNanos();
+            for (int attempt = 0; attempt < 3; attempt++) {
+                require(visited.add(host), "registration redirect loop");
+                try (ControlSession session =
+                                ControlSession.authenticate(
+                                        host,
+                                        port,
+                                        bootstrap,
+                                        3,
+                                        Duration.ofNanos(Math.max(1, until - System.nanoTime())),
+                                        modulus,
+                                        owner)) {
+                    writeIntent(intent);
+                    session.send(login(name, 0, 3, 0));
+                    byte[] reply = session.receive();
+                    if (TlvCodec.operation(reply) == 12) {
+                        var f = fields(field(fields(field(fields(reply), 0x1238)), 0x1234));
+                        host = TlvCodec.text(field(f, 0x030001c9));
+                        try {
+                            ipv4(host);
+                        } catch (IllegalArgumentException e) {
+                            throw new IllegalArgumentException(
+                                    "registration redirect host must be numeric IPv4", e);
+                        }
+                        Files.delete(intent);
+                        continue;
                     }
-                    Files.delete(intent);
-                    continue;
-                }
-                require(TlvCodec.operation(reply) == 21, "expected provisioning LoginComplete");
-                Identity registered = Identity.registered(session.receive());
-                try {
-                    saveIssued(registered, identity, intent, Identity::save);
-                    return registered;
-                } catch (IOException | RuntimeException e) {
-                    registered.close();
-                    throw e;
+                    require(TlvCodec.operation(reply) == 21, "expected provisioning LoginComplete");
+                    Identity registered = Identity.registered(session.receive());
+                    try {
+                        saveIssued(registered, identity, intent, Identity::save);
+                        return registered;
+                    } catch (IOException | RuntimeException e) {
+                        registered.close();
+                        throw e;
+                    }
                 }
             }
+            throw new IOException("registration redirect budget exhausted");
         }
-        throw new IOException("registration redirect budget exhausted");
     }
 
     static final int SAVE_ATTEMPTS = 7;

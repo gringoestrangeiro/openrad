@@ -61,7 +61,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                         0,
                         TimeUnit.SECONDS,
                         new ArrayBlockingQueue<>(2),
-                        Thread.ofPlatform().name("OpenRad Plugin-admin").daemon().factory(),
+                        io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformFactory("OpenRad Plugin-admin-"),
                         new ThreadPoolExecutor.AbortPolicy());
         Objects.requireNonNull(getCommand("orb")).setExecutor(this::command);
         Objects.requireNonNull(getCommand("orb"))
@@ -271,7 +271,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                                     + " | avisos: "
                                     + catalog.problems().size());
                     if (!catalog.problems().isEmpty())
-                        sender.sendMessage("[OpenRad Plugin] " + catalog.problems().getFirst());
+                        sender.sendMessage("[OpenRad Plugin] " + catalog.problems().get(0));
                     var lan = r.lanSnapshot();
                     var reach = r.reachabilitySnapshot();
                     sender.sendMessage(
@@ -471,7 +471,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                                     List<String> selectors = args.subList(1, args.size());
                                     boolean off =
                                             selectors.size() == 1
-                                                    && selectors.getFirst().equalsIgnoreCase("off");
+                                                    && selectors.get(0).equalsIgnoreCase("off");
                                     editor.publicSelection(off ? List.of() : selectors);
                                     done =
                                             off

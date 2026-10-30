@@ -114,7 +114,7 @@ public final class PeerConnector {
 
     private static final class Race implements AutoCloseable {
         final Scope resources = new Scope();
-        final ExecutorService jobs = Executors.newVirtualThreadPerTaskExecutor();
+        final ExecutorService jobs = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualExecutor();
         final BlockingQueue<Success> successes = new LinkedBlockingQueue<>();
         final AtomicInteger active = new AtomicInteger(),
                 mappingActive = new AtomicInteger(),
@@ -254,9 +254,7 @@ public final class PeerConnector {
         }
         CompletableFuture<InetAddress> resolved = new CompletableFuture<>();
         Thread resolver =
-                Thread.ofVirtual()
-                        .name("openrad-coordinator-resolve")
-                        .start(
+                io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualStart("openrad-coordinator-resolve",
                                 () -> {
                                     try {
                                         resolved.complete(InetAddress.getByName(host));

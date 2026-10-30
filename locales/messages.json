@@ -3449,6 +3449,11 @@
     "Открыть выпуск",
     "Xem bản phát hành"
   ],
+  "Open in browser": [
+    "Abrir no navegador",
+    "Открыть в браузере",
+    "Mở trong trình duyệt"
+  ],
   "Dismiss update notice": [
     "Fechar aviso de atualização",
     "Закрыть уведомление об обновлении",
@@ -4223,5 +4228,60 @@
     "Este endereço não está bloqueado",
     "Этот адрес не заблокирован",
     "Địa chỉ này không bị chặn"
+  ],
+  "Theme": [
+    "Tema",
+    "Тема",
+    "Giao diện"
+  ],
+  "Dark": [
+    "Escuro",
+    "Тёмная",
+    "Tối"
+  ],
+  "Light": [
+    "Claro",
+    "Светлая",
+    "Sáng"
+  ],
+  "The change applies immediately. Save to keep your preference.": [
+    "A alteração é aplicada imediatamente. Salve para manter a preferência.",
+    "Изменение применяется сразу. Сохраните настройки, чтобы сохранить выбор.",
+    "Thay đổi có hiệu lực ngay. Hãy lưu để giữ tùy chọn này."
+  ],
+  "Skip animation": [
+    "Pular animação",
+    "Пропустить анимацию",
+    "Bỏ qua hoạt ảnh"
+  ],
+  "Welcome to OpenRad": [
+    "Bem-vindo ao OpenRad",
+    "Добро пожаловать в OpenRad",
+    "Chào mừng đến với OpenRad"
+  ],
+  "Choose your preferences before getting started.": [
+    "Escolha suas preferências antes de começar.",
+    "Выберите предпочтения перед началом работы.",
+    "Chọn tùy chọn của bạn trước khi bắt đầu."
+  ],
+  "Appearance": [
+    "Aparência",
+    "Внешний вид",
+    "Giao diện"
+  ],
+  "Create OpenRad desktop shortcut": [
+    "Criar atalho OpenRad na área de trabalho",
+    "Создать ярлык OpenRad на рабочем столе",
+    "Tạo lối tắt OpenRad trên màn hình nền"
+  ],
+  "Get started": [
+    "Começar",
+    "Начать",
+    "Bắt đầu"
+  ],
+  "Desktop shortcut: {error}": [
+    "Atalho da área de trabalho: {error}",
+    "Ярлык рабочего стола: {error}",
+    "Lối tắt màn hình nền: {error}"
   ]
 }

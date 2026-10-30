@@ -210,7 +210,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
         this.sender = Objects.requireNonNull(sender);
         incoming = new ArrayBlockingQueue<>(limits.inboundQueueFrames());
         selector = Selector.open();
-        worker = Thread.ofPlatform().daemon().name("openrad-virtual-tcp").unstarted(this::run);
+        worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-virtual-tcp", this::run);
         worker.start();
     }
 

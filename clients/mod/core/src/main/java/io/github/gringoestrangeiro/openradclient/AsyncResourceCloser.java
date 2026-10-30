@@ -16,7 +16,7 @@ final class AsyncResourceCloser implements AutoCloseable {
         this.capacity = capacity;
         executor = new ThreadPoolExecutor(8, 8, 1, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(capacity),
-                Thread.ofVirtual().name("openrad-client-cleanup-", 0).factory());
+                io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("openrad-client-cleanup-"));
         executor.allowCoreThreadTimeOut(true);
     }
 

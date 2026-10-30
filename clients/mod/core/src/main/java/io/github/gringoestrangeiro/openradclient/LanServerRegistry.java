@@ -64,7 +64,7 @@ final class LanServerRegistry {
                         .filter(entry -> entry.getValue().server().address().equals(address))
                         .sorted(Comparator.comparingLong(entry -> entry.getValue().receivedNanos()))
                         .map(Map.Entry::getKey).toList();
-                if (own.size() >= MAX_SERVERS_PER_PEER) servers.remove(own.getFirst());
+                if (own.size() >= MAX_SERVERS_PER_PEER) servers.remove(own.get(0));
                 else if (servers.size() >= MAX_SERVERS) return false;
             }
             servers.put(key, new Entry(new ClientVpnRuntime.LanServer(

@@ -37,7 +37,7 @@ public final class ShRecord {
             out.add(value);
         }
         Crypto.require(
-                !input.hasRemaining() && Arrays.equals(out.getFirst(), Crypto.be32(index)),
+                !input.hasRemaining() && Arrays.equals(out.get(0), Crypto.be32(index)),
                 "SH state/trailing data mismatch");
         return List.copyOf(out.subList(1, out.size()));
     }

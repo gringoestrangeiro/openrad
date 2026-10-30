@@ -83,7 +83,7 @@ public final class OpenRadNetworkPickerScreen extends Screen {
         int panel = Math.min(380, width - 24), left = (width - panel) / 2;
         int rows = rows();
         int pages = Math.max(1, (items.size() + rows - 1) / rows);
-        page = Math.clamp(page, 0, pages - 1);
+        page = Math.max(0, Math.min(page, pages - 1));
         for (int i = page * rows; i < Math.min(items.size(), (page + 1) * rows); i++) {
             Item item = items.get(i);
             boolean checked = languages
