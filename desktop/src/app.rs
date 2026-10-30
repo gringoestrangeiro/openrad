@@ -3630,7 +3630,11 @@ impl App {
                         #[cfg(windows)]
                         if self.welcome_create_shortcut {
                             if let Err(err) = crate::shortcut::create_desktop_shortcut() {
-                                self.notify_error(anyhow::anyhow!("Desktop shortcut: {err:#}"));
+                                let message = language.format(
+                                    "Desktop shortcut: {error}",
+                                    &[("error", &format!("{err:#}"))],
+                                );
+                                self.notify_error(anyhow::anyhow!("{message}"));
                                 return;
                             }
                         }

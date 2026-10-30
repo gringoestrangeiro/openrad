@@ -4278,5 +4278,10 @@
     "Começar",
     "Начать",
     "Bắt đầu"
+  ],
+  "Desktop shortcut: {error}": [
+    "Atalho da área de trabalho: {error}",
+    "Ярлык рабочего стола: {error}",
+    "Lối tắt màn hình nền: {error}"
   ]
 }
