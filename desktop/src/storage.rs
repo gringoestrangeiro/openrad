@@ -82,10 +82,26 @@ pub enum PeerSort {
     Address,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    Dark,
+    Light,
+}
+
+fn existing_user_onboarded() -> bool {
+    true
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub language: LanguagePreference,
+    pub theme: ThemePreference,
+    // Existing settings files predate the wizard: don't re-onboard upgrades.
+    #[serde(default = "existing_user_onboarded")]
+    pub onboarding_complete: bool,
     pub auto_connect: bool,
     pub auto_reconnect: bool,
     pub reconnect_attempts: u32,
@@ -110,6 +126,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: LanguagePreference::System,
+            theme: ThemePreference::Dark,
+            onboarding_complete: false,
             auto_connect: true,
             auto_reconnect: true,
             reconnect_attempts: 3,
@@ -602,6 +620,9 @@ mod tests {
         assert_eq!(settings.reconnect_attempts, 3);
         assert_eq!(settings.start_page, StartPage::Networks);
         assert_eq!(settings.language, LanguagePreference::System);
+        assert_eq!(settings.theme, ThemePreference::Dark);
+        assert!(settings.onboarding_complete);
+        assert!(!Settings::default().onboarding_complete);
         assert!(settings.show_offline_peers);
         assert!(!settings.show_peer_ip);
         assert!(!Settings::default().show_peer_ip);
@@ -609,6 +630,8 @@ mod tests {
         changed.start_page = StartPage::Discover;
         changed.peer_sort = PeerSort::Status;
         changed.show_diagnostics = true;
+        changed.theme = ThemePreference::Light;
+        changed.onboarding_complete = true;
         changed.show_peer_ip = true;
         changed.language = LanguagePreference::Vietnamese;
         let restored: Settings =
