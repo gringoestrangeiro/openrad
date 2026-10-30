@@ -312,7 +312,11 @@ fn manager(
         if dir.identity_file_present() {
             identity = Some(dir.load_identity()?);
         } else if !service_running {
-            identity = storage::load(&paths.entry()?)?;
+            identity = if import.is_some() {
+                storage::load_for_import(&paths.entry()?)?
+            } else {
+                storage::load(&paths.entry()?)?
+            };
         }
         if let Some(path) = import {
             let imported = Identity::load(&path)?;
@@ -878,7 +882,7 @@ fn import_identity(
     let current = if dir.identity_file_present() {
         Some(dir.load_identity()?)
     } else {
-        storage::load(&paths.entry()?)?
+        storage::load_for_import(&paths.entry()?)?
     };
     ensure!(
         current.as_ref().is_none_or(|id| id.rid == imported.rid),

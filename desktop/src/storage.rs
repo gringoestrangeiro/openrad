@@ -311,6 +311,15 @@ pub fn save(vault: &impl Vault, id: &Identity) -> Result<()> {
     let bytes = Zeroizing::new(serde_json::to_vec(id)?);
     vault.set(&bytes)
 }
+
+/// Explicit recovery may replace a registration marker, but not a saved identity.
+pub fn load_for_import(vault: &impl Vault) -> Result<Option<Identity>> {
+    match vault.get()? {
+        None => Ok(None),
+        Some(bytes) if bytes.as_slice() == PENDING => Ok(None),
+        Some(bytes) => Ok(Some(Identity::from_secret(&bytes)?)),
+    }
+}
 pub fn provision_once(
     vault: &impl Vault,
     provision: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<Identity>,
@@ -455,6 +464,35 @@ mod tests {
         })
         .is_err());
         assert!(provision_once(&vault, |_| panic!("must not register twice")).is_err());
+    }
+    #[test]
+    fn explicit_import_recovers_pending_registration_without_registering_again() {
+        let vault = MemoryVault::default();
+        assert!(provision_once(&vault, |commit| {
+            commit()?;
+            bail!("synthetic registration interruption")
+        })
+        .is_err());
+        assert!(
+            load(&vault).is_err(),
+            "ordinary startup must remain blocked"
+        );
+        assert!(load_for_import(&vault).unwrap().is_none());
+        assert_eq!(vault.data.borrow().as_deref(), Some(PENDING));
+        save(&vault, &identity()).unwrap();
+        assert_eq!(load(&vault).unwrap().unwrap().rid, 123);
+        assert_eq!(load_for_import(&vault).unwrap().unwrap().rid, 123);
+        assert_eq!(
+            provision_once(&vault, |_| panic!("recovery must not provision"))
+                .unwrap()
+                .rid,
+            123
+        );
+        *vault.data.borrow_mut() = Some(b"broken".to_vec());
+        assert!(
+            load_for_import(&vault).is_err(),
+            "corruption is not a marker"
+        );
     }
     #[test]
     fn failure_before_registration_is_sent_allows_a_later_attempt() {
