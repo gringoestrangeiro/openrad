@@ -395,12 +395,50 @@ fn resolve_endpoints(
     // System DNS can block much longer than a handshake. Bound the caller's
     // wait and keep Disconnect/Shutdown responsive even during resolution.
     let host = host.to_owned();
+    resolve_hostname(until, stop, move || {
+        (host.as_str(), port).to_socket_addrs().map(|v| v.collect())
+    })
+}
+
+fn resolve_hostname(
+    until: Instant,
+    stop: &Option<Arc<AtomicBool>>,
+    lookup: impl FnOnce() -> io::Result<Vec<std::net::SocketAddr>> + Send + 'static,
+) -> Result<Vec<std::net::SocketAddr>> {
+    static WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    resolve_hostname_limited(until, stop, &WORKERS, lookup)
+}
+
+struct DnsPermit(&'static std::sync::atomic::AtomicUsize);
+impl Drop for DnsPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn resolve_hostname_limited(
+    until: Instant,
+    stop: &Option<Arc<AtomicBool>>,
+    workers: &'static std::sync::atomic::AtomicUsize,
+    lookup: impl FnOnce() -> io::Result<Vec<std::net::SocketAddr>> + Send + 'static,
+) -> Result<Vec<std::net::SocketAddr>> {
+    ensure!(!is_cancelled(stop), "cancelled");
+    ensure!(Instant::now() < until, "DNS resolution timeout");
+    // Native DNS cannot be cancelled. Retain its slot until the actual worker
+    // exits, even after its caller times out or disconnects. No queued backlog.
+    workers
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+            (active < 4).then_some(active + 1)
+        })
+        .map_err(|_| anyhow::anyhow!("DNS resolver worker limit reached"))?;
+    let permit = DnsPermit(workers);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("openrad-dns".into())
         .spawn(move || {
-            let result = (host.as_str(), port).to_socket_addrs().map(|v| v.collect());
-            let _ = tx.send(result);
+            // Moving this guard also releases the slot if spawning fails.
+            let _permit = permit;
+            let _ = tx.send(lookup());
         })?;
     loop {
         ensure!(!is_cancelled(stop), "cancelled");
@@ -1250,6 +1288,109 @@ impl Session {
 #[cfg(test)]
 mod provision_tests {
     use super::*;
+
+    #[test]
+    fn timed_out_dns_lookups_keep_a_global_worker_bound() {
+        use std::sync::{atomic::AtomicUsize, Condvar, Mutex};
+        static WORKERS: AtomicUsize = AtomicUsize::new(0);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let (entered, arrivals) = std::sync::mpsc::channel();
+        for _ in 0..8 {
+            let gate = gate.clone();
+            let active = active.clone();
+            let finished = finished.clone();
+            let entered = entered.clone();
+            let result = resolve_hostname_limited(
+                Instant::now() + Duration::from_millis(25),
+                &None,
+                &WORKERS,
+                move || {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    entered.send(()).unwrap();
+                    let (lock, wake) = &*gate;
+                    let mut open = lock.lock().unwrap();
+                    while !*open {
+                        open = wake.wait(open).unwrap();
+                    }
+                    finished.fetch_add(1, Ordering::SeqCst);
+                    Ok(Vec::new())
+                },
+            );
+            let error = result.unwrap_err();
+            if error.to_string() == "DNS resolution timeout" {
+                arrivals.recv_timeout(Duration::from_secs(2)).unwrap();
+            } else {
+                assert_eq!(error.to_string(), "DNS resolver worker limit reached");
+            }
+        }
+        let outstanding = active.load(Ordering::SeqCst);
+        // Release synthetic workers even when the bound assertion fails.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        let until = Instant::now() + Duration::from_secs(2);
+        while finished.load(Ordering::SeqCst) != outstanding || WORKERS.load(Ordering::SeqCst) != 0
+        {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert!(outstanding <= 4, "unbounded DNS workers: {outstanding}");
+        assert_eq!(outstanding, 4);
+        assert!(resolve_hostname_limited(
+            Instant::now() + Duration::from_secs(1),
+            &None,
+            &WORKERS,
+            || Ok(Vec::new()),
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn cancelled_dns_lookups_retain_slots_until_workers_exit() {
+        use std::sync::{atomic::AtomicUsize, Condvar, Mutex};
+        static WORKERS: AtomicUsize = AtomicUsize::new(0);
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        for _ in 0..4 {
+            let gate = gate.clone();
+            let stop = Arc::new(AtomicBool::new(false));
+            let cancel = stop.clone();
+            let error = resolve_hostname_limited(
+                Instant::now() + Duration::from_secs(2),
+                &Some(stop),
+                &WORKERS,
+                move || {
+                    cancel.store(true, Ordering::SeqCst);
+                    let mut open = gate.0.lock().unwrap();
+                    while !*open {
+                        open = gate.1.wait(open).unwrap();
+                    }
+                    Ok(Vec::new())
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), "cancelled");
+        }
+        let started = Instant::now();
+        let rejected =
+            resolve_hostname_limited(started + Duration::from_secs(2), &None, &WORKERS, || {
+                panic!("saturated lookup must not run")
+            });
+        // Release and drain workers before checking the rejection assertions.
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        let until = Instant::now() + Duration::from_secs(2);
+        while WORKERS.load(Ordering::SeqCst) != 0 {
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            rejected.unwrap_err().to_string(),
+            "DNS resolver worker limit reached"
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn transient_authentication_retries_then_succeeds() {
