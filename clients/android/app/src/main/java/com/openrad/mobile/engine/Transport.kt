@@ -332,6 +332,7 @@ fun provisionIdentity(
     protector: SocketProtector?,
     stop: AtomicBoolean?,
     modulus: ByteArray = Protocol.SERVER_MODULUS,
+    beforeRegister: () -> Unit = {},
 ): Identity {
     Protocol.validateNodeName(nodeName)
     val bootstrapRid = secureRandom.nextInt(1000) + 1L
@@ -344,7 +345,9 @@ fun provisionIdentity(
         var control: Control? = null
         try {
             control = Control.open(target, port, bootstrapRid, BOOTSTRAP_PASSWORD, 3, protector, stop, modulus) {
-                Protocol.login(nodeName, 0, 3)
+                val login = Protocol.login(nodeName, 0, 3)
+                beforeRegister()
+                login
             }
             val receiver = Protocol.Provisioning()
             repeat(16) {

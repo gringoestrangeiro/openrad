@@ -247,19 +247,30 @@ class Engine(
 
     private fun runControl() {
         var attempt = 0
+        // Retry saving an issued credential without asking the service to issue another.
+        var issuedIdentity: Identity? = null
         val redirected = HashSet<String>()
         var host: String? = null
         while (running.get()) {
             var control: Control? = null
             val active = ArrayList<Active>()
             try {
-                var id = store.load()
+                var id = issuedIdentity
+                if (id != null) {
+                    store.save(id)
+                    issuedIdentity = null
+                } else {
+                    id = store.load()
+                }
                 if (id == null) {
                     phase = EngineState.Phase.PROVISIONING
                     publish(force = true)
                     event("Registering this device…", false)
-                    id = provisionIdentity(config.nodeName, config.host, config.port, protector, stopping, config.modulus)
+                    id = provisionIdentity(config.nodeName, config.host, config.port, protector, stopping, config.modulus,
+                        beforeRegister = store::markRegistrationPending)
+                    issuedIdentity = id
                     store.save(id)
+                    issuedIdentity = null
                     event("Device registered.", false)
                 }
                 if (id.nodeName != config.nodeName && config.nodeName.isNotBlank()) {
@@ -318,6 +329,12 @@ class Engine(
                     host = redirect.host
                     event("Server redirected the session to ${redirect.host}.", false)
                 }
+            } catch (e: RegistrationPendingException) {
+                error = e.message
+                phase = EngineState.Phase.ERROR
+                event(e.message ?: "registration outcome unknown", true)
+                halt()
+                publish(force = true)
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {

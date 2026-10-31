@@ -7,6 +7,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.openrad.mobile.engine.Identity
 import com.openrad.mobile.engine.IdentityStore
+import com.openrad.mobile.engine.RegistrationPendingException
 import com.openrad.mobile.model.AppSettings
 import com.openrad.mobile.model.JoinConfiguration
 
@@ -27,8 +28,9 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
         )
     }
 
-    override fun load(): Identity? {
+    @Synchronized override fun load(): Identity? {
         val text = prefs.getString(KEY, null) ?: return null
+        if (text == PENDING) throw RegistrationPendingException()
         return try {
             Codecs.decodeIdentity(text)
         } catch (e: Exception) {
@@ -37,17 +39,24 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
         }
     }
 
-    override fun save(identity: Identity) {
+    @Synchronized override fun save(identity: Identity) {
         check(prefs.edit().putString(KEY, Codecs.encodeIdentity(identity)).commit()) { "could not save identity" }
     }
 
-    override fun clear() {
-        prefs.edit().remove(KEY).commit()
+    @Synchronized override fun markRegistrationPending() {
+        val current = prefs.getString(KEY, null)
+        check(current == null || current == PENDING) { "an identity was saved while preparing registration" }
+        check(prefs.edit().putString(KEY, PENDING).commit()) { "could not save registration intent" }
+    }
+
+    @Synchronized override fun clear() {
+        check(prefs.edit().remove(KEY).commit()) { "could not clear identity" }
     }
 
     companion object {
         private const val FILE = "openrad_identity"
         private const val KEY = "identity"
+        private const val PENDING = "openrad-registration-pending-v1"
     }
 }
 
