@@ -1315,7 +1315,8 @@ def self_test():
                 engine = Engine(ident, Profile(folder), max_peers=400)
                 engine.membership.networks['a'] = dict(name='fixture')
                 for rid in range(2, 202):
-                    engine.membership.peers[rid] = dict(rid=rid, server='127.0.0.1', state=1, network_ids=['a'])
+                    engine.membership.peers[rid] = dict(rid=rid, vip=f'26.0.0.{rid}',
+                        server='127.0.0.1', state=1, network_ids=['a'])
                 calls = []
                 def alive():
                     calls.append(1)
