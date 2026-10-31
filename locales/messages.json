@@ -1,4 +1,9 @@
 {
+  "The saved identity changed in another frontend. Keep this window open to recover the pending identity.": [
+    "A identidade salva foi alterada em outro aplicativo. Mantenha esta janela aberta para recuperar a identidade pendente.",
+    "Сохранённая идентификация изменена в другом приложении. Оставьте это окно открытым для восстановления ожидающей сохранения идентификации.",
+    "Danh tính đã lưu đã được thay đổi trong ứng dụng khác. Giữ cửa sổ này mở để khôi phục danh tính đang chờ lưu."
+  ],
   "System language (automatic)": [
     "Idioma do sistema (automático)",
     "Язык системы (автоматически)",

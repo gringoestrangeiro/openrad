@@ -312,6 +312,19 @@ pub fn save(vault: &impl Vault, id: &Identity) -> Result<()> {
     vault.set(&bytes)
 }
 
+/// Retry saving an issued first identity only while the original registration
+/// marker (or no record) remains. The caller holds the profile ownership lock.
+pub fn save_initial(vault: &impl Vault, id: &Identity) -> Result<()> {
+    if let Some(saved) = load_for_import(vault)? {
+        ensure!(
+            Zeroizing::new(serde_json::to_vec(&saved)?)
+                == Zeroizing::new(serde_json::to_vec(id)?),
+            "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+        );
+    }
+    save(vault, id)
+}
+
 /// Explicit recovery may replace a registration marker, but not a saved identity.
 pub fn load_for_import(vault: &impl Vault) -> Result<Option<Identity>> {
     match vault.get()? {
@@ -454,6 +467,35 @@ mod tests {
                 .rid,
             123
         );
+    }
+    #[test]
+    fn initial_save_retries_preserve_concurrent_identities_and_corrupt_records() {
+        let issued = identity();
+        let encoded = serde_json::to_vec(&issued).unwrap();
+        for previous in [None, Some(PENDING.to_vec()), Some(encoded.clone())] {
+            let vault = MemoryVault {
+                data: RefCell::new(previous),
+                ..Default::default()
+            };
+            save_initial(&vault, &issued).unwrap();
+            assert_eq!(vault.data.borrow().as_ref(), Some(&encoded));
+        }
+        let mut replaced = issued.clone();
+        replaced.rid += 1;
+        let mut renamed = issued.clone();
+        renamed.node_name = "concurrent rename".into();
+        for previous in [
+            serde_json::to_vec(&replaced).unwrap(),
+            serde_json::to_vec(&renamed).unwrap(),
+            b"corrupt-record".to_vec(),
+        ] {
+            let vault = MemoryVault {
+                data: RefCell::new(Some(previous.clone())),
+                ..Default::default()
+            };
+            assert!(save_initial(&vault, &issued).is_err());
+            assert_eq!(vault.data.borrow().as_ref(), Some(&previous));
+        }
     }
     #[test]
     fn interrupted_registration_never_provisions_a_second_identity() {

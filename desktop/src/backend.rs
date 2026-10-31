@@ -425,7 +425,7 @@ fn manager(
                     if dir.identity_file_present() {
                         persisted = true;
                     } else {
-                        storage::save(&paths.entry()?, identity.as_ref().unwrap())?;
+                        storage::save_initial(&paths.entry()?, identity.as_ref().unwrap())?;
                         persisted = true;
                     }
                 }
@@ -574,7 +574,10 @@ fn manager(
                     }
                 }
                 if let Some(id) = identity.as_ref().filter(|_| !persisted) {
-                    if let Err(error) = paths.entry().and_then(|vault| storage::save(&vault, id)) {
+                    if let Err(error) = paths
+                        .entry()
+                        .and_then(|vault| commit_shutdown_initial_identity(&dir, &vault, id))
+                    {
                         report(Notice::CloseBlocked(error.to_string()));
                         continue;
                     }
@@ -891,6 +894,20 @@ fn import_identity(
     Ok(imported)
 }
 
+fn commit_shutdown_initial_identity(
+    dir: &openrad::daemon::DataDir,
+    vault: &impl storage::Vault,
+    identity: &Identity,
+) -> Result<()> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    ensure!(
+        !dir.identity_file_present(),
+        "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+    );
+    storage::save_initial(vault, identity)
+}
+
 fn commit_shutdown_replacement(
     paths: &Paths,
     dir: &openrad::daemon::DataDir,
@@ -1049,6 +1066,110 @@ impl storage::Vault for ProfileVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct InitialMemoryVault {
+        bytes: std::cell::RefCell<Option<Vec<u8>>>,
+        fail: std::cell::Cell<bool>,
+    }
+    impl storage::Vault for InitialMemoryVault {
+        fn get(&self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+            Ok(self.bytes.borrow().clone().map(zeroize::Zeroizing::new))
+        }
+        fn set(&self, bytes: &[u8]) -> Result<()> {
+            ensure!(!self.fail.get(), "synthetic vault unavailable");
+            *self.bytes.borrow_mut() = Some(bytes.to_vec());
+            Ok(())
+        }
+    }
+    fn issued_initial_identity(vault: &InitialMemoryVault) -> Identity {
+        let issued = storage::provision_once(vault, |commit| {
+            commit()?;
+            Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"issued","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#)
+        })
+        .unwrap();
+        vault.fail.set(true);
+        assert!(storage::save(vault, &issued).is_err());
+        vault.fail.set(false);
+        issued
+    }
+
+    #[test]
+    fn shutdown_initial_identity_preserves_pending_state_under_profile_and_service_locks() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-initial-shutdown-{}-{}",
+                std::process::id(),
+                u64::from_le_bytes(openrad::crypto::random_array())
+            ));
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let vault = InitialMemoryVault::default();
+            let issued = issued_initial_identity(&vault);
+            let before = vault.bytes.borrow().clone();
+            let held = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let result = commit_shutdown_initial_identity(&dir, &vault, &issued);
+            drop(held);
+            assert!(result.is_err(), "initial save bypassed ownership lock");
+            assert_eq!(*vault.bytes.borrow(), before);
+            assert_eq!(issued.rid, 123);
+            commit_shutdown_initial_identity(&dir, &vault, &issued).unwrap();
+            assert_eq!(storage::load(&vault).unwrap().unwrap().rid, issued.rid);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn shutdown_initial_identity_preserves_a_concurrently_imported_identity() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-initial-concurrent-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+        let vault = InitialMemoryVault::default();
+        let issued = issued_initial_identity(&vault);
+        let mut concurrent = issued.clone();
+        concurrent.rid = 456;
+        storage::save(&vault, &concurrent).unwrap();
+        let before = vault.bytes.borrow().clone();
+        let result = commit_shutdown_initial_identity(&dir, &vault, &issued);
+        assert!(
+            result.is_err(),
+            "initial save overwrote a concurrent identity"
+        );
+        assert_eq!(*vault.bytes.borrow(), before);
+        assert_eq!(issued.rid, 123);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn shutdown_initial_identity_cannot_save_behind_a_new_file_profile() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-initial-file-profile-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+        let vault = InitialMemoryVault::default();
+        let issued = issued_initial_identity(&vault);
+        let mut imported = issued.clone();
+        imported.rid = 456;
+        imported
+            .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+            .unwrap();
+        let vault_before = vault.bytes.borrow().clone();
+        let file_before = std::fs::read(dir.identity()).unwrap();
+        assert!(commit_shutdown_initial_identity(&dir, &vault, &issued).is_err());
+        assert_eq!(*vault.bytes.borrow(), vault_before);
+        assert_eq!(std::fs::read(dir.identity()).unwrap(), file_before);
+        assert_eq!(issued.rid, 123);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn shutdown_replacement_waits_for_profile_ownership_and_retries_the_same_identity() {
