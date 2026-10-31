@@ -949,6 +949,35 @@ impl Shared {
             stop.store(true, Ordering::Relaxed);
         }
     }
+    fn publish_session(
+        &self,
+        sender: SyncSender<Command>,
+        session_stop: Arc<AtomicBool>,
+        fallback: &Identity,
+    ) -> Option<(Identity, ServicePreferences)> {
+        let mut state = self.lock_state();
+        // Stop may race with the supervisor's outer loop check. Serialize the
+        // final check with publication so Stop either prevents this session or
+        // observes and cancels its flag.
+        if self.shutdown.load(Ordering::Relaxed) {
+            return None;
+        }
+        state.phase = "connecting";
+        state.sender = Some(sender);
+        state.session_stop = Some(session_stop);
+        state.restart = false;
+        state.snapshot = None;
+        state
+            .broadcast_policy
+            .set_selection(state.preferences.broadcast_selection());
+        state
+            .block_policy
+            .set_list(state.preferences.blocked.clone());
+        Some((
+            state.identity.clone().unwrap_or_else(|| fallback.clone()),
+            state.preferences.clone(),
+        ))
+    }
     fn update(&self, update: Update) {
         match update {
             Update::Ping {
@@ -1350,23 +1379,10 @@ fn supervisor(
     while !shared.shutdown.load(Ordering::Relaxed) {
         let (tx, rx) = mpsc::sync_channel(COMMAND_QUEUE_LIMIT);
         let session_stop = Arc::new(AtomicBool::new(false));
-        let (identity, preferences) = {
-            let mut state = shared.lock_state();
-            state.phase = "connecting";
-            state.sender = Some(tx);
-            state.session_stop = Some(session_stop.clone());
-            state.restart = false;
-            state.snapshot = None;
-            state
-                .broadcast_policy
-                .set_selection(state.preferences.broadcast_selection());
-            state
-                .block_policy
-                .set_list(state.preferences.blocked.clone());
-            (
-                state.identity.clone().unwrap_or_else(|| identity.clone()),
-                state.preferences.clone(),
-            )
+        let Some((identity, preferences)) =
+            shared.publish_session(tx, session_stop.clone(), &identity)
+        else {
+            break;
         };
         let shared_updates = shared.clone();
         // One guard: two `lock_state()` temporaries in one expression would deadlock.
@@ -1751,6 +1767,33 @@ mod tests {
     fn shared() -> Shared {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
+    }
+    #[test]
+    fn stopping_before_session_publication_cannot_start_an_uncancelled_engine() {
+        let shared = shared();
+        let identity = shared.lock_state().identity.clone().unwrap();
+        // The supervisor may have passed its outer loop check before Stop.
+        assert!(!shared.shutdown.load(Ordering::Relaxed));
+        shared.stop();
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let published = shared.publish_session(sender, stop.clone(), &identity);
+        assert!(
+            published.is_none() || stop.load(Ordering::Relaxed),
+            "Stop must not be lost between the supervisor check and publication"
+        );
+    }
+    #[test]
+    fn stopping_after_session_publication_cancels_the_published_engine() {
+        let shared = shared();
+        let identity = shared.lock_state().identity.clone().unwrap();
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        assert!(shared
+            .publish_session(sender, stop.clone(), &identity)
+            .is_some());
+        shared.stop();
+        assert!(stop.load(Ordering::Relaxed));
     }
     #[cfg(unix)]
     #[test]
