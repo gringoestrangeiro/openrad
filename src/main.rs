@@ -447,6 +447,8 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
             if dir.endpoint_exists() {
                 daemon::request(&dir, &Request::Rename { node_name })?
             } else {
+                let _profile_lock = dir.try_profile_lock()?;
+                let _service_lock = dir.stopped_lock()?;
                 let mut identity = dir.load_identity()?;
                 identity.node_name = node_name;
                 dir.save_identity(&identity)?;
@@ -458,15 +460,17 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
             }
         }
         Command::ForceRelay { enabled } => {
-            let mut preferences = if let Ok(reply) = daemon::request(&dir, &Request::Status) {
-                serde_json::from_value(reply.data["preferences"].clone())?
-            } else {
-                dir.preferences()?
-            };
-            preferences.force_relay = enabled;
             if dir.endpoint_exists() {
+                let reply = daemon::request(&dir, &Request::Status)?;
+                let mut preferences: daemon::ServicePreferences =
+                    serde_json::from_value(reply.data["preferences"].clone())?;
+                preferences.force_relay = enabled;
                 daemon::request(&dir, &Request::Configure { preferences })?
             } else {
+                let _profile_lock = dir.try_profile_lock()?;
+                let _service_lock = dir.stopped_lock()?;
+                let mut preferences = dir.preferences()?;
+                preferences.force_relay = enabled;
                 dir.save_preferences(&preferences)?;
                 daemon::Reply {
                     ok: true,
