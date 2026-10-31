@@ -237,7 +237,9 @@ python3 openrad.py --data-dir ./profiles/b udp-echo --port 49000
 On client A:
 
 ```bash
-python3 openrad.py --data-dir ./profiles/b udp-send VIP_OR_RID_OF_B 49000 'Hello over local UDP' --source-port 49001
+python3 openrad.py --data-dir ./profiles/a run --force-relay --network 'Minecraft [Português 15]'
+# In another terminal:
+python3 openrad.py --data-dir ./profiles/a udp-send VIP_OR_RID_OF_B 49000 'Hello over local UDP' --source-port 49001
 ```
 
 The path is: program A → localhost UDP A → encrypted peer channel →

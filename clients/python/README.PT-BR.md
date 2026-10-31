@@ -221,7 +221,9 @@ python3 openrad.py --data-dir ./profiles/b udp-echo --port 49000
 No cliente A:
 
 ```bash
-python3 openrad.py udp-send VIP_OU_RID_DO_B 49000 'Olá pelo UDP local' --source-port 49001
+python3 openrad.py --data-dir ./profiles/a run --force-relay --network 'Minecraft [Português 15]'
+# Em outro terminal:
+python3 openrad.py --data-dir ./profiles/a udp-send VIP_OU_RID_DO_B 49000 'Olá pelo UDP local' --source-port 49001
 ```
 
 O caminho é: programa A → UDP localhost A → canal criptografado entre os peers
@@ -366,8 +368,8 @@ tipos de pacote, broadcast/multicast para vários peers, ARP replies de origem
 arbitrária na saída e entrada, importação por módulos externos, filas cheias,
 cancelamento, timeout, consumidores concorrentes e liberação de perfis/threads.
 
-As verificações contra o serviço real estão documentadas em `VALIDATION.md`.
-Veja [VALIDATION.md](VALIDATION.md) para a validação na rede pública real.
+As verificações contra o serviço real estão documentadas em `docs/VALIDATION.md`.
+Veja [VALIDATION.md](docs/VALIDATION.md) para a validação na rede pública real.
 
 ## Benchmark de centenas de peers
 
@@ -399,7 +401,7 @@ python3 tools/live_benchmark.py --force-relay --seconds 60
 ```
 
 Esse último comando acessa o serviço real e entra nas oito redes. Os detalhes
-e os limites medidos, incluindo o backend PyCryptodome, estão em `VALIDATION.md`.
+e os limites medidos, incluindo o backend PyCryptodome, estão em `docs/VALIDATION.md`.
 
 | Arquivo | Responsabilidade |
 | --- | --- |
