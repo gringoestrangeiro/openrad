@@ -3839,6 +3839,11 @@
     "Время разрешения DNS истекло",
     "Hết thời gian phân giải DNS"
   ],
+  "DNS resolver worker limit reached": [
+    "Limite de trabalhadores de resolução DNS atingido",
+    "Достигнут предел потоков разрешения DNS",
+    "Đã đạt giới hạn luồng phân giải DNS"
+  ],
   "resolve TCP endpoint": [
     "resolver destino TCP",
     "разрешение адреса TCP",
