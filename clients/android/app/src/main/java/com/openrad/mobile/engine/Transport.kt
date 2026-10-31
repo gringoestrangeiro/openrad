@@ -246,7 +246,7 @@ class Framed(val socket: Socket, @Volatile override var stop: AtomicBoolean? = n
             if (stop?.get() == true) throw CancelledException()
             val socket = Socket()
             try {
-                protector?.protect(socket)
+                if (protector?.protect(socket) == false) throw IOException("could not protect TCP socket from VPN routing")
                 socket.connect(InetSocketAddress(InetAddress.getByName(host), port), timeoutMs)
                 return Framed(socket, stop)
             } catch (e: Exception) {
