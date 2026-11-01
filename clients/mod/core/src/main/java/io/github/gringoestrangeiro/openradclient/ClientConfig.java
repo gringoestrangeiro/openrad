@@ -9,7 +9,14 @@ import java.util.*;
 /** Explicit opt-in: the mod does not contact the remote service on a fresh install. */
 public record ClientConfig(boolean autoConnect, List<String> networks,
                            int maxPeers, int maxConnections, int connectionTimeoutSeconds,
-                           List<String> minecraftSelectors, int maxNetworks) {
+                           List<String> minecraftSelectors, int maxNetworks, boolean blockCyrillicMotds) {
+    public ClientConfig(boolean autoConnect, List<String> networks,
+                        int maxPeers, int maxConnections, int connectionTimeoutSeconds,
+                        List<String> minecraftSelectors, int maxNetworks) {
+        this(autoConnect, networks, maxPeers, maxConnections, connectionTimeoutSeconds,
+                minecraftSelectors, maxNetworks, false);
+    }
+
     public ClientConfig(boolean autoConnect, List<String> networks) {
         this(autoConnect, networks, 256, 16, 20, List.of(), 256);
     }
@@ -62,7 +69,15 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
         return new ClientConfig(Boolean.parseBoolean(autostart), items,
                 integer(p, "max-peers", 256), integer(p, "max-connections", 16),
                 integer(p, "connection-timeout-seconds", 20),
-                list(p.getProperty("minecraft-selectors", "")), integer(p, "max-networks", 256));
+                list(p.getProperty("minecraft-selectors", "")), integer(p, "max-networks", 256),
+                booleanProperty(p, "block-cyrillic-motds", false));
+    }
+
+    private static boolean booleanProperty(Properties properties, String key, boolean defaultValue) {
+        String value = properties.getProperty(key, Boolean.toString(defaultValue)).trim();
+        if (!value.equals("true") && !value.equals("false"))
+            throw new IllegalArgumentException(key + " must be true or false");
+        return Boolean.parseBoolean(value);
     }
 
     private static List<String> list(String raw) {
@@ -79,6 +94,7 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
         properties.setProperty("network-names", String.join(";", networks));
         properties.setProperty("minecraft-selectors", String.join(";", minecraftSelectors));
         properties.setProperty("max-networks", Integer.toString(maxNetworks));
+        properties.setProperty("block-cyrillic-motds", Boolean.toString(blockCyrillicMotds));
         properties.setProperty("max-peers", Integer.toString(maxPeers));
         properties.setProperty("max-connections", Integer.toString(maxConnections));
         properties.setProperty("connection-timeout-seconds", Integer.toString(connectionTimeoutSeconds));
@@ -128,6 +144,9 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
                         max-connections=16
                         # Includes waiting for an authorized peer and the virtual TCP handshake.
                         connection-timeout-seconds=20
+                        # Hide OpenRad VPN LAN servers with Cyrillic text in their advertised MOTD.
+                        # This is a writing-system filter, not geographical detection.
+                        block-cyrillic-motds=false
                         """, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
             } catch (FileAlreadyExistsException ignored) {
                 // Concurrent launch: read existing configuration below.

@@ -18,14 +18,24 @@ final class LanServerRegistry {
     private static final byte[] MULTICAST_MAC = {1, 0, 0x5e, 0, 2, 0x3c};
     private final LongSupplier clock;
     private final LongSupplier monotonic;
-    private record Entry(ClientVpnRuntime.LanServer server, long receivedNanos) {}
+    private final boolean blockCyrillicMotds;
+    private record Entry(ClientVpnRuntime.LanServer server, long receivedNanos, boolean blocked) {}
     private final Map<String, Entry> servers = new LinkedHashMap<>();
 
-    LanServerRegistry() { this(System::currentTimeMillis, System::nanoTime); }
-    LanServerRegistry(LongSupplier clock) { this(clock, () -> TimeUnit.MILLISECONDS.toNanos(clock.getAsLong())); }
+    LanServerRegistry() { this(System::currentTimeMillis, System::nanoTime, false); }
+    LanServerRegistry(boolean blockCyrillicMotds) {
+        this(System::currentTimeMillis, System::nanoTime, blockCyrillicMotds);
+    }
+    LanServerRegistry(LongSupplier clock) {
+        this(clock, () -> TimeUnit.MILLISECONDS.toNanos(clock.getAsLong()), false);
+    }
     LanServerRegistry(LongSupplier clock, LongSupplier monotonic) {
+        this(clock, monotonic, false);
+    }
+    LanServerRegistry(LongSupplier clock, LongSupplier monotonic, boolean blockCyrillicMotds) {
         this.clock = clock;
         this.monotonic = monotonic;
+        this.blockCyrillicMotds = blockCyrillicMotds;
     }
 
     synchronized boolean accept(Inet4Address authenticatedVip, byte[] authenticatedMac, byte[] frame) {
@@ -68,7 +78,8 @@ final class LanServerRegistry {
                 else if (servers.size() >= MAX_SERVERS) return false;
             }
             servers.put(key, new Entry(new ClientVpnRuntime.LanServer(
-                    advertisement.motd(), address, advertisement.port(), now), receivedNanos));
+                    advertisement.motd(), address, advertisement.port(), now), receivedNanos,
+                    blockCyrillicMotds && ServerMotdFilter.hasCyrillic(advertisement.motd())));
             return true;
         } catch (IllegalArgumentException | IndexOutOfBoundsException invalid) {
             return false;
@@ -77,7 +88,14 @@ final class LanServerRegistry {
 
     synchronized List<ClientVpnRuntime.LanServer> snapshot() {
         expire(monotonic.getAsLong());
-        return servers.values().stream().map(Entry::server).toList();
+        return servers.values().stream().filter(entry -> !entry.blocked()).map(Entry::server).toList();
+    }
+
+    synchronized boolean isBlocked(Inet4Address address, int port) {
+        if (!blockCyrillicMotds) return false;
+        expire(monotonic.getAsLong());
+        Entry entry = servers.get(address.getHostAddress() + ":" + port);
+        return entry != null && entry.blocked();
     }
 
     synchronized void removePeer(Inet4Address peer) {

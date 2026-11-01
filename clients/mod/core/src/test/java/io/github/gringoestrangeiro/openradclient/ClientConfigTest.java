@@ -53,6 +53,7 @@ class ClientConfigTest {
         assertEquals(20, defaults.connectionTimeoutSeconds());
         assertTrue(defaults.minecraftSelectors().isEmpty());
         assertEquals(256, defaults.maxNetworks());
+        assertFalse(defaults.blockCyrillicMotds());
         Properties properties = new Properties();
         properties.setProperty("max-peers", "4096");
         properties.setProperty("max-connections", "64");
@@ -83,6 +84,19 @@ class ClientConfigTest {
         for (String invalid : List.of("all;ALL", "all;;ptbr-1", "../all", "all ptbr")) {
             properties.setProperty("minecraft-selectors", invalid);
             assertThrows(IllegalArgumentException.class, () -> ClientConfig.from(properties), invalid);
+        }
+    }
+
+    @Test void cyrillicFilterRequiresBooleanSettingAndRoundTrips() throws Exception {
+        Properties enabled = new Properties();
+        enabled.setProperty("block-cyrillic-motds", "true");
+        ClientConfig parsed = ClientConfig.from(enabled);
+        assertTrue(parsed.blockCyrillicMotds());
+        parsed.save(temp);
+        assertTrue(ClientConfig.load(temp).blockCyrillicMotds());
+        for (String invalid : List.of("yes", "1", "", "TRUE")) {
+            enabled.setProperty("block-cyrillic-motds", invalid);
+            assertThrows(IllegalArgumentException.class, () -> ClientConfig.from(enabled));
         }
     }
 

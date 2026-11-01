@@ -77,6 +77,15 @@ O menu abre na tela inicial, no Multiplayer, na pausa ou via `/openrad menu`.
   Após carregar o catálogo autenticado, redes numeradas (`ptbr-1` etc.)
   também aparecem.
 - **Conectar automaticamente**: desligado por padrão, requer rede selecionada.
+- **Bloquear MOTDs em cirílico**: desativado por padrão; no menu OpenRad, ative
+  o filtro e clique em Salvar. Anúncios LAN recebidos de peers OpenRad cujo
+  MOTD contenha caracteres cirílicos deixam de aparecer, e novas conexões
+  OpenRad ao IP e à porta anunciados são recusadas enquanto o anúncio for válido.
+  A mesma configuração pode ser editada no arquivo
+  config/openrad-client/openrad-client.properties como
+  block-cyrillic-motds=true (aplique reconectando).
+  O filtro identifica a escrita, não o país do servidor. Não alcança
+  servidores sem anúncio LAN e não altera a lista de servidores comuns.
 - **Avançado**: máximo de peers, conexões de jogo, timeout, limites de
   redes, nomes exatos e filtros técnicos.
 - **Salvar**: grava alterações sem expor credenciais; alterações de rede

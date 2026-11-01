@@ -7,6 +7,8 @@
   "openrad.menu.save_reconnect": "Save and reconnect",
   "openrad.menu.networks": "Networks: %s",
   "openrad.menu.auto_connect": "Connect automatically",
+  "openrad.menu.block_cyrillic": "Hide Cyrillic MOTDs",
+  "openrad.menu.block_cyrillic_note": "Filters OpenRad LAN advertisements; not a server country check.",
   "openrad.menu.advanced": "Advanced settings",
   "openrad.menu.reconnect_note": "Changes take effect after reconnecting.",
   "openrad.menu.loading": "Loading...",

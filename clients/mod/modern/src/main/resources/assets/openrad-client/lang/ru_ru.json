@@ -5,5 +5,7 @@
   "openrad.menu.saved": "Сохранено; переподключитесь",
   "openrad.menu.all_networks": "Все сети",
   "openrad.menu.all_language": "Все: %s",
-  "openrad.menu.auto_connect": "Автоподключение"
+  "openrad.menu.auto_connect": "Автоподключение",
+  "openrad.menu.block_cyrillic": "Скрывать MOTD с кириллицей",
+  "openrad.menu.block_cyrillic_note": "Фильтр объявлений OpenRad, а не страны сервера."
 }

@@ -14,7 +14,7 @@ public final class OpenRadMenuScreen extends Screen {
     private final OpenRadController controller;
     private OpenRadMenuDraft draft;
     private boolean initialDraftPending;
-    private Button connect, save, networks, automatic, advanced;
+    private Button connect, save, networks, automatic, blockCyrillic, advanced;
 
     public OpenRadMenuScreen(Screen parent, OpenRadController controller) {
         this(parent, controller, new OpenRadMenuDraft(controller.config()));
@@ -41,9 +41,13 @@ public final class OpenRadMenuScreen extends Screen {
             draft.autoConnect = !draft.autoConnect;
             updateButtons();
         }).bounds(left, top + 48, width, 20).build());
+        blockCyrillic = addRenderableWidget(Button.builder(Component.empty(), button -> {
+            draft.blockCyrillicMotds = !draft.blockCyrillicMotds;
+            updateButtons();
+        }).bounds(left, top + 72, width, 20).build());
         advanced = addRenderableWidget(Button.builder(OpenRadI18n.tr("openrad.menu.advanced"), button ->
                 minecraft.setScreenAndShow(new OpenRadAdvancedScreen(this, draft)))
-                .bounds(left, top + 72, width, 20).build());
+                .bounds(left, top + 96, width, 20).build());
         save = addRenderableWidget(Button.builder(Component.empty(), button -> {
             try { controller.save(draft.config()); }
             catch (IllegalArgumentException invalid) { }
@@ -63,7 +67,8 @@ public final class OpenRadMenuScreen extends Screen {
         try { draft.config(); valid = true; } catch (IllegalArgumentException invalid) { valid = false; }
         connect.active = !initialDraftPending && !controller.busy() && (active || valid && (!draft.selectors.isEmpty() || !draft.networks.isEmpty()));
         save.active = !initialDraftPending && !controller.busy() && valid;
-        networks.active = automatic.active = advanced.active = !initialDraftPending && !controller.busy();
+        networks.active = automatic.active = blockCyrillic.active = advanced.active =
+                !initialDraftPending && !controller.busy();
         connect.setMessage(Component.translatable(active ? "openrad.menu.disconnect" : "openrad.menu.connect"));
         save.setMessage(Component.translatable(active ? "openrad.menu.save_reconnect" : "openrad.menu.save"));
         save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr("openrad.menu.reconnect_note")) : null);
@@ -78,6 +83,9 @@ public final class OpenRadMenuScreen extends Screen {
         networks.setMessage(OpenRadI18n.tr("openrad.network.mainbutton", networkSummary));
         automatic.setMessage(OpenRadI18n.tr("openrad.menu.auto_connect").copy().append(": ")
                 .append(Component.translatable(draft.autoConnect ? "options.on" : "options.off")));
+        blockCyrillic.setMessage(OpenRadI18n.tr("openrad.menu.block_cyrillic").copy().append(": ")
+                .append(Component.translatable(draft.blockCyrillicMotds ? "options.on" : "options.off")));
+        blockCyrillic.setTooltip(Tooltip.create(OpenRadI18n.tr("openrad.menu.block_cyrillic_note")));
     }
     @Override public void tick() { updateButtons(); }
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {

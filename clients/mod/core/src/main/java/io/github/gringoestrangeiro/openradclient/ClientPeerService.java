@@ -30,7 +30,7 @@ final class ClientPeerService implements AutoCloseable {
     private final AsyncResourceCloser resourceCloser;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Object changed = new Object();
-    private final LanServerRegistry lan = new LanServerRegistry();
+    private final LanServerRegistry lan;
     private final OutboundTcpStack stack;
     private volatile Map<Long, PeerAuthorization.Grant> authorized = Map.of();
 
@@ -40,6 +40,7 @@ final class ClientPeerService implements AutoCloseable {
         this.identity = identity;
         this.attachment = attachment;
         this.maxPeers = config.maxPeers();
+        this.lan = new LanServerRegistry(config.blockCyrillicMotds());
         this.selectedNames = Set.copyOf(config.networks());
         resourceCloser = new AsyncResourceCloser(maxPeers);
         executor = new ThreadPoolExecutor(0, maxPeers, 0, TimeUnit.SECONDS,
@@ -144,6 +145,8 @@ final class ClientPeerService implements AutoCloseable {
                 || port < 1 || port > 65535 || timeout.isNegative() || timeout.isZero()
                 || timeout.compareTo(Duration.ofMinutes(2)) > 0)
             throw new IllegalArgumentException("invalid virtual TCP destination or timeout");
+        if (lan.isBlocked(destination, port))
+            throw new ConnectException("server blocked by Cyrillic MOTD filter");
         long until = System.nanoTime() + timeout.toNanos();
         PeerAuthorization.Grant grant = authorized.values().stream()
                 .filter(g -> g.peer().vip().equals(destination)).findFirst()
@@ -174,6 +177,10 @@ final class ClientPeerService implements AutoCloseable {
             long remaining = until - System.nanoTime();
             if (remaining <= 0) throw new SocketTimeoutException("OpenRad connection timed out");
             OutboundTcpStack.Connection connection = stack.connect(destination, port, Duration.ofNanos(remaining));
+            if (lan.isBlocked(destination, port)) {
+                connection.close();
+                throw new ConnectException("server blocked by Cyrillic MOTD filter");
+            }
             // Revocation may close the old tuples just before connect creates a new one. Bind
             // application admission to the same authenticated channel, even if a VIP/MAC is reused.
             PeerWorker current = workers.get(rid);

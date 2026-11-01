@@ -7,6 +7,8 @@
   "openrad.menu.save_reconnect": "Salvar e reconectar",
   "openrad.menu.networks": "Redes: %s",
   "openrad.menu.auto_connect": "Conectar automaticamente",
+  "openrad.menu.block_cyrillic": "Bloquear MOTDs em cirílico",
+  "openrad.menu.block_cyrillic_note": "Oculta anúncios OpenRad em cirílico; não identifica o país.",
   "openrad.menu.advanced": "Configurações avançadas",
   "openrad.menu.reconnect_note": "As alterações entram em vigor após reconectar.",
   "openrad.menu.loading": "Carregando...",
