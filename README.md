@@ -84,7 +84,8 @@ for protocol and transport details.
 **View release** notice (release URL shown in-window with *Open in browser* and *Copy*),
 keeps a received `Stop` effective when the IPC client closes early, rejects invalid Python
 API tokens before opening a socket, makes Android public search cancel superseded queries
-(at most one search outstanding in the engine), and extends the Minecraft Fabric/Paper build
+(at most one search outstanding in the engine), adds Force Relay to the Paper plugin
+(`vpn.transports.force-relay`, `/orb force-relay`), and extends the Minecraft Fabric/Paper build
 matrix to 1.17–26.3. Wire format and VPN identity are unchanged.
 
 The packages linked under **Download** are still **2.1.5**: no 2.2.0 tag or stable release

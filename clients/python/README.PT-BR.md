@@ -361,8 +361,8 @@ tipos de pacote, broadcast/multicast para vários peers, ARP replies de origem
 arbitrária na saída e entrada, importação por módulos externos, filas cheias,
 cancelamento, timeout, consumidores concorrentes e liberação de perfis/threads.
 
-As verificações contra o serviço real estão documentadas em `VALIDATION.md`.
-Veja [VALIDATION.md](VALIDATION.md) para a validação na rede pública real.
+As verificações contra o serviço real estão documentadas em `docs/VALIDATION.md`.
+Veja [VALIDATION.md](docs/VALIDATION.md) para a validação na rede pública real.
 
 ## Benchmark de centenas de peers
 
@@ -394,7 +394,7 @@ python3 tools/live_benchmark.py --force-relay --seconds 60
 ```
 
 Esse último comando acessa o serviço real e entra nas oito redes. Os detalhes
-e os limites medidos, incluindo o backend PyCryptodome, estão em `VALIDATION.md`.
+e os limites medidos, incluindo o backend PyCryptodome, estão em `docs/VALIDATION.md`.
 
 | Arquivo | Responsabilidade |
 | --- | --- |

@@ -25,6 +25,12 @@ de qualificacao Windows/TAP/APK passam a testar o commit sob teste em vez de exe
 o catalogo Minecraft declara `baseVersion` 2.2.0; os testes do verificador de JAR rodam no CI;
 `package-windows.py --native-msvc` exige um `objdump` utilizavel.
 
+Paper: nova opcao `vpn.transports.force-relay` e comando `/orb force-relay <on|off>`, com a mesma
+politica somente relay do desktop e da CLI nos dois sentidos. Preparacao da release: o `config.yml`
+nao dobra mais de tamanho a cada comando `/orb` no Paper 1.17, 1.17.1 e 1.18 (o arquivo passava do
+limite de 256 KiB e os comandos seguintes falhavam); o seletor de redes do Fabric 1.17-1.18.2 nao
+recria mais os botoes a cada tick; o autocompletar de `/orb` ignora maiusculas/minusculas.
+
 Veja [notas 2.2.0](docs/releases/2.2.0.md) e
 [inventario 2.2.0](docs/releases/2.2.0-changes.md).
 
