@@ -6,14 +6,12 @@ import java.util.List;
 /** Unsaved menu state; returning from a child screen never writes a configuration. */
 public final class OpenRadMenuDraft {
     boolean autoConnect;
-    boolean blockCyrillicMotds;
     List<String> networks;
     List<String> selectors;
     int maxPeers, maxConnections, timeout, maxNetworks;
 
     public OpenRadMenuDraft(ClientConfig config) {
         autoConnect = config.autoConnect();
-        blockCyrillicMotds = config.blockCyrillicMotds();
         networks = config.networks();
         selectors = config.minecraftSelectors();
         maxPeers = config.maxPeers();
@@ -22,8 +20,7 @@ public final class OpenRadMenuDraft {
         maxNetworks = config.maxNetworks();
     }
     public ClientConfig config() {
-        return new ClientConfig(autoConnect, networks, maxPeers, maxConnections, timeout,
-                selectors, maxNetworks, blockCyrillicMotds);
+        return new ClientConfig(autoConnect, networks, maxPeers, maxConnections, timeout, selectors, maxNetworks);
     }
     public void select(List<String> selection) {
         List<String> next = List.copyOf(selection);

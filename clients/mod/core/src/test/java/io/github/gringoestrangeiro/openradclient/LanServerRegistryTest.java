@@ -30,47 +30,6 @@ class LanServerRegistryTest {
         assertTrue(registry.snapshot().isEmpty());
     }
 
-    @Test void cyrillicMotdsAreHiddenAndBlockNewConnectionsOnlyForTheAdvertisedPort() {
-        AtomicLong clock = new AtomicLong(1000);
-        LanServerRegistry registry = new LanServerRegistry(clock::get,
-                () -> java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(clock.get()), true);
-        var vip = ipv4(0x1a000002);
-        var otherVip = ipv4(0x1a000003);
-        byte[] mac = TunnelCodec.mac(vip);
-        assertTrue(registry.accept(vip, mac, new LanAdvertisement("§aПривет, Minecraft!", 25565).frame(vip, 25565, 1)));
-        assertTrue(registry.snapshot().isEmpty());
-        assertTrue(registry.isBlocked(vip, 25565));
-        assertFalse(registry.isBlocked(vip, 25566));
-        assertFalse(registry.isBlocked(otherVip, 25565));
-
-        assertTrue(registry.accept(vip, mac, new LanAdvertisement("Olá, mundo!", 25565).frame(vip, 25565, 2)));
-        assertEquals(1, registry.snapshot().size());
-        assertFalse(registry.isBlocked(vip, 25565));
-
-        assertTrue(registry.accept(vip, mac, new LanAdvertisement("Сервер", 25565).frame(vip, 25565, 3)));
-        assertTrue(registry.snapshot().isEmpty());
-        registry.removePeer(vip);
-        assertFalse(registry.isBlocked(vip, 25565));
-
-        assertTrue(registry.accept(vip, mac, new LanAdvertisement("Кирилиця", 25565).frame(vip, 25565, 4)));
-        clock.addAndGet(LanServerRegistry.TTL_MILLIS);
-        assertFalse(registry.isBlocked(vip, 25565));
-        assertTrue(registry.snapshot().isEmpty());
-    }
-
-    @Test void filterOffKeepsLegacyBehaviorAndUnicodeScriptDetectionIsAccurate() {
-        var vip = ipv4(0x1a000002);
-        LanServerRegistry registry = new LanServerRegistry();
-        assertTrue(registry.accept(vip, TunnelCodec.mac(vip),
-                new LanAdvertisement("Русский сервер", 25565).frame(vip, 25565, 1)));
-        assertEquals(1, registry.snapshot().size());
-        assertFalse(registry.isBlocked(vip, 25565));
-        assertFalse(ServerMotdFilter.hasCyrillic(null));
-        assertFalse(ServerMotdFilter.hasCyrillic("Olá! 日本語 §aEnglish"));
-        assertTrue(ServerMotdFilter.hasCyrillic("Minecraft §bПривет!"));
-        assertTrue(ServerMotdFilter.hasCyrillic("MOTD Ꙁ"));
-    }
-
     @Test void vpnAdvertisementIsDiscoveredUpdatedExpiredAndRevokedWithoutPhysicalSockets() {
         AtomicLong clock = new AtomicLong(1000);
         LanServerRegistry registry = new LanServerRegistry(clock::get);

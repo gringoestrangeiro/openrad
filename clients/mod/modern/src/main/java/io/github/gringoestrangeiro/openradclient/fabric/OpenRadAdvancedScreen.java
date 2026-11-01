@@ -55,8 +55,7 @@ public final class OpenRadAdvancedScreen extends Screen {
         try {
             var config = new io.github.gringoestrangeiro.openradclient.ClientConfig(draft.autoConnect,
                     split(names.getValue()), Integer.parseInt(peers.getValue()), Integer.parseInt(connections.getValue()),
-                    Integer.parseInt(timeout.getValue()), split(selectors.getValue()),
-                    Integer.parseInt(maxNetworks.getValue()), draft.blockCyrillicMotds);
+                    Integer.parseInt(timeout.getValue()), split(selectors.getValue()), Integer.parseInt(maxNetworks.getValue()));
             draft.maxPeers = config.maxPeers();
             draft.maxConnections = config.maxConnections();
             draft.timeout = config.connectionTimeoutSeconds();
