@@ -45,18 +45,25 @@ object EngineHost {
 
     private var identityStore: IdentityStore? = null
     private var networkPolicy: WifiNetworkPolicy? = null
+    private var serviceGeneration = 0L
+    private var stoppingEngine: Engine? = null
+    @Volatile private var engineGeneration = 0L
 
-    private val listener = object : EngineListener {
+    internal fun registerService(): Long = synchronized(this) {
+        ++serviceGeneration
+    }
+
+    private fun listenerFor(generation: Long) = object : EngineListener {
         override fun onState(state: EngineState) {
-            _state.value = state
+            if (engineGeneration == generation) _state.value = state
         }
 
         override fun onEvent(message: String, error: Boolean) {
-            _events.tryEmit(Event(message, error))
+            if (engineGeneration == generation) _events.tryEmit(Event(message, error))
         }
 
         override fun onPacket(packet: ByteArray) {
-            packetSink?.invoke(packet)
+            if (engineGeneration == generation) packetSink?.invoke(packet)
         }
     }
 
@@ -70,14 +77,15 @@ object EngineHost {
      * to the engine, which retires direct channels when Wi-Fi is lost.
      */
     fun start(context: Context, config: EngineConfig, protector: SocketProtector?): Engine = synchronized(this) {
-        engine?.takeIf { it.isRunning }?.let {
+        engine?.takeIf { it.isRunning && it !== stoppingEngine }?.let {
             it.updateConfig(config)
             return it
         }
         networkPolicy?.stop()
+        val generation = ++engineGeneration
         val policy = WifiNetworkPolicy(context).also { networkPolicy = it }
-        policy.start { engine?.networkChanged() }
-        val e = Engine(config, identityStore(context), listener, protector, policy)
+        policy.start { if (engineGeneration == generation) engine?.networkChanged() }
+        val e = Engine(config, identityStore(context), listenerFor(generation), protector, policy)
         engine = e
         e.start()
         e
@@ -86,12 +94,33 @@ object EngineHost {
     /** Stops the engine and waits for its threads; call off the main thread. */
     fun stop() {
         val e = synchronized(this) { engine } ?: return
-        e.stop()
+        stopEngine(e)
+    }
+
+    internal fun stopAfterServiceDestroyed(generation: Long, expected: Engine) {
         synchronized(this) {
-            networkPolicy?.stop()
-            networkPolicy = null
+            if (serviceGeneration != generation || engine !== expected) return
+            stoppingEngine = expected
         }
-        _state.value = e.snapshot()
+        stopEngine(expected)
+    }
+
+    private fun stopEngine(expected: Engine) {
+        synchronized(this) {
+            if (engine === expected) stoppingEngine = expected
+        }
+        try {
+            expected.stop()
+        } finally {
+            synchronized(this) {
+                if (stoppingEngine === expected) stoppingEngine = null
+                if (engine === expected) {
+                    networkPolicy?.stop()
+                    networkPolicy = null
+                    _state.value = expected.snapshot()
+                }
+            }
+        }
     }
 
     fun updateConfig(config: EngineConfig) {
