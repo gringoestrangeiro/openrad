@@ -84,9 +84,9 @@ object EngineHost {
         networkPolicy?.stop()
         val generation = ++engineGeneration
         val policy = WifiNetworkPolicy(context).also { networkPolicy = it }
-        policy.start { if (engineGeneration == generation) engine?.networkChanged() }
         val e = Engine(config, identityStore(context), listenerFor(generation), protector, policy)
         engine = e
+        policy.start { if (engineGeneration == generation && engine === e) e.networkChanged() }
         e.start()
         e
     }
