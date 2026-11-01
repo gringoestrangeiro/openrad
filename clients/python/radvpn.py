@@ -1069,8 +1069,14 @@ class Engine:
                             finally:
                                 body.pop('password', None)
                     if active and now >= active['until']:
-                        active['callback'](dict(ok=False, error='network operation timed out'))
+                        reconnect = active['kind'] == 'network'
+                        callback = active['callback']
                         active = None
+                        callback(dict(ok=False, error='network operation timed out'))
+                        # Private-join SH replies may omit correlation IDs. Do
+                        # not let a late reply advance the next network command.
+                        if reconnect:
+                            raise ConnectionError('network operation timed out; reconnecting control session')
                     self.schedule()
                     if not control.stream.ready(.05):
                         continue

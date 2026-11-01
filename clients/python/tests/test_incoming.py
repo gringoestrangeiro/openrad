@@ -54,6 +54,76 @@ class IncomingTests(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             self.engine.control_data(p.u32(p.SERVER_OPERATION, 16))
 
+    def test_timed_out_network_command_cannot_attribute_a_late_reply_to_the_next_join(self):
+        clock, controls, replies = [1000.0], [], []
+        engine, identity = self.engine, self.identity
+
+        def callback(label):
+            def complete(reply):
+                replies.append((label, reply))
+                if label == 'B':
+                    engine.stop.set()
+            return complete
+
+        for label in ('A', 'B'):
+            engine.commands.put((dict(op='join', name='network-' + label,
+                password='synthetic-password'), callback(label)))
+
+        class SyntheticControl:
+            def __init__(self, generation):
+                self.generation, self.sent, self.closed, self.ready_calls = generation, [], False, 0
+                self.stream = SimpleNamespace(sock=SimpleNamespace(
+                    getsockname=lambda: ('127.0.0.1', 12345)), ready=self.ready)
+                self.incoming = [p.u32(p.SERVER_OPERATION, 21),
+                    p.u32(p.SERVER_OPERATION, 38) + p.tlv(p.NETWORKS,
+                        p.u32(p.IPV4, int(p.IPv4Address(identity.ipv4)))
+                        + p.tlv(p.ADDRESS, identity.address))]
+
+            def send(self, packet):
+                self.sent.append(packet)
+
+            def ready(self, timeout):
+                self.ready_calls += 1
+                if self.generation == 1 and self.ready_calls == 1:
+                    clock[0] += 36
+                if self.ready_calls > 8:
+                    raise AssertionError('synthetic control did not terminate')
+                return self.generation > 1 or self.ready_calls >= 3
+
+            def receive(self, until):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                if self.generation > 1:
+                    # The next attachment fails explicitly; it must not report
+                    # the old attachment's refusal as the result of joining B.
+                    return p.u32(p.SERVER_OPERATION, 16)
+                return p.u32(p.SERVER_OPERATION, 40) + p.tlv(0x131c,
+                    p.u64(0x02000303, 1))  # Late A refusal, optional IDs omitted.
+
+            def close(self):
+                self.closed = True
+
+        def login(*args, **kwargs):
+            control = SyntheticControl(len(controls) + 1)
+            controls.append(control)
+            return control
+
+        with patch('radvpn.Control.login', side_effect=login), \
+                patch('radvpn.time.monotonic', side_effect=lambda: clock[0]), \
+                patch.object(engine.stop, 'wait', return_value=False):
+            engine.run()
+
+        def joins(control):
+            return sum(p.unique(p.parse_records(body), p.CLIENT_OPERATION).u32() == 39
+                for body in control.sent)
+
+        self.assertEqual(joins(controls[0]), 1)
+        self.assertEqual(len(controls), 2)
+        self.assertEqual(joins(controls[1]), 1)
+        self.assertTrue(all(control.closed for control in controls))
+        self.assertEqual(replies, [('A', dict(ok=False, error='network operation timed out')),
+            ('B', dict(ok=False, error='control connection closed'))])
+
     def test_network_selection_preserves_membership_without_joining_again(self):
         replies = []
         self.engine._start_command(dict(op='select_networks', names=['fixture']), replies.append, 1)
