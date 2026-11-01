@@ -5,15 +5,15 @@
 Five clients share one wire format. Work in the client's own directory and
 read its own guide:
 
-- **Rust (stable, canonical, v2.1.5):** `src/`, `desktop/`, `tests/`,
+- **Rust (stable, canonical, v2.1.5; 2.2.0 in development on `2.2.0-dev`):** `src/`, `desktop/`, `tests/`,
   `locales/`, `docs/`, `scripts/`, `packaging/` — rules below in this file.
 - **Android (beta):** `clients/android/` — read
   [`clients/android/AGENTS.md`](clients/android/AGENTS.md) before touching it.
-- **Python (research, 2.1.5):** `clients/python/` — read
+- **Python (research, 2.2.0-dev):** `clients/python/` — read
   [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
-- **Java Paper plugin (alpha, 2.1.5):** `clients/plugin/` — read
+- **Java Paper plugin (alpha, 2.2.0-dev):** `clients/plugin/` — read
   [`clients/plugin/README.md`](clients/plugin/README.md) before touching it.
-- **Fabric client mod (alpha, 2.1.5):** `clients/mod/` — read
+- **Fabric client mod (alpha, 2.2.0-dev):** `clients/mod/` — read
   [`clients/mod/README.md`](clients/mod/README.md) before touching it. 1.21.x
   builds from `clients/mod/` (JDK 21); 26.x builds from `clients/mod/modern/`
   (JDK 25). One JAR per Minecraft version.

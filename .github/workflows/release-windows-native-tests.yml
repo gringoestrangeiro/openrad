@@ -41,5 +41,6 @@ jobs:
       - name: Print CLI version without touching a VPN profile
         run: |
           cargo build --bin openrad --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\target\debug\openrad.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,4 +1,5 @@
 from contextlib import closing
+from pathlib import Path
 import queue
 import socket
 import struct
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import radproto as p
-from radvpn import Engine, Framed, PeerChannel, PeerWorker, Profile, tcp_candidates, rendezvous_checksum
+from radvpn import Engine, Framed, PeerChannel, PeerWorker, Profile, tcp_candidates, rendezvous_checksum, ensure_identity
 
 
 def offer(cid=123, rid=10, password=b'synthetic-password'):
@@ -52,6 +53,76 @@ class IncomingTests(unittest.TestCase):
     def test_server_disconnect_is_not_reported_as_online(self):
         with self.assertRaises(ConnectionError):
             self.engine.control_data(p.u32(p.SERVER_OPERATION, 16))
+
+    def test_timed_out_network_command_cannot_attribute_a_late_reply_to_the_next_join(self):
+        clock, controls, replies = [1000.0], [], []
+        engine, identity = self.engine, self.identity
+
+        def callback(label):
+            def complete(reply):
+                replies.append((label, reply))
+                if label == 'B':
+                    engine.stop.set()
+            return complete
+
+        for label in ('A', 'B'):
+            engine.commands.put((dict(op='join', name='network-' + label,
+                password='synthetic-password'), callback(label)))
+
+        class SyntheticControl:
+            def __init__(self, generation):
+                self.generation, self.sent, self.closed, self.ready_calls = generation, [], False, 0
+                self.stream = SimpleNamespace(sock=SimpleNamespace(
+                    getsockname=lambda: ('127.0.0.1', 12345)), ready=self.ready)
+                self.incoming = [p.u32(p.SERVER_OPERATION, 21),
+                    p.u32(p.SERVER_OPERATION, 38) + p.tlv(p.NETWORKS,
+                        p.u32(p.IPV4, int(p.IPv4Address(identity.ipv4)))
+                        + p.tlv(p.ADDRESS, identity.address))]
+
+            def send(self, packet):
+                self.sent.append(packet)
+
+            def ready(self, timeout):
+                self.ready_calls += 1
+                if self.generation == 1 and self.ready_calls == 1:
+                    clock[0] += 36
+                if self.ready_calls > 8:
+                    raise AssertionError('synthetic control did not terminate')
+                return self.generation > 1 or self.ready_calls >= 3
+
+            def receive(self, until):
+                if self.incoming:
+                    return self.incoming.pop(0)
+                if self.generation > 1:
+                    # The next attachment fails explicitly; it must not report
+                    # the old attachment's refusal as the result of joining B.
+                    return p.u32(p.SERVER_OPERATION, 16)
+                return p.u32(p.SERVER_OPERATION, 40) + p.tlv(0x131c,
+                    p.u64(0x02000303, 1))  # Late A refusal, optional IDs omitted.
+
+            def close(self):
+                self.closed = True
+
+        def login(*args, **kwargs):
+            control = SyntheticControl(len(controls) + 1)
+            controls.append(control)
+            return control
+
+        with patch('radvpn.Control.login', side_effect=login), \
+                patch('radvpn.time.monotonic', side_effect=lambda: clock[0]), \
+                patch.object(engine.stop, 'wait', return_value=False):
+            engine.run()
+
+        def joins(control):
+            return sum(p.unique(p.parse_records(body), p.CLIENT_OPERATION).u32() == 39
+                for body in control.sent)
+
+        self.assertEqual(joins(controls[0]), 1)
+        self.assertEqual(len(controls), 2)
+        self.assertEqual(joins(controls[1]), 1)
+        self.assertTrue(all(control.closed for control in controls))
+        self.assertEqual(replies, [('A', dict(ok=False, error='network operation timed out')),
+            ('B', dict(ok=False, error='control connection closed'))])
 
     def test_network_selection_preserves_membership_without_joining_again(self):
         replies = []
@@ -197,6 +268,143 @@ class IncomingTests(unittest.TestCase):
 
     def test_delayed_direct_connection_wins_while_relay_pairing_waits(self):
         self.direct_handshake(relay=True)
+
+
+class RegistrationIntentTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.profile = SimpleNamespace(path=Path(self.directory.name))
+        self.identity = p.Identity(20, '26.0.0.1', 'fixture', b'a' * 16,
+                                   b'fixture-password', '127.0.0.1')
+
+    def registration(self, response=None, error=None):
+        from unittest.mock import MagicMock
+        stream, control = MagicMock(), MagicMock()
+        control.receive.side_effect = error
+        with patch('radvpn.Framed.connect', return_value=stream), \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)), \
+                patch('radvpn.p.SessionCrypto'), patch('radvpn.authenticate'), \
+                patch('radvpn.Control', return_value=control), \
+                patch('radvpn.p.Provisioning') as receiver:
+            receiver.return_value.receive.return_value = (8, response)
+            try:
+                return ensure_identity(self.profile, 'fixture')
+            finally:
+                self.control, self.stream = control, stream
+
+    def test_ambiguous_registration_blocks_restart_before_connect(self):
+        with self.assertRaises(ConnectionError):
+            self.registration(error=ConnectionError('synthetic drop after login'))
+        self.control.send.assert_called_once()
+        intent = self.profile.path / 'registration.pending'
+        self.assertTrue(intent.is_file())
+        self.assertEqual(intent.stat().st_mode & 0o777, 0o600)
+        with patch('radvpn.Framed.connect') as connect:
+            with self.assertRaisesRegex(ValueError, 'registration outcome unknown'):
+                ensure_identity(self.profile, 'fixture')
+            connect.assert_not_called()
+
+    def test_authentication_failure_before_login_does_not_leave_marker(self):
+        with patch('radvpn.Framed.connect') as connect, \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)), \
+                patch('radvpn.p.SessionCrypto'), \
+                patch('radvpn.authenticate', side_effect=ConnectionError('pre-login')):
+            with self.assertRaises(ConnectionError):
+                ensure_identity(self.profile, 'fixture')
+            connect.return_value.close.assert_called_once()
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+
+    def test_success_persists_identity_and_removes_marker(self):
+        identity = self.registration(response=self.identity)
+        self.assertEqual(identity, self.identity)
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+        self.assertEqual(p.Identity.load(self.profile.path / 'identity.json'), identity)
+
+    def test_issued_identity_storage_failure_leaves_marker(self):
+        with patch('radvpn.save_identity', side_effect=OSError('synthetic disk failure')):
+            with self.assertRaises(OSError):
+                self.registration(response=self.identity)
+        self.assertTrue((self.profile.path / 'registration.pending').is_file())
+
+    def test_authenticated_redirect_reuses_bootstrap_and_clears_intent(self):
+        from unittest.mock import MagicMock
+        stream, control = MagicMock(), MagicMock()
+        control.receive.side_effect = [p.ServerRedirect('127.0.0.2'), b'assigned']
+        with patch('radvpn.Framed.connect', return_value=stream) as connect, \
+                patch('radvpn.p.bootstrap_session', return_value=(17, None)) as bootstrap, \
+                patch('radvpn.p.SessionCrypto'), patch('radvpn.authenticate'), \
+                patch('radvpn.Control', return_value=control), \
+                patch('radvpn.p.Provisioning') as receiver:
+            receiver.return_value.receive.return_value = (8, self.identity)
+            self.assertEqual(ensure_identity(self.profile, 'fixture'), self.identity)
+            self.assertEqual(connect.call_count, 2)
+            bootstrap.assert_called_once()
+        self.assertFalse((self.profile.path / 'registration.pending').exists())
+
+    def test_pending_symlink_cannot_be_overwritten(self):
+        target = self.profile.path / 'unrelated'
+        target.write_text('preserve')
+        (self.profile.path / 'registration.pending').symlink_to(target)
+        with patch('radvpn.Framed.connect') as connect:
+            with self.assertRaisesRegex(ValueError, 'registration outcome unknown'):
+                ensure_identity(self.profile, 'fixture')
+            connect.assert_not_called()
+        self.assertEqual(target.read_text(), 'preserve')
+
+
+class WorkerBindingTests(unittest.TestCase):
+    def setUp(self):
+        IncomingTests.setUp(self)
+        self.worker = SimpleNamespace(peer=dict(self.peer), state='connected',
+            stop=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+            channel=SimpleNamespace(mac=p.mac_for_ip(self.peer['vip'])), tx=queue.Queue(), last_use=0)
+        self.engine.workers[10] = self.worker
+        self.delivered = []
+        self.engine.on_frame = lambda rid, frame: self.delivered.append((rid, frame))
+
+    def incoming(self, worker=None):
+        worker = worker or self.worker
+        frame = p.ipv4_frame(worker.channel.mac, p.mac_for_ip(self.identity.ipv4),
+            worker.peer['vip'], self.identity.ipv4, b'payload', protocol=253)
+        self.engine.incoming_frame(worker, frame)
+
+    def test_changed_vip_or_server_cancels_worker_and_rejects_its_frames(self):
+        for field, value in [('vip', '26.0.0.9'), ('server', '127.0.0.2')]:
+            with self.subTest(field=field):
+                self.worker.stop.clear()
+                self.engine.membership.peers[10] = dict(self.peer, **{field: value})
+                self.engine.schedule()
+                self.assertTrue(self.worker.stop.is_set())
+                self.incoming()
+                self.assertFalse(self.delivered)
+
+    def test_replaced_generation_and_cancelled_worker_cannot_deliver(self):
+        old = self.worker
+        self.engine.workers[10] = SimpleNamespace(**dict(vars(old), stop=threading.Event()))
+        self.incoming(old)
+        self.assertFalse(self.delivered)
+        self.engine.workers[10] = old
+        old.stop.set()
+        self.incoming(old)
+        self.assertFalse(self.delivered)
+
+    def test_name_only_change_preserves_current_channel(self):
+        self.engine.membership.peers[10] = dict(self.peer, name='renamed')
+        self.engine.schedule()
+        self.assertFalse(self.worker.stop.is_set())
+        self.incoming()
+        self.assertEqual(len(self.delivered), 1)
+
+    def test_stale_worker_cannot_receive_queued_outbound_frames(self):
+        self.engine.membership.peers[10] = dict(self.peer, vip='26.0.0.9')
+        frame = p.ipv4_frame(p.mac_for_ip(self.identity.ipv4), self.worker.channel.mac,
+            self.identity.ipv4, self.peer['vip'], b'payload', protocol=253)
+        with self.assertRaises(ValueError):
+            self.engine.send_ipv4(frame[14:])
+        with self.assertRaises(ValueError):
+            self.engine.send_ethernet(frame)
+        self.assertTrue(self.worker.tx.empty())
 
 
 if __name__ == '__main__':

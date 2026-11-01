@@ -2573,8 +2573,9 @@ mod control_tests {
         }
         h.receive_operation(39);
         h.receive_operation(39);
-        // Exact spacing is checked against the sender clock above. Arrival
-        // observations can coalesce if this test thread is descheduled.
+        // Receiver-side arrival times can coalesce when this test thread is
+        // descheduled, so spacing is not asserted here; the 50 ms rule itself is
+        // covered by the `JoinPacer` unit test above.
         // Both requests are on the wire before either server response arrives.
         for (id, name, guid) in [(102, "Second LAN", [2; 16]), (101, "First LAN", [1; 16])] {
             h.remote

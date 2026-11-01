@@ -138,7 +138,7 @@ function Invoke-TestNative {
         default { throw 'Unexpected native executable.' }
     }
 }
-function Start-Sleep { param([int]$Milliseconds); if ($Milliseconds -notin @(50,200,250)) { throw 'Unexpected wait interval.' } }
+function Start-Sleep { param([int]$Milliseconds); if ($Milliseconds -notin @(20,50,200,250)) { throw 'Unexpected wait interval.' } }
 # Intercept only the native child-process helper. The target/service/process
 # validation and five-method fallback code are the exact embedded worker.
 $ast = [Management.Automation.Language.Parser]::ParseInput($originalWorker.ToString(), [ref]$tokens, [ref]$errors)
@@ -374,10 +374,16 @@ $child = [Diagnostics.Process]::new()
 try {
     $command = [IO.File]::ReadAllText($source) + "`nthrow 'synthetic top-level recovery failure'"
     $child.StartInfo.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    $child.StartInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    # The complete recovery source exceeds Windows' command-line limit. Use
+    # the same stdin bootstrap as the runtime, including for this error case.
+    $bootstrap = '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))'
+    $child.StartInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     $child.StartInfo.UseShellExecute = $false
+    $child.StartInfo.RedirectStandardInput = $true
     $child.StartInfo.RedirectStandardError = $true
     $child.Start() | Out-Null
+    $child.StandardInput.Write($command)
+    $child.StandardInput.Close()
     if (-not $child.WaitForExit(5000)) { $child.Kill(); throw 'Top-level error test did not exit within five seconds.' }
     Assert-Equal $child.ExitCode 1 'Top-level failure did not set the process exit status'
     Assert-Equal $child.StandardError.ReadToEnd().Trim() 'synthetic top-level recovery failure' 'Top-level errors still contain PowerShell CLIXML'

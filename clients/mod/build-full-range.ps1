@@ -22,7 +22,7 @@ foreach($target in $Targets){
 }
 foreach($target in $Targets){
     $isModern=$target -in $modern
-    $modVersion='2.1.5'
+    $modVersion='2.2.0'
     $buildDir=if($isModern){Join-Path $root 'modern'}else{$root}
     $jarName=if($target -in @("1.17","1.17.1")){"OpenRadClientMod-$modVersion-fabric-$target-java16-experimental.jar"}elseif($target -in @("1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadClientMod-$modVersion-fabric-$target-java17-experimental.jar"}else{"OpenRadClientMod-$modVersion-fabric-$target.jar"}
     $jar=Join-Path $root "release\$jarName"

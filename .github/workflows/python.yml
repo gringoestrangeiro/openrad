@@ -10,9 +10,13 @@ on:
       - 'clients/python/**'
       - '.github/workflows/python.yml'
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: clients/python
@@ -21,4 +25,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m unittest discover -s tests -v
+      - name: Install optional cryptography backend
+        run: python -m pip install -r requirements.txt
+      - name: Run accelerated and standard-library unit and API suites
+        run: |
+          ulimit -n 4096
+          python -c 'import radproto; assert radproto._AES is not None'
+          python run_tests.py
+          python openrad.py self-test
+          python -S -c 'import radproto; assert radproto._AES is None'
+          python -S openrad.py self-test

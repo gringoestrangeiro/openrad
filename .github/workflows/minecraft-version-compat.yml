@@ -2,7 +2,7 @@ name: OpenRad Minecraft version compatibility (development)
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, '2.2.0-dev']
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
@@ -14,6 +14,7 @@ on:
       - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
+      - 'tests/test_minecraft_ci_matrix.py'
       - '.github/workflows/minecraft-version-compat.yml'
   # Candidate branches are validated by pull_request, not a duplicate push matrix.
   push:
@@ -29,6 +30,8 @@ on:
       - 'scripts/ci-changed-components.py'
       - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
+      - 'tests/test_minecraft_version_coverage.py'
+      - 'tests/test_minecraft_ci_matrix.py'
       - '.github/workflows/minecraft-version-compat.yml'
   workflow_dispatch:
 
@@ -65,6 +68,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_scope.py -v
+      - run: python -m unittest discover -s clients/mod/tools -p test_verify_version_jar.py -v
 
   fabric:
     needs: changes

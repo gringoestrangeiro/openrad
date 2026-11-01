@@ -235,12 +235,29 @@ public final class PeerConnector {
     }
 
     private static final Duration COORDINATOR_DNS_TIMEOUT = Duration.ofSeconds(5);
+    // Native DNS can ignore interruption. Keep its workers bounded even after
+    // callers time out; a full pool rejects rather than queueing more lookups.
+    private static final ExecutorService COORDINATOR_DNS = new ThreadPoolExecutor(
+            0, 4, 30L, TimeUnit.SECONDS, new SynchronousQueue<>(),
+            io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformFactory(
+                    "openrad-coordinator-resolve-"),
+            new ThreadPoolExecutor.AbortPolicy());
 
     /**
      * Resolve the authenticated coordinator. Numeric literals keep their address family;
-     * hostnames get one bounded daemon lookup so shutdown and hostile names cannot stall.
+     * hostnames use a bounded daemon pool and each caller waits under a deadline.
      */
     static InetAddress coordinatorAddress(String host) throws IOException {
+        return coordinatorAddress(host, InetAddress::getByName, COORDINATOR_DNS_TIMEOUT);
+    }
+
+    @FunctionalInterface
+    interface CoordinatorLookup {
+        InetAddress resolve(String host) throws IOException;
+    }
+
+    static InetAddress coordinatorAddress(
+            String host, CoordinatorLookup lookup, Duration timeout) throws IOException {
         require(
                 host != null
                         && !host.isBlank()
@@ -252,23 +269,19 @@ public final class PeerConnector {
         } catch (IllegalArgumentException notLiteral) {
             // A hostname; resolved below under a deadline.
         }
-        CompletableFuture<InetAddress> resolved = new CompletableFuture<>();
-        Thread resolver =
-                io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualStart("openrad-coordinator-resolve",
-                                () -> {
-                                    try {
-                                        resolved.complete(InetAddress.getByName(host));
-                                    } catch (Exception failure) {
-                                        resolved.completeExceptionally(failure);
-                                    }
-                                });
+        Future<InetAddress> resolved;
         try {
-            return resolved.get(COORDINATOR_DNS_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            resolved = COORDINATOR_DNS.submit(() -> lookup.resolve(host));
+        } catch (RejectedExecutionException e) {
+            throw new IOException("peer coordinator resolution capacity exhausted", e);
+        }
+        try {
+            return resolved.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            resolver.interrupt();
+            resolved.cancel(true);
             throw new IOException("peer coordinator resolution timed out", e);
         } catch (InterruptedException e) {
-            resolver.interrupt();
+            resolved.cancel(true);
             Thread.currentThread().interrupt();
             throw new IOException("peer coordinator resolution cancelled", e);
         } catch (ExecutionException e) {

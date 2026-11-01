@@ -20,6 +20,7 @@ import com.openrad.mobile.vpn.OpenRadVpnService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -33,6 +34,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
 
@@ -74,6 +77,13 @@ class EngineRepository(
     override val publicHasMore: StateFlow<Boolean> = _publicHasMore.asStateFlow()
     private var publicCursor = 0L
     private val searchGeneration = AtomicLong()
+
+    /**
+     * The engine cannot cancel a submitted search, so a cancelled caller must still hold the gate
+     * until its response (or the 20 s deadline) arrives. At most one search is then outstanding in
+     * the engine and a superseded query can never fill its bounded command queue.
+     */
+    private val searchGate = Mutex()
 
     override val snapshot: StateFlow<Snapshot> = combine(
         EngineHost.state, EngineHost.interfaceStatus, _favorites, rtt,
@@ -148,7 +158,11 @@ class EngineRepository(
         }
         _publicBusy.value = true
         val result = try {
-            await { e, done -> e.search(query.trim(), 0, done) }
+            searchGate.withLock {
+                // Superseded while waiting for the gate: never submit a stale search.
+                if (generation != searchGeneration.get()) return
+                withContext(NonCancellable) { await { e, done -> e.search(query.trim(), 0, done) } }
+            }
         } finally {
             if (generation == searchGeneration.get()) _publicBusy.value = false
         }

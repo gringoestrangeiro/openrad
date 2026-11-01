@@ -3,6 +3,37 @@ use anyhow::{ensure, Context, Result};
 use std::{fs::OpenOptions, io::Read, path::Path};
 use zeroize::Zeroizing;
 
+/// Write a new regular file and atomically publish it beside the old one.
+/// An interrupted write leaves the previously published file untouched.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::{fs, io::Write};
+    let temporary = path.with_extension(format!(
+        "{}-{}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let result = (|| -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 pub fn read_bounded(path: &Path, limit: u64) -> Result<Zeroizing<Vec<u8>>> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -60,6 +91,33 @@ mod tests {
         assert!(read_optional_bounded(&directory.join("missing"), 1024)
             .unwrap()
             .is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_preserves_previous_state_until_publish_and_cleans_failed_temp() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-atomic-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("ADAPTER-STATE.json");
+        atomic_write(&path, br#"{"guid":"old"}"#).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"guid":"old"}"#);
+        atomic_write(&path, br#"{"guid":"new"}"#).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"guid":"new"}"#);
+        // Publishing onto a directory must fail without destroying it or
+        // leaving attacker-controlled temporary state in the install folder.
+        let invalid = directory.join("unwritable.json");
+        std::fs::create_dir(&invalid).unwrap();
+        assert!(atomic_write(&invalid, b"partial-data").is_err());
+        assert!(invalid.is_dir());
+        assert_eq!(
+            std::fs::read_dir(&directory).unwrap().count(),
+            2,
+            "temporary file left behind on failed publish"
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

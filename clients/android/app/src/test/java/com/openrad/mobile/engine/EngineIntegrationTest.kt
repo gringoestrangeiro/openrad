@@ -32,6 +32,7 @@ class EngineIntegrationTest {
     private val logins = Collections.synchronizedList(ArrayList<Int>())
     private val sockets = Collections.synchronizedList(ArrayList<Socket>())
     private var engine: Engine? = null
+    @Volatile private var dropRegistrationReply = false
 
     @Before
     fun setUp() {
@@ -75,6 +76,10 @@ class EngineIntegrationTest {
         val login = Tlv.parse(cc.decrypt(f.receive(65536, deadline)))
         assertEquals(20L, Tlv.unique(login, Protocol.CLIENT_OP).u32())
         logins.add(purpose)
+        if (purpose == 3 && dropRegistrationReply) {
+            f.close()
+            return
+        }
         send(f, cc, Tlv.u32(Protocol.SERVER_OP, 21))
         if (purpose == 3) {
             val body = concat(
@@ -232,5 +237,46 @@ class EngineIntegrationTest {
         e.stop()
         assertEquals(EngineState.Phase.STOPPED, e.snapshot().phase)
         assertTrue(events.any { it.startsWith("Online as 26.0.0.9") })
+    }
+
+    @Test
+    fun ambiguousRegistrationIsNotRepeatedByReconnectOrNewEngine() {
+        dropRegistrationReply = true
+        val store = MemoryIdentityStore()
+        repeat(2) {
+            val current = Engine(EngineConfig(host = "127.0.0.1", port = server.localPort,
+                nodeName = "fixture", modulus = bnBytes(n), autoReconnect = true,
+                reconnectAttempts = 2, reconnectBaseDelaySeconds = 1),
+                store, object : EngineListener {})
+            engine = current
+            current.start()
+            waitFor { current.snapshot().phase == EngineState.Phase.ERROR }
+            current.stop()
+        }
+        assertEquals("an ambiguous Login must not be repeated", listOf(3), logins.toList())
+    }
+
+    @Test
+    fun issuedIdentityStorageFailureRetriesOnlyPersistence() {
+        val memory = MemoryIdentityStore()
+        var saves = 0
+        val store = object : IdentityStore {
+            override fun load() = memory.load()
+            override fun markRegistrationPending() = memory.markRegistrationPending()
+            override fun clear() = memory.clear()
+            override fun save(identity: Identity) {
+                if (saves++ == 0) throw java.io.IOException("synthetic storage failure")
+                memory.save(identity)
+            }
+        }
+        val current = Engine(EngineConfig(host = "127.0.0.1", port = server.localPort,
+            nodeName = "phone", modulus = bnBytes(n), autoReconnect = true,
+            reconnectAttempts = 2, reconnectBaseDelaySeconds = 1), store, object : EngineListener {})
+        engine = current
+        current.start()
+        waitFor { current.snapshot().phase == EngineState.Phase.ONLINE }
+        assertEquals(listOf(3, 4), logins.toList())
+        assertEquals(4242L, store.load()!!.rid)
+        assertTrue(saves >= 2)
     }
 }

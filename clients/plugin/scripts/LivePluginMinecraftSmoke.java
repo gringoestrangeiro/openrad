@@ -1,10 +1,10 @@
-import static io.github.gringoestrangeiro.openradbridge.protocol.Wire.*;
+import static io.github.gringoestrangeiro.openradplugin.protocol.Wire.*;
 
-import io.github.gringoestrangeiro.openradbridge.crypto.Identity;
-import io.github.gringoestrangeiro.openradbridge.link.*;
-import io.github.gringoestrangeiro.openradbridge.network.*;
-import io.github.gringoestrangeiro.openradbridge.peer.*;
-import io.github.gringoestrangeiro.openradbridge.tunnel.TunnelCodec;
+import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
+import io.github.gringoestrangeiro.openradplugin.link.*;
+import io.github.gringoestrangeiro.openradplugin.network.*;
+import io.github.gringoestrangeiro.openradplugin.peer.*;
+import io.github.gringoestrangeiro.openradplugin.tunnel.TunnelCodec;
 
 import java.io.*;
 import java.net.Inet4Address;

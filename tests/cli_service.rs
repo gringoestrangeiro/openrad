@@ -26,6 +26,7 @@ impl Harness {
     }
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_openrad"))
+            .env("OPENRAD_LOG_DIR", self.dir.join("logs"))
             .arg("--data-dir")
             .arg(self.dir.join("state"))
             .arg("--json")
@@ -47,6 +48,56 @@ impl Drop for Harness {
     fn drop(&mut self) {
         let _ = self.run(&["stop"]);
         let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn offline_cli_rename_respects_profile_and_service_ownership() {
+    for profile_owned in [true, false] {
+        let harness = Harness::new();
+        let source = harness.dir.join("source.json");
+        fs::write(&source, IDENTITY).unwrap();
+        harness.ok(&["init", "--identity", source.to_str().unwrap()]);
+        let dir = openrad::daemon::DataDir::open(Some(harness.dir.join("state"))).unwrap();
+        let before = fs::read(dir.identity()).unwrap();
+        let owner = if profile_owned {
+            dir.try_profile_lock().unwrap()
+        } else {
+            dir.stopped_lock().unwrap()
+        };
+        let result = harness.run(&["rename", "changed-without-ownership"]);
+        drop(owner);
+        assert!(!result.status.success(), "rename bypassed ownership lock");
+        assert_eq!(fs::read(dir.identity()).unwrap(), before);
+        harness.ok(&["rename", "authorized-after-release"]);
+        assert_eq!(
+            dir.load_identity().unwrap().node_name,
+            "authorized-after-release"
+        );
+    }
+}
+
+#[test]
+fn offline_cli_force_relay_respects_profile_and_service_ownership() {
+    for profile_owned in [true, false] {
+        let harness = Harness::new();
+        harness.ok(&["force-relay", "false"]);
+        let dir = openrad::daemon::DataDir::open(Some(harness.dir.join("state"))).unwrap();
+        let before = fs::read(dir.path.join("service.json")).unwrap();
+        let owner = if profile_owned {
+            dir.try_profile_lock().unwrap()
+        } else {
+            dir.stopped_lock().unwrap()
+        };
+        let result = harness.run(&["force-relay", "true"]);
+        drop(owner);
+        assert!(
+            !result.status.success(),
+            "force-relay bypassed ownership lock"
+        );
+        assert_eq!(fs::read(dir.path.join("service.json")).unwrap(), before);
+        harness.ok(&["force-relay", "true"]);
+        assert!(dir.preferences().unwrap().force_relay);
     }
 }
 

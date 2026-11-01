@@ -8,7 +8,9 @@ param(
     [string]$UnsignedApk,
     [string]$ReferenceApk,
     [string]$SdkRoot,
-    [string]$OutputApk
+    [string]$OutputApk,
+    # Full git commit the unsigned APK must have been built from (README-FIRST.txt next to it).
+    [string]$ExpectedCommit
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -23,8 +25,52 @@ if (-not $OutputApk) {
 if (-not (Test-Path -LiteralPath $UnsignedApk -PathType Leaf)) {
     throw "Unsigned APK missing: $UnsignedApk. Download the unsigned GitHub Actions artifact into dist/android-local-signing first."
 }
+if ($ExpectedCommit) {
+    $note = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $UnsignedApk).Path) 'README-FIRST.txt'
+    $built = if (Test-Path -LiteralPath $note -PathType Leaf) {
+        [regex]::Match((Get-Content -LiteralPath $note -Raw), 'Source commit: ([0-9a-fA-F]{40})')
+    }
+    if (-not $built -or -not $built.Success) {
+        throw 'Cannot read the source commit from README-FIRST.txt beside the unsigned APK.'
+    }
+    if ($built.Groups[1].Value -ne $ExpectedCommit.Trim().ToLowerInvariant()) {
+        throw "The unsigned APK was built from $($built.Groups[1].Value), not the expected commit $ExpectedCommit."
+    }
+} else {
+    Write-Warning 'No -ExpectedCommit given: the APK is not verified against a release commit.'
+}
 if (-not (Test-Path -LiteralPath $Keystore -PathType Leaf)) {
     throw 'Original signing keystore not found. Do not generate a new key: upgrades would be incompatible.'
+}
+# Both generated outputs can replace files. Refuse every input (including the
+# keystore) before requesting passwords or invoking any signing tools.
+$fullOutput = [IO.Path]::GetFullPath($OutputApk)
+if ([IO.Path]::GetExtension($fullOutput) -ne '.apk') {
+    throw '-OutputApk must name a .apk file.'
+}
+$outDir = Split-Path -Parent $fullOutput
+$checksumOutput = Join-Path $outDir 'SHA256SUMS'
+foreach ($generated in @($fullOutput, $checksumOutput)) {
+    foreach ($input in @($Keystore, $UnsignedApk, $ReferenceApk)) {
+        if ($input -and [string]::Equals([IO.Path]::GetFullPath($input), $generated, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Signing output must not be an input file: $input"
+        }
+    }
+}
+# A junction/symlink in either direction can hide an input/output collision.
+# Fail closed rather than resolving only one side of an alias.
+foreach ($path in @($fullOutput, $checksumOutput, $Keystore, $UnsignedApk, $ReferenceApk)) {
+    if (-not $path) { continue }
+    $ancestor = [IO.Path]::GetFullPath($path)
+    while ($ancestor) {
+        if (Test-Path -LiteralPath $ancestor) {
+            $item = Get-Item -LiteralPath $ancestor -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Signing path must not use a reparse point: $ancestor"
+            }
+        }
+        $ancestor = Split-Path -Parent $ancestor
+    }
 }
 if (-not $SdkRoot) {
     foreach ($location in @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT,
@@ -73,6 +119,7 @@ $original = $null
 $referenceTempDir = $null
 $pendingSigned = $null
 $aligned = $null
+$pendingChecksum = $null
 $storeSecret = $null
 $keySecret = $null
 $storeText = $null
@@ -168,9 +215,12 @@ try {
     Move-Item -LiteralPath $pendingSigned -Destination $OutputApk -Force
     $pendingSigned = $null
     $digest = (Get-FileHash -LiteralPath $OutputApk -Algorithm SHA256).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText((Join-Path $outDir 'SHA256SUMS'),
+    $pendingChecksum = Join-Path $outDir ('.openrad-checksum-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    [IO.File]::WriteAllText($pendingChecksum,
         ($digest + '  ' + (Split-Path $OutputApk -Leaf) + [Environment]::NewLine),
         (New-Object Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $pendingChecksum -Destination $checksumOutput -Force
+    $pendingChecksum = $null
     Write-Output "SUCCESS: locally signed OpenRad 2.2.0 APK: $OutputApk"
     Write-Output 'SUCCESS: certificate SHA-256 matches official Android 2.0.1 release.'
     Write-Output "SHA-256: $digest"
@@ -182,6 +232,9 @@ finally {
     if ($keySecret) { $keySecret.Dispose() }
     if ($pendingSigned -and (Test-Path -LiteralPath $pendingSigned)) {
         Remove-Item -LiteralPath $pendingSigned -Force
+    }
+    if ($pendingChecksum -and (Test-Path -LiteralPath $pendingChecksum)) {
+        Remove-Item -LiteralPath $pendingChecksum -Force
     }
     if ($aligned -and (Test-Path -LiteralPath $aligned)) {
         Remove-Item -LiteralPath $aligned -Force

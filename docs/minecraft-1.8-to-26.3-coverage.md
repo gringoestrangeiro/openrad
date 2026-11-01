@@ -1,7 +1,7 @@
 # OpenRad: compatibilidade Minecraft Java (meta 1.14 a 26.3)
 
-Desenvolvimento baseado no **OpenRad 2.1.5**. PR em rascunho:
-https://github.com/gringoestrangeiro/openrad/pull/17
+Desenvolvimento integrado na branch `2.2.0-dev` (**OpenRad 2.2.0**, base 2.1.5) a partir de
+https://github.com/gringoestrangeiro/openrad/pull/18 (substitui o PR #17).
 
 **Restrições respeitadas:** nenhum loader novo; Fabric começa em Minecraft
 1.14, e não criamos builds Fabric ou Paper 1.8–1.13. A meta de compatibilidade para os dois clientes começa em 1.14;

@@ -51,6 +51,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class OpenRadVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var serviceGeneration = 0L
+
+    override fun onCreate() {
+        super.onCreate()
+        serviceGeneration = EngineHost.registerService()
+    }
     private var watcher: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var tunVip: Int? = null
@@ -283,16 +289,19 @@ class OpenRadVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        // Signal stop and close the fd synchronously (fast); join the reader on
-        // a background thread so the main thread never blocks up to 1500 ms.
         val stale: Thread? = synchronized(tunLock) { closeTunLocked() }
-        if (stale != null) {
-            Thread({ stale.join(1500) }, "openrad-tun-close").apply {
+        val expected = EngineHost.engine
+        val generation = serviceGeneration
+        scope.cancel()
+        if (stale != null || expected != null) {
+            Thread({
+                expected?.let { EngineHost.stopAfterServiceDestroyed(generation, it) }
+                stale?.join(1500)
+            }, "openrad-service-close").apply {
                 isDaemon = true
                 start()
             }
         }
-        scope.cancel()
         super.onDestroy()
     }
 

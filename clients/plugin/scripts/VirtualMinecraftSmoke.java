@@ -1,11 +1,11 @@
-import static io.github.gringoestrangeiro.openradbridge.link.TcpSegment.*;
+import static io.github.gringoestrangeiro.openradplugin.link.TcpSegment.*;
 
-import io.github.gringoestrangeiro.openradbridge.bridge.VirtualTcpBridge;
-import io.github.gringoestrangeiro.openradbridge.link.*;
-import io.github.gringoestrangeiro.openradbridge.peer.PeerChannel;
-import io.github.gringoestrangeiro.openradbridge.security.InboundFirewall.PeerGrant;
-import io.github.gringoestrangeiro.openradbridge.transport.FramedTcp;
-import io.github.gringoestrangeiro.openradbridge.tunnel.TunnelCodec;
+import io.github.gringoestrangeiro.openradplugin.bridge.VirtualTcpBridge;
+import io.github.gringoestrangeiro.openradplugin.link.*;
+import io.github.gringoestrangeiro.openradplugin.peer.PeerChannel;
+import io.github.gringoestrangeiro.openradplugin.security.InboundFirewall.PeerGrant;
+import io.github.gringoestrangeiro.openradplugin.transport.FramedTcp;
+import io.github.gringoestrangeiro.openradplugin.tunnel.TunnelCodec;
 
 import java.io.*;
 import java.net.*;

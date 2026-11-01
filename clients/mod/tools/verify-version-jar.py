@@ -25,7 +25,25 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             raise ValueError(f"Wrong mod version: {metadata.get('version')!r}")
         if metadata.get("environment") != "client":
             raise ValueError("Not a client-only mod")
+        entrypoint = "io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod"
+        if entrypoint not in metadata.get("entrypoints", {}).get("client", []):
+            raise ValueError("Missing OpenRad client entrypoint registration")
+        if "openrad-client.mixins.json" not in metadata.get("mixins", []):
+            raise ValueError("Missing OpenRad mixin configuration registration")
         mixins = json.loads(z.read("openrad-client.mixins.json"))
+        # Merely checking classes named by a possibly empty list would certify
+        # a JAR whose VPN connection/UI injections are never registered.
+        routing = "ConnectionRoutingMixin" if expected_minecraft == "1.21.11" or expected_minecraft.startswith("26.") else "ConnectionMixin"
+        expected_mixins = {routing, "LegacyStatusPingerMixin", "MultiplayerScreenMixin"}
+        if expected_minecraft.startswith("26."):
+            expected_mixins.add("ScreenWidgetInvoker")
+        declared_mixins = mixins.get("client", [])
+        if not isinstance(declared_mixins, list) or not expected_mixins.issubset(declared_mixins):
+            raise ValueError("Missing required OpenRad client mixin registrations")
+        if mixins.get("package") != "io.github.gringoestrangeiro.openradclient.fabric.mixin":
+            raise ValueError("Unexpected OpenRad mixin package")
+        if mixins.get("required") is not True or mixins.get("injectors", {}).get("defaultRequire") != 1:
+            raise ValueError("OpenRad mixin injections must be required")
         for name in mixins.get("client", []):
             class_path = mixins["package"].replace(".", "/") + "/" + name + ".class"
             if class_path not in files:

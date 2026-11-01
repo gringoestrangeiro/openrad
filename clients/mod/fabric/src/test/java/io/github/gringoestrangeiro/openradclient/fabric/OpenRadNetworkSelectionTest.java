@@ -81,4 +81,21 @@ class OpenRadNetworkSelectionTest {
         choice.apply(draft);
         assertTrue(draft.config().minecraftSelectors().isEmpty());
     }
+
+    @Test void togglingNetworkSelectedByBothNameAndSelectorClearsBoth() {
+        var entry = new MinecraftNetworks.Entry("english-2", "english", 2,
+                "Minecraft [English 2]", 1);
+        var draft = new OpenRadMenuDraft(profile(true,
+                List.of(entry.name()), List.of(entry.selector())));
+        var choice = new OpenRadNetworkSelection(draft);
+        assertTrue(choice.contains(entry));
+        choice.toggle(entry);
+        assertFalse(choice.contains(entry));
+        choice.apply(draft);
+        assertTrue(draft.config().networks().isEmpty());
+        assertTrue(draft.config().minecraftSelectors().isEmpty());
+        assertFalse(draft.config().autoConnect());
+        choice.toggle(entry);
+        assertTrue(choice.contains(entry));
+    }
 }
