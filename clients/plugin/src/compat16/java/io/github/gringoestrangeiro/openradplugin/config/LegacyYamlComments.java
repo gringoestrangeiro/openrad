@@ -29,7 +29,20 @@ public final class LegacyYamlComments {
         for (String line : comments) {
             result.append(line).append('\n');
         }
-        result.append('\n').append(serialized);
+        result.append('\n').append(withoutHeader(serialized));
         return result.toString();
+    }
+
+    /** Legacy Bukkit re-emits the file's leading comments as a header; they are already kept. */
+    private static String withoutHeader(String serialized) {
+        int start = 0;
+        while (start < serialized.length()) {
+            int end = serialized.indexOf('\n', start);
+            if (end < 0) end = serialized.length() - 1;
+            String line = serialized.substring(start, end + 1).strip();
+            if (!line.isEmpty() && !line.startsWith("#")) break;
+            start = end + 1;
+        }
+        return serialized.substring(start);
     }
 }

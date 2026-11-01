@@ -70,6 +70,13 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         for version in ("26.1", "26.1.1", "26.1.2", "26.2", "26.3"):
             self.assertIn(version, self.fabric)
 
+    def test_legacy_widget_rebuild_stays_one_statement(self):
+        # The picker calls this under an unbraced `if` from tick(); two bare
+        # statements would run init() on every tick and stack widgets.
+        build = (ROOT / "clients/mod/fabric/build.gradle.kts").read_text(encoding="utf-8")
+        self.assertIn('"{ clearWidgets(); init(); }"', build)
+        self.assertNotIn('"clearWidgets(); init();"', build)
+
     def test_verifier_tests_run_in_inventory_job(self):
         inventory = self.text.split("\n  fabric:", 1)[0]
         self.assertIn("test_verify_version_jar.py", inventory)

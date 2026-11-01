@@ -115,7 +115,7 @@ def main():
     doc.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
     sumfile = RELEASE / "SHA256SUMS-1.21-26.3.txt"
     sumfile.write_text("".join(f"{digest}  {p.name}\n" for p, digest in files), encoding="utf-8")
-    print(f"Verified {len(files)}/{len(ALL)} target JARs")
+    print(f"Verified {len(files)}/{len(ALL)} target JARs in 1.21-26.3; 1.17-1.20.6 are not covered by this report")
     print(f"Report: {doc}")
     print(f"Status: {status}")
     return len(files)

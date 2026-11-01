@@ -103,6 +103,19 @@ final class ConfigEditorTest {
     }
 
     @Test
+    void repeatedEditsDoNotGrowTheConfigFile() throws Exception {
+        defaults();
+        var editor = new ConfigEditor(directory);
+        editor.forceRelay(true);
+        editor.forceRelay(false);
+        long settled = Files.size(directory.resolve("config.yml"));
+        for (int i = 0; i < 12; i++) editor.forceRelay(i % 2 == 0);
+        editor.forceRelay(false);
+        assertEquals(settled, Files.size(directory.resolve("config.yml")));
+        assertTrue(Files.readString(directory.resolve("config.yml")).contains("Passwords belong"));
+    }
+
+    @Test
     void forceRelayCommandWithRelayDisabledLeavesFileUnchanged() throws Exception {
         Files.writeString(
                 directory.resolve("config.yml"), "vpn:\n  transports:\n    relay: false\n");

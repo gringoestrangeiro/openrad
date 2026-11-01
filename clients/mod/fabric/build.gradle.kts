@@ -62,7 +62,7 @@ sourceSets.main {
 if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
-        inputs.property("compatibilityAdapterVersion", "1182-v3")
+        inputs.property("compatibilityAdapterVersion", "1182-v4")
         // Filters differ across 1.17/1.18, 1.19.2 and 1.19.3/4. Without this
         // input a matrix build can reuse source transformed for the prior target.
         inputs.property("minecraftTarget", minecraftTarget)
@@ -90,7 +90,7 @@ if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19
                     source.replace("Component.literal(", "new net.minecraft.network.chat.TextComponent(")
                         .replace("Component.translatable(", "new net.minecraft.network.chat.TranslatableComponent(")
                         .replace("Component.empty()", "new net.minecraft.network.chat.TextComponent(\"\")")
-                        .replace("rebuildWidgets();", "clearWidgets(); init();")
+                        .replace("rebuildWidgets();", "{ clearWidgets(); init(); }")
                         .replace("net.fabricmc.fabric.api.client.command.v2.", "net.fabricmc.fabric.api.client.command.v1.")
                         .replace("import net.fabricmc.fabric.api.client.command.v1.ClientCommandRegistrationCallback;", "")
                         .replace("ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(", "net.fabricmc.fabric.api.client.command.v1.ClientCommandManager.DISPATCHER.register(")
