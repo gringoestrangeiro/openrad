@@ -82,4 +82,33 @@ final class ConfigEditorTest {
         editor.enabled(false);
         assertFalse(settings().bridge().enabled());
     }
+
+    @Test
+    void forceRelayCommandPersistsAndRestoresDirectTransports() throws Exception {
+        defaults();
+        var editor = new ConfigEditor(directory);
+        assertFalse(settings().relayOnly());
+        editor.forceRelay(true);
+        VpnSettings forced = settings();
+        assertTrue(forced.relayOnly());
+        assertFalse(forced.directTcp());
+        assertFalse(forced.directUdp());
+        String yaml = Files.readString(directory.resolve("config.yml"));
+        assertTrue(yaml.contains("Passwords belong in secrets.properties"), "comments kept");
+        editor.forceRelay(false);
+        VpnSettings restored = settings();
+        assertFalse(restored.relayOnly());
+        assertTrue(restored.directTcp());
+        assertTrue(restored.directUdp());
+    }
+
+    @Test
+    void forceRelayCommandWithRelayDisabledLeavesFileUnchanged() throws Exception {
+        Files.writeString(
+                directory.resolve("config.yml"), "vpn:\n  transports:\n    relay: false\n");
+        String before = Files.readString(directory.resolve("config.yml"));
+        assertThrows(
+                IllegalArgumentException.class, () -> new ConfigEditor(directory).forceRelay(true));
+        assertEquals(before, Files.readString(directory.resolve("config.yml")));
+    }
 }

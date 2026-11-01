@@ -16,4 +16,14 @@ final class CommandTokensTest {
         assertEquals(List.of("join", ""), OpenRadPlugin.tokens(new String[] {"join", "\"\""}));
         assertThrows(IllegalArgumentException.class, () -> OpenRadPlugin.tokens(new String[] {"join", "\"open"}));
     }
+
+    @Test
+    void switchValuesAcceptOnOffAndTheCliTrueFalse() {
+        for (String value : List.of("on", "ON", "true", "True"))
+            assertEquals(Boolean.TRUE, OpenRadPlugin.switchValue(value));
+        for (String value : List.of("off", "Off", "false", "FALSE"))
+            assertEquals(Boolean.FALSE, OpenRadPlugin.switchValue(value));
+        for (String value : List.of("", "yes", "1", "ontem"))
+            assertNull(OpenRadPlugin.switchValue(value));
+    }
 }

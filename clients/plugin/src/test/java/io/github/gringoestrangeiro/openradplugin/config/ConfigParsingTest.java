@@ -6,6 +6,7 @@ import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Set;
 
 final class ConfigParsingTest {
@@ -75,6 +76,56 @@ final class ConfigParsingTest {
                 "vpn:\n  minecraft-networks:\n    max-networks: \"512\"\n",
                 "vpn.minecraft-networks.max-networks");
         rejected("vpn:\n  transports:\n    relay: \"false\"\n", "vpn.transports.relay");
+        rejected("vpn:\n  transports:\n    force-relay: \"true\"\n", "vpn.transports.force-relay");
+    }
+
+    @Test
+    void forceRelayDisablesEveryDirectTransport() {
+        VpnSettings settings =
+                VpnSettings.from(
+                        yaml(
+                                "vpn:\n"
+                                        + "  transports:\n"
+                                        + "    force-relay: true\n"
+                                        + "    direct-tcp: true\n"
+                                        + "    direct-udp: true\n"));
+        assertFalse(settings.directTcp());
+        assertFalse(settings.directUdp());
+        assertTrue(settings.relay());
+        assertTrue(settings.relayOnly());
+    }
+
+    @Test
+    void forceRelayWithRelayDisabledIsRejected() {
+        rejected(
+                "vpn:\n  transports:\n    force-relay: true\n    relay: false\n",
+                "vpn.transports.force-relay");
+    }
+
+    @Test
+    void forceRelayIsOffWhenAbsentOrFalse() {
+        for (String text : List.of("", "vpn:\n  transports:\n    force-relay: false\n")) {
+            VpnSettings settings = VpnSettings.from(yaml(text));
+            assertTrue(settings.directTcp());
+            assertTrue(settings.directUdp());
+            assertFalse(settings.relayOnly());
+        }
+    }
+
+    @Test
+    void disablingBothDirectTransportsIsReportedAsRelayOnly() {
+        assertTrue(
+                VpnSettings.from(
+                                yaml(
+                                        "vpn:\n  transports:\n    direct-tcp: false\n"
+                                                + "    direct-udp: false\n"))
+                        .relayOnly());
+        assertFalse(
+                VpnSettings.from(
+                                yaml(
+                                        "vpn:\n  transports:\n    direct-tcp: false\n"
+                                                + "    direct-udp: true\n"))
+                        .relayOnly());
     }
 
     @Test

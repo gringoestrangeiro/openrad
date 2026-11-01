@@ -182,6 +182,11 @@ public record VpnSettings(
         boolean tcp = ConfigScalars.flag(c, "vpn.transports.direct-tcp", true),
                 udp = ConfigScalars.flag(c, "vpn.transports.direct-udp", true),
                 relay = ConfigScalars.flag(c, "vpn.transports.relay", true);
+        if (ConfigScalars.flag(c, "vpn.transports.force-relay", false)) {
+            require(relay, "vpn.transports.force-relay requires vpn.transports.relay: true");
+            tcp = false;
+            udp = false;
+        }
         require(tcp || udp || relay, "at least one transport required");
         return new VpnSettings(
                 bridge,
@@ -239,6 +244,11 @@ public record VpnSettings(
                 lanDiscovery,
                 minecraftNetworks,
                 discoveryLogIntervalMinutes);
+    }
+
+    /** True when peers can only use relays, by force-relay or by disabling both direct paths. */
+    public boolean relayOnly() {
+        return relay && !directTcp && !directUdp;
     }
 
     public Set<String> networkNames() {

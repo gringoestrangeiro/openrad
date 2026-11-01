@@ -50,6 +50,10 @@ vpn:
   # Estatisticas continuam disponiveis em /orb status.
   discovery-log-interval-minutes: 0
   transports:
+    # true = use only relay connections, in both directions (same as the desktop/CLI Force
+    # Relay): no direct TCP, UDP or endpoint discovery, whatever direct-tcp/direct-udp say.
+    # Requires relay: true. Toggle without editing: /orb force-relay <on|off>.
+    force-relay: false
     direct-tcp: true
     direct-udp: true
     relay: true

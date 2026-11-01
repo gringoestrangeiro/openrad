@@ -105,6 +105,14 @@ public final class ConfigEditor {
         save(yaml);
     }
 
+    /** Sets {@code vpn.transports.force-relay}; enabling it requires the relay transport. */
+    public synchronized void forceRelay(boolean enabled) throws IOException {
+        YamlConfiguration yaml = load();
+        yaml.set("vpn.transports.force-relay", enabled);
+        VpnSettings.from(yaml);
+        save(yaml);
+    }
+
     static String freshSecretKey(String name, List<Map<String, Object>> networks) {
         String slug =
                 name.toLowerCase(Locale.ROOT)

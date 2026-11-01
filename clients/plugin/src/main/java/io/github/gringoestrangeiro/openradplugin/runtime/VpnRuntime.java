@@ -642,7 +642,12 @@ public final class VpnRuntime implements AutoCloseable {
             // not a disconnect: keep the session, its channels and Minecraft players (Rust).
             case 44 -> {
                 if (PeerConnector.serverObjected())
-                    log.accept("Service refused an acceptor relay request; using direct paths.");
+                    log.accept(
+                            settings.relayOnly()
+                                    ? "Service refused an acceptor relay request; incoming peers"
+                                            + " now depend on a relay offer of their own."
+                                    : "Service refused an acceptor relay request; using direct"
+                                            + " paths.");
             }
             default -> {
                 try {

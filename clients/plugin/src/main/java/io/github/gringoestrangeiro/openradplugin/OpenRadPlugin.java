@@ -30,6 +30,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                     "public",
                     "enable",
                     "disable",
+                    "force-relay",
                     "networks",
                     "minecraft",
                     "peers",
@@ -92,12 +93,16 @@ public final class OpenRadPlugin extends JavaPlugin {
                                                                                     .equalsIgnoreCase(
                                                                                             "public")
                                                                     ? publicSuggestions(current)
-                                                                    : List.<String>of();
-                            String prefix =
-                                    args.length == 0
-                                            ? ""
-                                            : args[args.length - 1].toLowerCase(Locale.ROOT);
-                            return values.stream().filter(v -> v.startsWith(prefix)).toList();
+                                                                    : args.length == 2
+                                                                                    && args[0]
+                                                                                            .equalsIgnoreCase(
+                                                                                                    "force-relay")
+                                                                            ? List.of("on", "off")
+                                                                            : List.<String>of();
+                            String prefix = args.length == 0 ? "" : args[args.length - 1];
+                            return values.stream()
+                                    .filter(v -> v.regionMatches(true, 0, prefix, 0, prefix.length()))
+                                    .toList();
                         });
         admin.execute(
                 () -> {
@@ -230,7 +235,8 @@ public final class OpenRadPlugin extends JavaPlugin {
         String sub = args.length == 0 ? "status" : args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
             case "help", "ajuda", "?" -> help(sender);
-            case "join", "leave", "public", "enable", "disable" -> setup(sender, sub, args);
+            case "join", "leave", "public", "enable", "disable", "force-relay" ->
+                    setup(sender, sub, args);
             case "status" -> {
                 VpnRuntime r = generations.current();
                 if (r == null) {
@@ -257,6 +263,9 @@ public final class OpenRadPlugin extends JavaPlugin {
                                         + s.vip()
                                         + (port == 25565 ? "" : ":" + port));
                     }
+                    if (current != null && current.relayOnly())
+                        sender.sendMessage(
+                                "[OpenRad Plugin] Transporte: somente relay (sem conexoes diretas).");
                     if (!s.lastFailure().isEmpty()) sender.sendMessage("[OpenRad Plugin] " + s.lastFailure());
                     for (String problem : r.networkProblems())
                         sender.sendMessage("[OpenRad Plugin] Rede nao conectada: " + problem);
@@ -402,6 +411,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                         "/orb leave <rede> - remove a rede da configuracao",
                         "/orb public <seletor...|off> - redes publicas Minecraft (ex.: all-ptbr)",
                         "/orb enable | disable - liga/desliga a VPN do plugin",
+                        "/orb force-relay <on|off> - usa somente relay, sem conexoes diretas",
                         "/orb minecraft [seletor] [pagina] - catalogo de redes publicas",
                         "/orb networks | peers [pagina] - redes da sessao e peers",
                         "/orb reload | reconnect | diagnose - recarregar, reconectar, diagnosticar"))
@@ -422,6 +432,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                     case "join" -> "/orb join <rede> [senha]";
                     case "leave" -> "/orb leave <rede>";
                     case "public" -> "/orb public <seletor...|off>";
+                    case "force-relay" -> "/orb force-relay <on|off>";
                     default -> "/orb " + sub;
                 };
         boolean valid =
@@ -429,6 +440,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                     case "join" -> args.size() == 2 || args.size() == 3;
                     case "leave" -> args.size() == 2;
                     case "public" -> args.size() >= 2;
+                    case "force-relay" -> args.size() == 2 && switchValue(args.get(1)) != null;
                     default -> args.size() == 1;
                 };
         if (!valid) {
@@ -479,6 +491,16 @@ public final class OpenRadPlugin extends JavaPlugin {
                                                     : "Redes publicas selecionadas: "
                                                             + String.join(", ", selectors);
                                 }
+                                case "force-relay" -> {
+                                    boolean forced = switchValue(args.get(1));
+                                    editor.forceRelay(forced);
+                                    done =
+                                            forced
+                                                    ? "Force relay ativado: somente relay, sem"
+                                                            + " conexoes diretas."
+                                                    : "Force relay desativado: selecao normal de"
+                                                            + " transporte.";
+                                }
                                 default -> {
                                     editor.enabled(sub.equals("enable"));
                                     done = sub.equals("enable") ? "VPN ativada." : "VPN desativada.";
@@ -497,6 +519,15 @@ public final class OpenRadPlugin extends JavaPlugin {
             if (password != null) Arrays.fill(password, '\0');
             sender.sendMessage("[OpenRad Plugin] Administracao ocupada; tente novamente.");
         }
+    }
+
+    /** Parses an on/off command value; null when it is neither. Accepts the CLI's true/false. */
+    static Boolean switchValue(String value) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "on", "true" -> Boolean.TRUE;
+            case "off", "false" -> Boolean.FALSE;
+            default -> null;
+        };
     }
 
     /** Joins command arguments and splits them again, honouring "double quotes". */

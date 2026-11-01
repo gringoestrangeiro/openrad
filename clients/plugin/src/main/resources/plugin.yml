@@ -8,7 +8,7 @@ author: gringoestrangeiro
 commands:
   orb:
     description: Administração e diagnóstico do OpenRad Plugin
-    usage: /orb <help|status|join|leave|public|enable|disable|networks|minecraft|peers|reconnect|reload|diagnose>
+    usage: /orb <help|status|join|leave|public|enable|disable|force-relay|networks|minecraft|peers|reconnect|reload|diagnose>
     permission: openradplugin.admin
 permissions:
   openradplugin.admin:

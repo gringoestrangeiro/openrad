@@ -1,4 +1,4 @@
-> **2.2.0 em desenvolvimento (branch `2.2.0-dev`, ainda nao publicada):** corrige testes e
+> **2.2.0 em desenvolvimento (branch `2.2.0-dev`, ainda nao publicada):** adiciona [force relay](#force-relay), corrige testes e
 > metadados de compatibilidade e amplia a matriz de builds para 1.17–26.3. Os downloads abaixo continuam sendo da 2.1.5. Consulte [notas 2.2.0](../../docs/releases/2.2.0.md);
 > versoes de Minecraft continuam **alpha** e o build nao comprova gameplay.
 
@@ -42,6 +42,7 @@ Todos exigem `openradplugin.admin` (OP por padrão). Nomes com espaço vão entr
 | `/orb leave <rede>` | Remove a rede da configuração e apaga a senha salva. Não sai da rede no serviço Radmin. |
 | `/orb public <seletor...\|off>` | Seleciona redes públicas Minecraft (`all`, `all-ptbr`, `ptbr-1 ptbr-2`, …) ou `off`. |
 | `/orb enable` / `/orb disable` | Liga/desliga a VPN do plugin mantendo a configuração. |
+| `/orb force-relay <on\|off>` | Usa somente relay nos dois sentidos, sem TCP/UDP direto nem descoberta de endpoint (também aceita `true`/`false`). Grava `vpn.transports.force-relay` e reconecta. |
 | `/orb networks` | Redes conhecidas da sessão autenticada. |
 | `/orb minecraft [seletor] [pagina]` | Catálogo público Minecraft; `/orb minecraft options` lista os seletores. |
 | `/orb peers [pagina]` | Peers elegíveis, IPs e caminho de transporte. |
@@ -88,6 +89,10 @@ minecraft-network=your-network-password
 Para rede pública, use `secret: ""`. A lista de redes precisa existir no serviço; o plugin não cria automaticamente redes a partir de nomes na configuração. Redes pendentes de aprovação administrativa não recebem acesso. Uma lista de RIDs permitidos vazia libera membros autenticados das redes configuradas; a lista de bloqueio tem precedência. IDs sem sinal devem ser escritos entre aspas no YAML.
 
 O backend é fixado pelo administrador, não pelo peer. O Paper enxerga a origem como loopback, não como o IP virtual do jogador. `online-mode` e o protocolo Minecraft não são alterados. Não habilite IP forwarding de proxies esperando que o plugin forneça o IP real.
+
+## Force relay
+
+`vpn.transports.force-relay: true` (ou `/orb force-relay on`) faz o plugin usar somente relay, como o **Force Relay** do desktop e `openrad force-relay true` da CLI: ignora `direct-tcp` e `direct-udp`, não anuncia endpoints diretos e não consulta servidores de descoberta UDP. Exige `vpn.transports.relay: true`; a combinação com `relay: false` é rejeitada e nada é alterado. Aplicar a opção encerra os canais atuais e desconecta os jogadores da VPN, que reconectam em seguida. `/orb status` mostra `Transporte: somente relay` e `/orb peers` mostra o caminho de cada peer. O padrão é `false`, inclusive em um `config.yml` antigo sem a chave.
 
 ## LANBroadcaster e descoberta LAN
 
