@@ -20,7 +20,7 @@ class OpenRadAdvancedScreenTest {
             List<String> entries = exactNames ? names : selectors;
             var original = new ClientConfig(false, exactNames ? entries : List.of(),
                     256, 16, 20, exactNames ? List.of() : entries, 256);
-            var screen = new OpenRadAdvancedScreen(null, new OpenRadMenuDraft(original));
+            var screen = headlessScreen();
             var field = OpenRadAdvancedScreen.class.getDeclaredMethod("field",
                     int.class, int.class, int.class, String.class, String.class, int.class);
             field.setAccessible(true);
@@ -33,5 +33,26 @@ class OpenRadAdvancedScreenTest {
                     256, 16, 20, exactNames ? List.of() : retained, 256);
             assertEquals(original, applied, exactNames ? "exact names" : "selectors");
         }
+    }
+
+    private static OpenRadAdvancedScreen headlessScreen() throws Exception {
+        // Screen constructors from 1.21.11 need the running Minecraft singleton.
+        // This test exercises field/EditBox, with only the widget lists it uses.
+        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+        var instance = unsafeClass.getDeclaredField("theUnsafe");
+        instance.setAccessible(true);
+        var screen = (OpenRadAdvancedScreen) unsafeClass.getMethod("allocateInstance", Class.class)
+                .invoke(instance.get(null), OpenRadAdvancedScreen.class);
+        for (Class<?> type = screen.getClass(); type != null && type != Object.class;
+                type = type.getSuperclass()) {
+            for (var field : type.getDeclaredFields()) {
+                if (!java.lang.reflect.Modifier.isStatic(field.getModifiers())
+                        && List.class.isAssignableFrom(field.getType())) {
+                    field.setAccessible(true);
+                    field.set(screen, new ArrayList<>());
+                }
+            }
+        }
+        return screen;
     }
 }
