@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — 2.3.0-dev
+
+Integra o restante do PR #18 (49 commits de `mariananetto-sys`) que chegou depois do corte da
+v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identidade VPN.**
+
+- **Desktop:** primeira execucao com animacao do logo (pulavel), configuracao rapida com tema
+  claro/escuro, conexao automatica e atalho opcional na area de trabalho no Windows; a conexao
+  automatica espera o fim dessa configuracao. Traducoes da primeira execucao em todos os idiomas.
+- **Identidade/cadastro:** um cadastro interrompido fica marcado como pendente (Rust, Android,
+  Python) e nao gera um segundo aparelho ao reconectar/reiniciar; substituicoes pendentes ficam
+  protegidas no desligamento; importacoes e edicoes offline do desktop/CLI exigem a posse do perfil.
+- **Servico Rust:** o pedido de parada sobrevive a publicacao de sessao; anexos de controle que
+  expiraram sao retirados antes do proximo comando de rede; workers DNS do coordenador sao limitados
+  apos timeout.
+- **Android:** callbacks de rede presos ao engine atual; o servico VPN destruido para o engine que
+  possui; sockets param quando a protecao da VPN e recusada; comandos terminam mesmo com falha de
+  escrita no controle; assinatura local protege toda saida contra colisao com as entradas;
+  checksum da distribuicao Gradle fixado.
+- **Python:** cadastro ambiguo preservado entre reinicios; workers retirados quando as associacoes
+  autenticadas mudam; CI roda as suites acelerada e stdlib.
+- **Windows:** estado de posse do TAP publicado atomicamente; recuperacao exercitada via bootstrap
+  por stdin limitado.
+- **Paper/Fabric:** senhas novas de rede privada publicam uma chave de segredo nova antes de trocar
+  a referencia no YAML, preservando a senha anterior se a escrita falhar e sem sobrescrever chaves
+  existentes em `secrets.properties`; `PeerConnector` (plugin e copia do mod) limita a resolucao
+  DNS a quatro workers daemon globais, sem fila — a resolucao nativa continua sem cancelamento
+  garantido; politica offline aplicada a redes publicas explicitas; desmarcar uma rede Minecraft
+  limpa as duas referencias salvas; JARs Fabric sem registros obrigatorios do cliente sao rejeitados;
+  a matriz de CI Minecraft roda so as versoes afetadas.
+- **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
+
 ## 2.2.0 — 2026-11-01
 
 Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto
