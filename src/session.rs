@@ -427,7 +427,7 @@ fn resolve_hostname_limited(
     // Native DNS cannot be cancelled. Retain its slot until the actual worker
     // exits, even after its caller times out or disconnects. No queued backlog.
     workers
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
             (active < 4).then_some(active + 1)
         })
         .map_err(|_| anyhow::anyhow!("DNS resolver worker limit reached"))?;
