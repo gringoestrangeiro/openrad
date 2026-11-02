@@ -1,11 +1,8 @@
-> **2.2.0 em desenvolvimento (branch `2.2.0-dev`, ainda nao publicada):** corrige testes e
-> metadados de compatibilidade e amplia a matriz de builds para 1.17–26.3. Os downloads abaixo continuam sendo da 2.1.5. Consulte [notas 2.2.0](../../docs/releases/2.2.0.md);
-> versoes de Minecraft continuam **alpha** e o build nao comprova gameplay.
-
-> **Download (2.1.5, alpha):** [release 2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5),
-> arquivos `OpenRadClientMod-2.1.5-fabric-<versão>.jar` para Minecraft 1.21–1.21.11 (Java 21)
-> e 26.1–26.3 (Java 25). Instale **um** JAR, da versão exata do seu jogo, com a Fabric API.
-> Veja o [resumo da 2.1.5](README-2.1.5.md); as seções abaixo descrevem gerações anteriores.
+> **Download (2.2.0, alpha):** [release 2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0),
+> arquivos `OpenRadClientMod-2.2.0-fabric-<versão>.jar` para Minecraft 1.17–1.21.11 e 26.1–26.3,
+> um por versão, com o Java exigido pelo alvo (16, 17, 21 ou 25). Instale **um** JAR, da versão exata
+> do seu jogo, com a Fabric API. O build nao comprova gameplay; consulte as
+> [notas da 2.2.0](../../docs/releases/2.2.0.md). As secoes abaixo descrevem geracoes anteriores.
 
 # OpenRad Client Mod — Minecraft Java 1.21 a 26.3
 

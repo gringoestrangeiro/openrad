@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.2.0 — em desenvolvimento na branch `2.2.0-dev` (candidata de 2026-10-28; ainda nao publicada)
+## 2.2.0 — 2026-11-01
 
 Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto
 do servico Rust quando o cliente encerra o IPC; teste deterministico de pacing;
@@ -11,12 +11,12 @@ com sincronizacao adequada. **Sem alteracoes no wire format nem na identidade VP
 
 Evidencia de build/teste: 329 testes Rust aprovados (1 ignorado); matriz Gradle
 local 33 Fabric + 21 Paper aprovada apos retestes. **Sem homologacao
-end-to-end dentro do Minecraft, em Android fisico ou na rede Radmin real.**
+end-to-end dentro do Minecraft, em Android fisico ou na rede Radmin real**, como registram as notas.
 Windows permanece experimental, Android beta, Minecraft alpha, Python research/Linux-only.
 Fora do escopo implementado: Minecraft 1.14-1.16.5, 1.20 sem patch; nenhum
 loader novo foi adicionado.
 
-Revisao do PR #18 (integrado em `2.2.0-dev`): a busca publica Android passa por um
+Revisao do PR #18: a busca publica Android passa por um
 portao que mantem no maximo uma busca pendente no engine (um `collectLatest` sozinho deixava
 buscas descartadas encherem a fila de comandos); `sign-android-local.ps1` recusa um
 `-OutputApk` igual ao keystore ou a qualquer entrada e aceita `-ExpectedCommit`; os workflows

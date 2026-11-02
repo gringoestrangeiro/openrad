@@ -1,5 +1,7 @@
 # OpenRad Client Mod 2.1.5 (alpha)
 
+> Resumo historico da 2.1.5. A versao atual e a [2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0); veja o [guia do mod](README.md).
+
 Mod Fabric (cliente) com JAR por versão Minecraft, importado do protótipo local e integrado ao monorepo, com o núcleo de protocolo atualizado para a mesma implementação do plugin Paper **2.1.5**. Nenhuma identidade, perfil, configuração de usuário ou binário de teste foi importado.
 
 - Fabric Minecraft **1.21–1.21.11**, Java 21, com build separado por versão.

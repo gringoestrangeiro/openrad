@@ -16,11 +16,11 @@ This repository is a monorepo with five clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.2.0 (dev; latest release 2.1.5) |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.2.0 (dev; latest release 2.1.5) |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.2.0 (dev) |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.2.0 (dev; latest release 2.1.5) |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README-2.1.5.md) | alpha | 2.2.0 (dev; latest release 2.1.5) |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.2.0 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.2.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.2.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.2.0 |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.2.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -77,51 +77,37 @@ network conditions, including NAT or firewall restrictions; OpenRad can use a
 relay when a direct path is unavailable. See the [architecture guide](docs/architecture.md)
 for protocol and transport details.
 
-## 2.2.0 (in development, not released)
-
-**2.2.0** is being integrated on the `2.2.0-dev` branch (merged from
-[PR #18](https://github.com/gringoestrangeiro/openrad/pull/18)). It fixes the desktop
-**View release** notice (release URL shown in-window with *Open in browser* and *Copy*),
-keeps a received `Stop` effective when the IPC client closes early, rejects invalid Python
-API tokens before opening a socket, makes Android public search cancel superseded queries
-(at most one search outstanding in the engine), adds Force Relay to the Paper plugin
-(`vpn.transports.force-relay`, `/orb force-relay`), and extends the Minecraft Fabric/Paper build
-matrix to 1.17–26.3. Wire format and VPN identity are unchanged.
-
-The packages linked under **Download** are still **2.1.5**: no 2.2.0 tag or stable release
-exists, and Windows stays experimental. Remaining release blockers (real-device and
-multiplayer validation, official Android signing with the original key) are listed in the
-[2.2.0 notes](docs/releases/2.2.0.md); a Gradle/CI build of an experimental Minecraft
-target does not prove it works in-game.
-
 ## Download
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **[2.1.5](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5)** adds
-**stealth block** (drop a VPN address's traffic in either direction while the peer stays
-connected) to the desktop, CLI and Android, a Minecraft **Fabric client mod** (alpha),
-Paper plugin builds for Minecraft 1.21.x and 26.x, and lower RAM use. It ships freshly
-built Linux x86-64 and Windows x64 packages, an offline Windows installer, a signed
-Android APK (beta), the plugin and mod JARs, build metadata, dependency notices, and
-checksums. Read the [2.1.5 release notes](docs/releases/2.1.5.md) for upgrade behavior,
-validation, and platform limitations, and the
-[complete change inventory](docs/releases/2.1.5-changes.md) for every changed file.
+Version **[2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0)** fixes the desktop **View release** notice (release URL shown
+in-window with *Open in browser* and *Copy*), keeps a received `Stop` effective when the IPC
+client closes early, rejects invalid Python API tokens before opening a socket, keeps at most
+one Android public search outstanding in the engine, adds Force Relay to the Paper plugin
+(`vpn.transports.force-relay`, `/orb force-relay`), and extends the Minecraft Fabric and Paper
+builds to 1.17–26.3. Wire format and VPN identity are unchanged.
+
+Windows stays experimental, Android beta, and the Minecraft builds alpha. A built Minecraft
+target does not prove it works in-game. Real Windows TAP/UAC use, physical Android devices,
+and multiplayer through the official Radmin client were not validated for this release; see
+the [2.2.0 notes](docs/releases/2.2.0.md) for validation and limitations and the
+[change inventory](docs/releases/2.2.0-changes.md) for every changed file.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
-- **Windows:** Run `OpenRad-Setup.exe` from the release package. It installs the
+- **Windows:** Run `OpenRad-Setup-2.2.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.1.5-android.apk` (Android 8.0 or newer).
+- **Android (beta):** Install `openrad-2.2.0-android.apk` (Android 8.0 or newer).
   It is signed with the same key as 2.0.1 and installs as an update.
   See the [Android client guide](clients/android/README.md).
-- **Minecraft server (Paper 1.21.x or 26.x, alpha):** Put the
-  `OpenRadPlugin-2.1.5-paper-<version>.jar` for your Paper version in the server's
+- **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
+  `OpenRadPlugin-2.2.0-paper-<version>-java<N>.jar` for your Paper version in the server's
   `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
-- **Minecraft client (Fabric 1.21–1.21.11 or 26.1–26.3, alpha):** Put exactly one
-  `OpenRadClientMod-2.1.5-fabric-<version>.jar`, matching your game version, in the Fabric
-  profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README-2.1.5.md).
+- **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
+  `OpenRadClientMod-2.2.0-fabric-<version>.jar`, matching your game version, in the Fabric
+  profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README.md).
 
 ## Quick start
 
@@ -194,9 +180,10 @@ driver, root access or native libraries, so it also works on shared hosting.
 The plugin is **alpha**: full multiplayer gameplay through the official Radmin
 client has not been measured yet.
 
-1. Download the JAR for your Paper version from the [2.1.5 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.1.5):
-   `OpenRadPlugin-2.1.5-paper-1.21.jar` for Paper 1.21.x, or `-26.1.1`, `-26.1.2`, `-26.2`
-   or `-26.3` for Paper 26.x. Or build it (JDK 21 for 1.21.x; JDK 25 for 26.x):
+1. Download the JAR for your Paper version from the [2.2.0 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0):
+   `OpenRadPlugin-2.2.0-paper-1.21-java21.jar` for Paper 1.21.x, `-26.1.1-java25`,
+   `-26.1.2-java25`, `-26.2-java25` or `-26.3-java25` for Paper 26.x, or an older target down
+   to `-1.17-java16` (experimental). Or build it (JDK 21 for 1.21.x; JDK 25 for 26.x):
 
    ```sh
    cd clients/plugin
@@ -277,7 +264,7 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history |
-| [2.2.0 notes (in development)](docs/releases/2.2.0.md) | Candidate fixes, qualification evidence, review findings, and release blockers |
+| [2.2.0 release](docs/releases/2.2.0.md) | Fixes, Paper Force Relay, packages, upgrading, validation, and limitations |
 | [2.2.0 change inventory](docs/releases/2.2.0-changes.md) | File-by-file account of all changes since v2.1.5 |
 | [2.1.5 release](docs/releases/2.1.5.md) | Stealth block, Fabric mod, multiversion plugin, RAM, packages, upgrading, validation, and limitations |
 | [2.1.5 change inventory](docs/releases/2.1.5-changes.md) | File-by-file account of all changes since v2.1.0 |
