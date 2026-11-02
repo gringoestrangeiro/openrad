@@ -326,7 +326,7 @@ class UdpSocket private constructor(private val channel: DatagramChannel) : Clos
         fun bind(protector: SocketProtector?): UdpSocket {
             val channel = DatagramChannel.open()
             try {
-                protector?.protect(channel.socket())
+                if (protector?.protect(channel.socket()) == false) throw IOException("could not protect UDP socket from VPN routing")
                 channel.bind(InetSocketAddress(0))
                 return UdpSocket(channel)
             } catch (e: Exception) {

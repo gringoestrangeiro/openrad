@@ -8,6 +8,12 @@ on:
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - '.github/workflows/minecraft-2.2.0-integration.yml'
   pull_request:
     branches:
@@ -15,6 +21,12 @@ on:
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - '.github/workflows/minecraft-2.2.0-integration.yml'
   workflow_dispatch:
 
@@ -22,7 +34,27 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Minecraft changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fabric: ${{ steps.scope.outputs.fabric }}
+      paper: ${{ steps.scope.outputs.paper }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check latest event's changed files (fail closed)
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python3 scripts/ci-changed-components.py
+
   paper:
+    needs: changes
+    if: ${{ needs.changes.outputs.paper == 'true' }}
     name: Paper ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -64,6 +96,8 @@ jobs:
           retention-days: 7
 
   fabric:
+    needs: changes
+    if: ${{ needs.changes.outputs.fabric == 'true' }}
     name: Fabric ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -120,6 +154,8 @@ jobs:
 
   # Exercita o jogo real, nao apenas bytecode: perfil e TUN isolados/desligados.
   fabric-runtime-smoke:
+    needs: changes
+    if: ${{ needs.changes.outputs.fabric == 'true' }}
     name: Fabric 1.21.1 real client smoke (offline)
     runs-on: ubuntu-22.04
     timeout-minutes: 35

@@ -50,6 +50,13 @@ The properties file holds `storeFile`, `storePassword`, `keyAlias` and
 
 ## Manual test (real device)
 
+A registration whose reply is lost is kept as a pending intent in the encrypted
+identity store. Reconnect and app restart do not register another device
+automatically. Preserve the state for recovery; an explicit identity reset is a
+separate decision to permit registration again. If an issued identity cannot be
+saved, the running engine retries saving that same identity within its retry
+budget. Device/Keystore persistence still needs real-device validation.
+
 1. Open OpenRad and tap **Connect**. Android asks for VPN consent (once). On the first connection the app **registers this device** with the service and stores the identity encrypted (Keystore); later connections reuse the same identity.
 2. When "You are connected" appears with a `26.x.y.z` address, the VPN interface (26.0.0.0/8, MTU 1500) is up. The persistent notification shows the VIP and the peer count; its **Disconnect** button (or the one in the app) ends the session. Closing the app does **not** disconnect.
 3. **Discover**: type part of a public network name; tap **Join network**.

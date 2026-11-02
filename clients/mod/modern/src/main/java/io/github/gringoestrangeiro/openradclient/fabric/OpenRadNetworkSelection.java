@@ -69,8 +69,9 @@ final class OpenRadNetworkSelection {
         specific();
         // When a previous profile selected the same network by exact name,
         // clicking it clears that selection instead of adding a second selector.
-        if (exact.remove(item.name())) return;
-        if (!selectors.remove(item.selector())) selectors.add(item.selector());
+        boolean removedExact = exact.remove(item.name());
+        boolean removedSelector = selectors.remove(item.selector());
+        if (!removedExact && !removedSelector) selectors.add(item.selector());
     }
 
     void toggleSavedSelector(String key) {

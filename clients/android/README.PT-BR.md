@@ -50,6 +50,14 @@ O arquivo de propriedades contém `storeFile`, `storePassword`, `keyAlias` e
 
 ## Teste manual (aparelho real)
 
+Um cadastro cuja resposta se perde mantém uma intenção pendente no armazenamento
+criptografado de identidade. Reconectar ou reiniciar o app não cadastra outro
+aparelho automaticamente. Preserve o estado para recuperação; um reset explícito
+da identidade é uma decisão separada que permite um novo cadastro. Se uma
+identidade emitida não puder ser salva, o motor em execução tenta persistir a
+mesma identidade dentro do limite de tentativas. A persistência no aparelho e no
+Keystore ainda exige validação em dispositivo real.
+
 1. Abra o OpenRad e toque **Conectar**. O Android pede o consentimento de VPN (uma vez). Na primeira conexão o app **registra este aparelho** no serviço e guarda a identidade criptografada (Keystore); as próximas conexões reutilizam a mesma identidade.
 2. Quando aparecer "Você está conectado" e o endereço `26.x.y.z`, a interface VPN (26.0.0.0/8, MTU 1500) está ativa. A notificação persistente mostra o VIP e o número de peers; o botão **Desconectar** dela (ou do app) encerra a sessão. Fechar o app **não** desconecta.
 3. **Descobrir**: digite parte do nome de uma rede pública; toque **Entrar na rede**.

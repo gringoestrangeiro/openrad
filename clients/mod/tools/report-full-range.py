@@ -5,6 +5,12 @@ import hashlib
 import json
 from pathlib import Path
 import zipfile
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location(
+    "openrad_release_verifier", Path(__file__).with_name("verify-version-jar.py"))
+_verifier = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_verifier)
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "release"
@@ -24,6 +30,9 @@ def check_mod(path: Path, version: str, expected_mod: str):
     if not path.is_file():
         return "NÃO COMPILADO", "JAR ausente"
     try:
+        # Release reports and bundles must enforce the same admission rules as
+        # direct builds, including registered entrypoints and required mixins.
+        _verifier.verify(path, version, expected_mod)
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("fabric.mod.json"))
             mixin = json.loads(z.read("openrad-client.mixins.json"))

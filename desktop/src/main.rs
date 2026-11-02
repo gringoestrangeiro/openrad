@@ -3,6 +3,8 @@ mod app;
 mod backend;
 mod graphics;
 mod network_ui;
+#[cfg(windows)]
+mod shortcut;
 mod startup_log;
 mod storage;
 #[cfg(windows)]

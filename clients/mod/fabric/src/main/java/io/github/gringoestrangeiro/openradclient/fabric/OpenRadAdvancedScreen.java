@@ -43,7 +43,8 @@ public final class OpenRadAdvancedScreen extends Screen {
     }
     private EditBox field(int x, int y, int width, String key, String value, int limit) {
         EditBox box = new EditBox(font, x, y, width, 20, Component.translatable(key));
-        box.setMaxLength(limit);
+        // Valid saved lists may exceed the limit used for new UI input.
+        box.setMaxLength(Math.max(limit, value.length()));
         box.setValue(value);
         return addRenderableWidget(box);
     }

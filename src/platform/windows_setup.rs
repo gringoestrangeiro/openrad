@@ -528,7 +528,8 @@ pub fn configure(directory: &Path) -> Result<i32> {
         guid,
         created_by_setup,
     };
-    std::fs::write(directory.join(STATE), serde_json::to_vec_pretty(&state)?)?;
+    crate::file_io::atomic_write(&directory.join(STATE), &serde_json::to_vec_pretty(&state)?)
+        .context("Cannot persist TAP adapter ownership state")?;
     if let Some(device) = &mut new {
         device.keep = true;
     }

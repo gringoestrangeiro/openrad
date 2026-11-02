@@ -225,6 +225,11 @@ impl Drop for Backend {
     }
 }
 type Report = Arc<dyn Fn(Notice) + Send + Sync>;
+/// Fresh profiles must finish onboarding before background auto-connect.
+fn should_autoconnect(settings: &Settings, identity_ready: bool, service_running: bool) -> bool {
+    settings.onboarding_complete && settings.auto_connect && identity_ready && !service_running
+}
+
 #[cfg(test)]
 fn reconnect_delay(settings: &Settings, attempt: u32) -> Duration {
     Duration::from_secs(
@@ -312,19 +317,16 @@ fn manager(
         if dir.identity_file_present() {
             identity = Some(dir.load_identity()?);
         } else if !service_running {
-            identity = storage::load(&paths.entry()?)?;
+            identity = if import.is_some() {
+                storage::load_for_import(&paths.entry()?)?
+            } else {
+                storage::load(&paths.entry()?)?
+            };
         }
         if let Some(path) = import {
             let imported = Identity::load(&path)?;
             ensure!(!service_running, "Disconnect before importing an identity");
-            ensure!(identity.as_ref().is_none_or(|id| id.rid == imported.rid),
-                "This profile already has an identity; use another data directory to import a different one");
-            if dir.identity_file_present() {
-                dir.save_identity(&imported)?;
-            } else {
-                storage::save(&paths.entry()?, &imported)?;
-            }
-            identity = Some(imported);
+            identity = Some(import_identity(&paths, &dir, imported)?);
         }
         if let Some(id) = &identity {
             settings.node_name = id.node_name.clone();
@@ -375,7 +377,7 @@ fn manager(
             }));
         }
     };
-    let mut connect = settings.auto_connect && loaded.is_ok() && !service_running;
+    let mut connect = should_autoconnect(&settings, loaded.is_ok(), service_running);
     let mut next_status = Instant::now();
     #[cfg(unix)]
     let mut next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
@@ -428,7 +430,7 @@ fn manager(
                     if dir.identity_file_present() {
                         persisted = true;
                     } else {
-                        storage::save(&paths.entry()?, identity.as_ref().unwrap())?;
+                        storage::save_initial(&paths.entry()?, identity.as_ref().unwrap())?;
                         persisted = true;
                     }
                 }
@@ -569,20 +571,18 @@ fn manager(
                 // Closing a frontend leaves the shared service available to CLI
                 // clients. Disconnect/Stop are explicit, shared session actions.
                 if replacement.is_pending() {
-                    let result = if dir.identity_file_present() {
-                        replacement.commit(&ProfileVault(dir.clone()), &mut identity)
-                    } else {
-                        paths
-                            .entry()
-                            .and_then(|vault| replacement.commit(&vault, &mut identity))
-                    };
+                    let result =
+                        commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut identity);
                     if let Err(error) = result {
                         report(Notice::CloseBlocked(error.to_string()));
                         continue;
                     }
                 }
                 if let Some(id) = identity.as_ref().filter(|_| !persisted) {
-                    if let Err(error) = paths.entry().and_then(|vault| storage::save(&vault, id)) {
+                    if let Err(error) = paths
+                        .entry()
+                        .and_then(|vault| commit_shutdown_initial_identity(&dir, &vault, id))
+                    {
                         report(Notice::CloseBlocked(error.to_string()));
                         continue;
                     }
@@ -743,6 +743,10 @@ fn manager(
                             ensure!(reply.ok, "{}", reply.message);
                         }
                     } else {
+                        // Status is only a cached observation. Exclude identity
+                        // replacement and a newly started service before offline writes.
+                        let _profile_lock = dir.try_profile_lock()?;
+                        let _service_lock = dir.stopped_lock()?;
                         dir.save_preferences(&configure(&next)?)?;
                         if (identity.is_some() || last_identity.is_some())
                             && next.node_name != settings.node_name
@@ -775,15 +779,7 @@ fn manager(
             Ok(Action::Import(path)) if !service_running && !replacement.is_pending() => {
                 let result = (|| -> Result<()> {
                     let imported = Identity::load(&path)?;
-                    ensure!(
-                        identity.as_ref().is_none_or(|id| id.rid == imported.rid),
-                        "An identity is already saved in this profile"
-                    );
-                    if dir.identity_file_present() {
-                        dir.save_identity(&imported)?;
-                    } else {
-                        storage::save(&paths.entry()?, &imported)?;
-                    }
+                    let imported = import_identity(&paths, &dir, imported)?;
                     settings.node_name = imported.node_name.clone();
                     report(Notice::NodeName(imported.node_name.clone()));
                     report(Notice::Identity {
@@ -874,6 +870,76 @@ fn manager(
             }
             _ => {}
         }
+    }
+}
+
+/// Import only while this frontend exclusively owns the stopped profile.
+/// Reload under the locks: a cached identity/status may predate a CLI reset.
+fn import_identity(
+    paths: &Paths,
+    dir: &openrad::daemon::DataDir,
+    imported: Identity,
+) -> Result<Identity> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let current = if dir.identity_file_present() {
+        Some(dir.load_identity()?)
+    } else {
+        storage::load_for_import(&paths.entry()?)?
+    };
+    ensure!(
+        current.as_ref().is_none_or(|id| id.rid == imported.rid),
+        "This profile already has an identity; use another data directory to import a different one"
+    );
+    if dir.identity_file_present() {
+        dir.save_identity(&imported)?;
+    } else {
+        storage::save(&paths.entry()?, &imported)?;
+    }
+    Ok(imported)
+}
+
+fn commit_shutdown_initial_identity(
+    dir: &openrad::daemon::DataDir,
+    vault: &impl storage::Vault,
+    identity: &Identity,
+) -> Result<()> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    ensure!(
+        !dir.identity_file_present(),
+        "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+    );
+    storage::save_initial(vault, identity)
+}
+
+fn commit_shutdown_replacement(
+    paths: &Paths,
+    dir: &openrad::daemon::DataDir,
+    replacement: &mut storage::Replacement,
+    identity: &mut Option<Identity>,
+) -> Result<()> {
+    let _profile_lock = dir.try_profile_lock()?;
+    let _service_lock = dir.stopped_lock()?;
+    let saved = if dir.identity_file_present() {
+        Some(dir.load_identity()?)
+    } else {
+        storage::load_for_import(&paths.entry()?)?
+    };
+    let unchanged = match (saved.as_ref(), identity.as_ref()) {
+        (None, None) => true,
+        (Some(saved), Some(expected)) => {
+            saved.rid == expected.rid
+                && zeroize::Zeroizing::new(saved.password()?)
+                    == zeroize::Zeroizing::new(expected.password()?)
+        }
+        _ => false,
+    };
+    ensure!(unchanged, "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.");
+    if dir.identity_file_present() {
+        replacement.commit(&ProfileVault(dir.clone()), identity)
+    } else {
+        replacement.commit(&paths.entry()?, identity)
     }
 }
 
@@ -1005,6 +1071,286 @@ impl storage::Vault for ProfileVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct InitialMemoryVault {
+        bytes: std::cell::RefCell<Option<Vec<u8>>>,
+        fail: std::cell::Cell<bool>,
+    }
+    impl storage::Vault for InitialMemoryVault {
+        fn get(&self) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>> {
+            Ok(self.bytes.borrow().clone().map(zeroize::Zeroizing::new))
+        }
+        fn set(&self, bytes: &[u8]) -> Result<()> {
+            ensure!(!self.fail.get(), "synthetic vault unavailable");
+            *self.bytes.borrow_mut() = Some(bytes.to_vec());
+            Ok(())
+        }
+    }
+    fn issued_initial_identity(vault: &InitialMemoryVault) -> Identity {
+        let issued = storage::provision_once(vault, |commit| {
+            commit()?;
+            Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"issued","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#)
+        })
+        .unwrap();
+        vault.fail.set(true);
+        assert!(storage::save(vault, &issued).is_err());
+        vault.fail.set(false);
+        issued
+    }
+
+    #[test]
+    fn shutdown_initial_identity_preserves_pending_state_under_profile_and_service_locks() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-initial-shutdown-{}-{}",
+                std::process::id(),
+                u64::from_le_bytes(openrad::crypto::random_array())
+            ));
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let vault = InitialMemoryVault::default();
+            let issued = issued_initial_identity(&vault);
+            let before = vault.bytes.borrow().clone();
+            let held = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let result = commit_shutdown_initial_identity(&dir, &vault, &issued);
+            drop(held);
+            assert!(result.is_err(), "initial save bypassed ownership lock");
+            assert_eq!(*vault.bytes.borrow(), before);
+            assert_eq!(issued.rid, 123);
+            commit_shutdown_initial_identity(&dir, &vault, &issued).unwrap();
+            assert_eq!(storage::load(&vault).unwrap().unwrap().rid, issued.rid);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn shutdown_initial_identity_preserves_a_concurrently_imported_identity() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-initial-concurrent-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+        let vault = InitialMemoryVault::default();
+        let issued = issued_initial_identity(&vault);
+        let mut concurrent = issued.clone();
+        concurrent.rid = 456;
+        storage::save(&vault, &concurrent).unwrap();
+        let before = vault.bytes.borrow().clone();
+        let result = commit_shutdown_initial_identity(&dir, &vault, &issued);
+        assert!(
+            result.is_err(),
+            "initial save overwrote a concurrent identity"
+        );
+        assert_eq!(*vault.bytes.borrow(), before);
+        assert_eq!(issued.rid, 123);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn shutdown_initial_identity_cannot_save_behind_a_new_file_profile() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-initial-file-profile-{}-{}",
+            std::process::id(),
+            u64::from_le_bytes(openrad::crypto::random_array())
+        ));
+        let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+        let vault = InitialMemoryVault::default();
+        let issued = issued_initial_identity(&vault);
+        let mut imported = issued.clone();
+        imported.rid = 456;
+        imported
+            .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+            .unwrap();
+        let vault_before = vault.bytes.borrow().clone();
+        let file_before = std::fs::read(dir.identity()).unwrap();
+        assert!(commit_shutdown_initial_identity(&dir, &vault, &issued).is_err());
+        assert_eq!(*vault.bytes.borrow(), vault_before);
+        assert_eq!(std::fs::read(dir.identity()).unwrap(), file_before);
+        assert_eq!(issued.rid, 123);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn shutdown_replacement_waits_for_profile_ownership_and_retries_the_same_identity() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-shutdown-replacement-{}-{}",
+                std::process::id(),
+                u64::from_le_bytes(openrad::crypto::random_array())
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let mut next = original.clone();
+            next.rid = 456;
+            let mut replacement = storage::Replacement::default();
+            replacement.prepare(|| Ok(next)).unwrap();
+            let mut current = Some(original.clone());
+            let held = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            assert!(
+                commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).is_err()
+            );
+            assert!(replacement.is_pending());
+            assert_eq!(current.as_ref().unwrap().rid, 123);
+            assert_eq!(std::fs::read(dir.identity()).unwrap(), before);
+            drop(held);
+            commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).unwrap();
+            assert!(!replacement.is_pending());
+            assert_eq!(current.as_ref().unwrap().rid, 456);
+            assert_eq!(dir.load_identity().unwrap().rid, 456);
+
+            // Another frontend may have replaced the old identity between retries.
+            let mut concurrent = original.clone();
+            concurrent.rid = 789;
+            dir.save_identity(&concurrent).unwrap();
+            replacement.prepare(|| Ok(original)).unwrap();
+            assert!(
+                commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut current).is_err()
+            );
+            assert!(replacement.is_pending());
+            assert_eq!(dir.load_identity().unwrap().rid, 789);
+            assert_eq!(current.as_ref().unwrap().rid, 456);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn startup_import_preserves_identity_when_another_frontend_owns_the_profile() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-import-lock-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            paths
+                .save_settings(&Settings {
+                    auto_connect: false,
+                    ..Settings::default()
+                })
+                .unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let mut imported = original.clone();
+            imported.node_name = "imported".into();
+            let import_dir = ReportDirectory::new(&directory.join("import")).unwrap();
+            imported.save(&import_dir).unwrap();
+            let lock = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let (sender, actions) = mpsc::channel();
+            sender.send(Action::Shutdown).unwrap();
+            let notices = Notices::default();
+            let published = notices.clone();
+            manager(
+                paths,
+                Some(directory.join("import/identity.json")),
+                None,
+                runtime::Options::default(),
+                actions,
+                Cancellation::default(),
+                Arc::new(move |notice| published.send(notice)),
+            );
+            assert_eq!(
+                std::fs::read(dir.identity()).unwrap(),
+                before,
+                "an import must not bypass another frontend's lock"
+            );
+            assert!(notices
+                .try_iter()
+                .any(|notice| matches!(notice, Notice::Phase(Phase::Error, _))));
+            drop(lock);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn offline_settings_preserve_identity_when_another_frontend_owns_the_profile() {
+        for service_owned in [false, true] {
+            let directory = std::env::temp_dir().join(format!(
+                "openrad-rename-lock-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let paths = Paths::new(Some(directory.clone())).unwrap();
+            let settings = Settings {
+                auto_connect: false,
+                node_name: "original".into(),
+                ..Settings::default()
+            };
+            paths.save_settings(&settings).unwrap();
+            let dir = openrad::daemon::DataDir::open(Some(directory.clone())).unwrap();
+            let original = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"original","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
+            original
+                .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+                .unwrap();
+            let before = std::fs::read(dir.identity()).unwrap();
+            let lock = if service_owned {
+                dir.stopped_lock()
+            } else {
+                dir.try_profile_lock()
+            }
+            .unwrap();
+            let (sender, actions) = mpsc::channel();
+            sender
+                .send(Action::Save(Settings {
+                    node_name: "renamed".into(),
+                    ..settings
+                }))
+                .unwrap();
+            sender.send(Action::Shutdown).unwrap();
+            let notices = Notices::default();
+            let published = notices.clone();
+            manager(
+                paths,
+                None,
+                None,
+                runtime::Options::default(),
+                actions,
+                Cancellation::default(),
+                Arc::new(move |notice| published.send(notice)),
+            );
+            assert_eq!(
+                std::fs::read(dir.identity()).unwrap(),
+                before,
+                "offline settings must not bypass another frontend's lock"
+            );
+            assert!(notices.try_iter().any(|notice| matches!(
+                notice,
+                Notice::Engine(runtime::Update::Operation { error: true, .. })
+            )));
+            drop(lock);
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
 
     #[test]
     fn the_notice_queue_keeps_working_after_a_producer_panics_while_holding_it() {
@@ -1160,6 +1506,19 @@ mod tests {
             &received[3],
             Notice::Phase(Phase::Connected, message) if message == "ready"
         ));
+    }
+
+    #[test]
+    fn onboarding_blocks_background_autoconnect_until_preferences_are_saved() {
+        let mut settings = Settings::default();
+        assert!(settings.auto_connect);
+        assert!(!should_autoconnect(&settings, true, false));
+        settings.onboarding_complete = true;
+        assert!(should_autoconnect(&settings, true, false));
+        assert!(!should_autoconnect(&settings, false, false));
+        assert!(!should_autoconnect(&settings, true, true));
+        settings.auto_connect = false;
+        assert!(!should_autoconnect(&settings, true, false));
     }
 
     #[test]

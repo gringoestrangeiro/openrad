@@ -1,5 +1,5 @@
-import io.github.gringoestrangeiro.openradbridge.crypto.Identity;
-import io.github.gringoestrangeiro.openradbridge.session.*;
+import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
+import io.github.gringoestrangeiro.openradplugin.session.*;
 
 import java.nio.file.*;
 import java.time.Duration;
@@ -30,12 +30,12 @@ public final class LiveControlSmoke {
                             + attachment.membership().peers().size());
             attachment
                     .session()
-                    .send(io.github.gringoestrangeiro.openradbridge.protocol.Wire.op(4));
+                    .send(io.github.gringoestrangeiro.openradplugin.protocol.Wire.op(4));
             if (attachment.session().ready(Duration.ofSeconds(12))) {
                 byte[] reply = attachment.session().receive();
                 System.out.println(
                         "LIVE_CONTROL_REPLY operation="
-                                + io.github.gringoestrangeiro.openradbridge.protocol.TlvCodec
+                                + io.github.gringoestrangeiro.openradplugin.protocol.TlvCodec
                                         .operation(reply));
             } else System.out.println("LIVE_CONTROL_NO_REPLY_WITHIN_12S");
         }

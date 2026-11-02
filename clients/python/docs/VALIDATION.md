@@ -154,7 +154,7 @@ fragmentados podem ser transportados pelas operações IPv4/Ethernet.
 Os processos iniciados para o ensaio são encerrados ao concluir a validação.
 As identidades e a associação à rede pública ficam salvas para reutilização.
 Para repetir a troca entre dois perfis, veja os comandos de `run`, `udp-echo`,
-`udp-send` e os formatos binários em [README.md](README.md).
+`udp-send` e os formatos binários em [README.md](../README.md).
 
 ## Otimização e carga de 400 peers — 2026-10-02
 

@@ -321,11 +321,12 @@ Section "OpenRad" Main
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenRad" "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenRad" "NoRepair" 1
     CreateDirectory "$SMPROGRAMS\OpenRad"
-    CreateShortCut "$SMPROGRAMS\OpenRad\OpenRad Desktop.lnk" "$INSTDIR\openrad-desktop.exe"
+    CreateShortCut "$SMPROGRAMS\OpenRad\OpenRad Desktop.lnk" "$INSTDIR\openrad-desktop.exe" "" "$INSTDIR\logo.ico"
     CreateShortCut "$SMPROGRAMS\OpenRad\OpenRad CLI.lnk" "$INSTDIR\Launch-CLI.cmd"
     CreateShortCut "$SMPROGRAMS\OpenRad\OpenRad Diagnostics.lnk" "$INSTDIR\Debug-OpenRad.cmd"
     CreateShortCut "$SMPROGRAMS\OpenRad\Uninstall OpenRad.lnk" "$INSTDIR\Uninstall-OpenRad.exe"
-    CreateShortCut "$DESKTOP\OpenRad.lnk" "$INSTDIR\openrad-desktop.exe"
+    ; The first-run wizard offers this shortcut as an opt-in.
+    ; Do not create it unconditionally during installation.
 SectionEnd
 
 Function .onInstSuccess
