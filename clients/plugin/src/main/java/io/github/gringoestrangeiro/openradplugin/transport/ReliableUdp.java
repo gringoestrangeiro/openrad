@@ -208,9 +208,9 @@ public final class ReliableUdp implements RecordTransport {
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
-                byte[] data = Arrays.copyOf(buffer, packet.getLength());
+                int length = packet.getLength();
                 InetSocketAddress source = (InetSocketAddress) packet.getSocketAddress();
-                if (!validPunch(data, nonce)
+                if (!validPunch(buffer, length, nonce)
                         || candidates.stream()
                                 .noneMatch(a -> a.getAddress().equals(source.getAddress())))
                     continue;
@@ -219,7 +219,8 @@ public final class ReliableUdp implements RecordTransport {
                     learned.add(source);
                 }
                 progress.run();
-                if (accept && (data[6] == 'P' || data[6] == 'A')) {
+                byte kind = buffer[6];
+                if (accept && (kind == 'P' || kind == 'A')) {
                     sendTo(
                             socket,
                             punch(nonce, source.getPort(), socket.getLocalPort(), 'C'),
@@ -227,11 +228,11 @@ public final class ReliableUdp implements RecordTransport {
                     endpoint = source;
                     break;
                 }
-                if (!accept && data[6] == 'C') {
+                if (!accept && kind == 'C') {
                     endpoint = source;
                     break;
                 }
-                if (!accept && data[6] == 'P') {
+                if (!accept && kind == 'P') {
                     try {
                         sendTo(
                                 socket,

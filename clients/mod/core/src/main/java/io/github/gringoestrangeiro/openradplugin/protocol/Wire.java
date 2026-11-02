@@ -8,15 +8,26 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /** Protocol constructors translated from OpenRad 2.0.2 protocol.rs. */
 public final class Wire {
+    private static final Pattern OCTET = Pattern.compile("0|[1-9][0-9]{0,2}");
+    private static final Pattern IPV6_TEXT = Pattern.compile("[0-9a-fA-F:.]+");
+    private static final Pattern IPV4_TEXT = Pattern.compile("[0-9.]+");
+
     private Wire() {}
 
     public static byte[] concat(byte[]... arrays) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (byte[] a : arrays) out.writeBytes(a);
-        return out.toByteArray();
+        int size = 0;
+        for (byte[] a : arrays) size = Math.addExact(size, a.length);
+        byte[] out = new byte[size];
+        int at = 0;
+        for (byte[] a : arrays) {
+            System.arraycopy(a, 0, out, at, a.length);
+            at += a.length;
+        }
+        return out;
     }
 
     public static List<TlvCodec.Record> fields(byte[] b) {
@@ -83,7 +94,7 @@ public final class Wire {
         require(parts.length == 4, "invalid IPv4 address");
         byte[] bytes = new byte[4];
         for (int i = 0; i < 4; i++) {
-            require(parts[i].matches("0|[1-9][0-9]{0,2}"), "invalid IPv4 address");
+            require(OCTET.matcher(parts[i]).matches(), "invalid IPv4 address");
             int n = Integer.parseInt(parts[i]);
             require(n <= 255, "invalid IPv4 address");
             bytes[i] = (byte) n;
@@ -95,14 +106,14 @@ public final class Wire {
         require(
                 text.length() <= 45
                         && (text.contains(":")
-                                ? text.matches("[0-9a-fA-F:.]+")
-                                : text.matches("[0-9.]+")),
+                                ? IPV6_TEXT.matcher(text).matches()
+                                : IPV4_TEXT.matcher(text).matches()),
                 "numeric IP required");
         if (!text.contains(":")) {
             String[] parts = text.split("\\.", -1);
             require(parts.length == 4, "invalid IPv4 address");
             for (String part : parts) {
-                require(part.matches("0|[1-9][0-9]{0,2}"), "invalid IPv4 address");
+                require(OCTET.matcher(part).matches(), "invalid IPv4 address");
                 require(Integer.parseInt(part) <= 255, "invalid IPv4 address");
             }
         }

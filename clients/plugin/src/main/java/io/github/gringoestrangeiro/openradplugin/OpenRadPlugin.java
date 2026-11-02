@@ -1,5 +1,7 @@
 package io.github.gringoestrangeiro.openradplugin;
 
+import io.github.gringoestrangeiro.openradplugin.bridge.PaperAddressForwarder;
+import io.github.gringoestrangeiro.openradplugin.bridge.VirtualOrigins;
 import io.github.gringoestrangeiro.openradplugin.config.*;
 import io.github.gringoestrangeiro.openradplugin.diagnostics.HostDiagnostics;
 import io.github.gringoestrangeiro.openradplugin.network.MinecraftNetworks;
@@ -21,6 +23,7 @@ public final class OpenRadPlugin extends JavaPlugin {
     private final GenerationGate<VpnRuntime> generations = new GenerationGate<>();
     private final Object applyLock = new Object();
     private ThreadPoolExecutor admin;
+    private PaperAddressForwarder addressForwarder;
     private static final List<String> SUBCOMMANDS =
             List.of(
                     "help",
@@ -55,6 +58,13 @@ public final class OpenRadPlugin extends JavaPlugin {
             return;
         }
         saveDefaultConfig();
+        // Always installed: it only rewrites connections the bridge registered, which happens
+        // only while bridge.forward-player-address is true.
+        addressForwarder =
+                PaperAddressForwarder.install(
+                        getServer().getClass().getClassLoader(),
+                        VirtualOrigins.shared(),
+                        getLogger()::warning);
         admin =
                 new ThreadPoolExecutor(
                         1,
@@ -691,6 +701,10 @@ public final class OpenRadPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         generations.stop();
+        if (addressForwarder != null) {
+            addressForwarder.close();
+            addressForwarder = null;
+        }
         if (admin != null) admin.shutdownNow();
         GenerationGate.Handoff<VpnRuntime> handoff = generations.takeAll();
         VpnRuntime current = handoff.current();

@@ -57,6 +57,7 @@ Tudo acima também pode ser feito editando os arquivos em `plugins/OpenRadPlugin
 2. Coloque `build/libs/OpenRadPlugin.jar` em `plugins/` e inicie o servidor. O plugin gera `config.yml` e `secrets.properties`, inicialmente com a VPN desativada.
 3. Adicione suas redes em `vpn.networks`. Para rede privada, referencie uma chave de `secrets.properties`; não coloque a senha no YAML público.
 4. O backend é `127.0.0.1` na porta do próprio Paper (`bridge.backend-port: 0` = automático). Defina um número só se o Minecraft escutar em outra porta local.
+   Mesmo assim, o Paper vê cada jogador da VPN com o próprio IP `26.x.x.x` (não `127.0.0.1`): bans por IP, limites por IP, logs e plugins usam o endereço Radmin do jogador. Use `bridge.forward-player-address: false` para voltar a `127.0.0.1`. Exige Paper 1.17.1+ (`ChannelInitializeListener`); se indisponível, o plugin avisa no log e mantém `127.0.0.1`.
 5. Defina `bridge.enabled: true` e execute `/orb reload` como administrador. A sessão inicial registra uma identidade exclusiva, salva a credencial com acesso restrito ao proprietário e conecta às redes configuradas.
 6. Consulte `/orb status`. O endereço `26.x.x.x` pertence à interface virtual interna do plugin. Jogadores da mesma rede usam esse IP e `bridge.listen-virtual-port`.
 

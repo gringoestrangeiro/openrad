@@ -69,6 +69,7 @@ public final class UdpDiscovery {
         long began = System.nanoTime(), until = began + timeout.toNanos();
         long[] offsets = {0, 400_000_000L, 900_000_000L, 1_500_000_000L};
         int sends = 0;
+        byte[] buffer = new byte[2048];
         while (System.nanoTime() < until) {
             if (Thread.currentThread().isInterrupted())
                 throw new IOException("UES discovery cancelled");
@@ -86,7 +87,7 @@ public final class UdpDiscovery {
             }
             socket.setSoTimeout(
                     (int) Math.max(1, Math.min(25, (until - System.nanoTime()) / 1_000_000)));
-            DatagramPacket p = new DatagramPacket(new byte[2048], 2048);
+            DatagramPacket p = new DatagramPacket(buffer, buffer.length);
             try {
                 socket.receive(p);
             } catch (SocketTimeoutException e) {
@@ -97,7 +98,7 @@ public final class UdpDiscovery {
                 try {
                     addresses[i] =
                             parseResponse(
-                                    Arrays.copyOf(p.getData(), p.getLength()), transactions[i]);
+                                    Arrays.copyOf(buffer, p.getLength()), transactions[i]);
                 } catch (IllegalArgumentException ignored) {
                 }
             if (addresses[0] != null && addresses[1] != null)

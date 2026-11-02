@@ -28,7 +28,17 @@ final class LanServerRegistry {
         this.monotonic = monotonic;
     }
 
-    synchronized boolean accept(Inet4Address authenticatedVip, byte[] authenticatedMac, byte[] frame) {
+    boolean accept(Inet4Address authenticatedVip, byte[] authenticatedMac, byte[] frame) {
+        // Every inbound frame passes here: reject non-advertisements (all game TCP) without
+        // taking the registry lock the render thread's snapshot() also needs.
+        if (frame.length < 14 + 28
+                || !Arrays.equals(frame, 0, 6, MULTICAST_MAC, 0, 6)
+                || frame[12] != 0x08 || frame[13] != 0x00) return false;
+        return acceptAdvertisement(authenticatedVip, authenticatedMac, frame);
+    }
+
+    private synchronized boolean acceptAdvertisement(
+            Inet4Address authenticatedVip, byte[] authenticatedMac, byte[] frame) {
         try {
             if ((authenticatedVip.getAddress()[0] & 255) != 26) return false;
             EthernetFrame ethernet = EthernetFrame.parse(frame);

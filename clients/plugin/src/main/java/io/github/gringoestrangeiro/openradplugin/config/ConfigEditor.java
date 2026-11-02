@@ -40,7 +40,7 @@ public final class ConfigEditor {
         YamlConfiguration yaml = load();
         List<Map<String, Object>> networks = networks(yaml);
         Map<String, Object> entry = null;
-        for (Map<String, Object> n : networks) if (name.equals(n.get("name"))) entry = n;
+        for (Map<String, Object> n : networks) if (name.equals(Objects.toString(n.get("name"), ""))) entry = n;
         boolean added = entry == null;
         if (added) {
             require(networks.size() < 128, "limite de 128 redes atingido");
@@ -80,7 +80,7 @@ public final class ConfigEditor {
         YamlConfiguration yaml = load();
         List<Map<String, Object>> networks = networks(yaml);
         Map<String, Object> entry = null;
-        for (Map<String, Object> n : networks) if (name.equals(n.get("name"))) entry = n;
+        for (Map<String, Object> n : networks) if (name.equals(Objects.toString(n.get("name"), ""))) entry = n;
         if (entry == null) return false;
         networks.remove(entry);
         String secret = Objects.toString(entry.get("secret"), "");

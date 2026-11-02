@@ -14,6 +14,9 @@ bridge:
   max-players-through-vpn: 30
   max-pending-tcp: 60
   connection-timeout-seconds: 15
+  # Paper sees each VPN player's own 26.x address instead of 127.0.0.1 (bans, IP limits,
+  # logs and plugins). Other connections are untouched. false = keep 127.0.0.1.
+  forward-player-address: true
   lan-discovery:
     # Forward local Minecraft Java advertisements (e.g. LANBroadcaster) through the VPN.
     # Captures 224.0.2.60:4445 only for backend-port; rewrites to the VPN IP/virtual port.

@@ -29,6 +29,10 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   garantido; politica offline aplicada a redes publicas explicitas; desmarcar uma rede Minecraft
   limpa as duas referencias salvas; JARs Fabric sem registros obrigatorios do cliente sao rejeitados;
   a matriz de CI Minecraft roda so as versoes afetadas.
+- **Paper:** jogadores que entram pela VPN do plugin aparecem no servidor com o proprio IP
+  `26.x.x.x` em vez de `127.0.0.1` (bans/limites por IP, logs e outros plugins);
+  `bridge.forward-player-address: false` restaura o comportamento anterior. Outras conexoes nao
+  sao alteradas.
 - **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
 
 ## 2.2.0 — 2026-11-01
