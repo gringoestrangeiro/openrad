@@ -34,6 +34,13 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   `bridge.forward-player-address: false` restaura o comportamento anterior. Outras conexoes nao
   sao alteradas.
 - **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
+- **Desktop (desempenho):** listas de peers, e listas de Descobrir/Entrada automatica com mais de
+  100 itens, constroem so as linhas visiveis; redimensionar a janela ou a barra lateral nao refaz
+  mais o layout de todas as linhas (com 5000 peers, o pior quadro caiu de ~126 ms para ~6 ms e o
+  quadro normal de ~5 ms para ~1,3 ms em medicao headless). Indicadores de carregamento animam a
+  30 fps em vez de redesenhar a janela a cada quadro da tela enquanto conecta, busca ou entra em
+  redes; a busca pendente nao faz mais polling a cada 20 ms. Menus "Gerenciar" abertos continuam
+  abertos quando a linha sai da tela.
 - **Windows (instalador):** `setup.log` persistente (UTF-16LE) em `%LOCALAPPDATA%\OpenRad\logs`
   registra cada etapa, codigo de saida do worker e resultado; o worker de setup grava suas etapas
   SetupAPI e o inventario de adaptadores TAP em `setup-worker-startup.log`.

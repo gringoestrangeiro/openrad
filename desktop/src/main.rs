@@ -9,6 +9,7 @@ mod startup_log;
 mod storage;
 #[cfg(windows)]
 mod uninstall;
+mod virtual_list;
 #[cfg(any(windows, test))]
 #[path = "platform/windows_launch.rs"]
 mod windows_launch;

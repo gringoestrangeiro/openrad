@@ -7,6 +7,7 @@ use crate::{
         JoinNetwork, NetworkPreferences, Paths, PeerSort, Settings, StartPage, ThemePreference,
         MAX_JOIN_NETWORKS,
     },
+    virtual_list::VirtualRows,
 };
 use eframe::egui::{self, Align, Color32, FontId, RichText, Stroke, Vec2};
 use openrad::{
@@ -157,6 +158,8 @@ enum PingState {
 }
 
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How often a due search re-checks while another request is in flight.
+const SEARCH_RETRY: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 struct JoinRun {
@@ -319,129 +322,65 @@ impl PeerListCache {
     }
 }
 
+/// Network lists up to this length are fully built, keeping every entry in
+/// the accessibility tree; longer ones build only the rows in view.
+const EAGER_ROWS: usize = 100;
+
+/// Everything besides row content that changes how list rows lay out. Rows
+/// measured under a different layout are re-estimated rather than rebuilt.
 #[derive(PartialEq)]
-struct PeerRowLayout {
+struct RowLayout {
     width: f32,
     pixels_per_point: f32,
     style: Arc<egui::Style>,
     language: Language,
-    show_internal_ids: bool,
-    show_details: bool,
-    show_peer_ip: bool,
-    selected_network: bool,
+    /// Display settings that add or remove lines in every row.
+    settings: [bool; 4],
 }
-enum CachedPing {
-    None,
-    Pending,
-    Measured(u64),
-    Failed(String),
-}
-impl CachedPing {
-    fn new(ping: Option<&PingState>) -> Self {
-        match ping {
-            None => Self::None,
-            Some(PingState::Pending { .. }) => Self::Pending,
-            Some(PingState::Measured(ms)) => Self::Measured(ms.to_bits()),
-            Some(PingState::Failed(error)) => Self::Failed(error.clone()),
-        }
-    }
-    fn matches(&self, ping: Option<&PingState>) -> bool {
-        match (self, ping) {
-            (Self::None, None) | (Self::Pending, Some(PingState::Pending { .. })) => true,
-            (Self::Measured(old), Some(PingState::Measured(ms))) => *old == ms.to_bits(),
-            (Self::Failed(old), Some(PingState::Failed(error))) => old == error,
-            _ => false,
-        }
-    }
-}
-struct CachedPeerRow {
-    height: f32,
-    name: String,
-    rid: u64,
-    vip: std::net::Ipv4Addr,
-    status: PeerState,
-    detail: String,
-    transport: Option<openrad::peer::TransportPath>,
-    endpoint: Option<std::net::SocketAddr>,
-    role: Option<u32>,
-    own_role: Option<u32>,
-    ping: CachedPing,
-    separator: bool,
-}
-impl CachedPeerRow {
-    fn matches(
-        &self,
-        peer: &PeerView,
-        ping: Option<&PingState>,
-        role: Option<u32>,
-        own_role: Option<u32>,
-        separator: bool,
-    ) -> bool {
-        self.name == peer.peer.name
-            && self.rid == peer.peer.rid
-            && self.vip == peer.peer.vip
-            && self.status == peer.status
-            && self.detail == peer.detail
-            && self.transport == peer.transport
-            && self.endpoint == peer.endpoint
-            && self.role == role
-            && self.own_role == own_role
-            && self.separator == separator
-            && self.ping.matches(ping)
-    }
-    fn new(
-        height: f32,
-        peer: &PeerView,
-        ping: Option<&PingState>,
-        role: Option<u32>,
-        own_role: Option<u32>,
-        separator: bool,
-    ) -> Self {
+impl RowLayout {
+    fn new(ui: &egui::Ui, language: Language, settings: [bool; 4]) -> Self {
         Self {
-            height,
-            name: peer.peer.name.clone(),
-            rid: peer.peer.rid,
-            vip: peer.peer.vip,
-            status: peer.status.clone(),
-            detail: peer.detail.clone(),
-            transport: peer.transport,
-            endpoint: peer.endpoint,
-            role,
-            own_role,
-            ping: CachedPing::new(ping),
-            separator,
-        }
-    }
-}
-#[derive(Default)]
-struct PeerRowCache {
-    layout: Option<PeerRowLayout>,
-    rows: BTreeMap<u64, CachedPeerRow>,
-    peer_revision: u64,
-}
-impl PeerRowCache {
-    fn refresh_layout(
-        &mut self,
-        ui: &egui::Ui,
-        language: Language,
-        settings: &Settings,
-        selected_network: bool,
-    ) {
-        let layout = PeerRowLayout {
             width: ui.available_width(),
             pixels_per_point: ui.ctx().pixels_per_point(),
             style: ui.style().clone(),
             language,
-            show_internal_ids: settings.show_internal_ids,
-            show_details: settings.show_peer_details,
-            show_peer_ip: settings.show_peer_ip,
-            selected_network,
-        };
-        if self.layout.as_ref() != Some(&layout) {
-            self.layout = Some(layout);
-            self.rows.clear();
+            settings,
         }
     }
+}
+/// Rows of one kind are expected to share a height. Only the lines and labels
+/// a row shows matter; names and messages are single-line or similar in size.
+fn peer_row_kind(
+    peer: &PeerView,
+    ping: Option<&PingState>,
+    role: Option<u32>,
+    settings: &Settings,
+    separator: bool,
+) -> u64 {
+    let ping = match ping {
+        None => 0,
+        Some(PingState::Pending { .. }) => 1,
+        Some(PingState::Measured(_)) => 2,
+        Some(PingState::Failed(_)) => 3,
+    };
+    let transport = match peer.transport {
+        None => 0,
+        Some(openrad::peer::TransportPath::DirectUdp) => 1,
+        Some(openrad::peer::TransportPath::DirectTcp) => 2,
+        Some(openrad::peer::TransportPath::Relay) => 3,
+    };
+    let details = settings.show_peer_details && !peer.detail.is_empty();
+    let address = settings.show_peer_ip
+        && peer.status == PeerState::Connected
+        && peer.transport.is_some()
+        && peer.endpoint.is_some();
+    u64::from(peer_rank(&peer.status))
+        | ping << 3
+        | transport << 5
+        | u64::from(role.map_or(0, |role| role.min(14) + 1)) << 7
+        | u64::from(details) << 11
+        | u64::from(address) << 12
+        | u64::from(separator) << 13
 }
 
 #[derive(Default)]
@@ -530,6 +469,11 @@ struct PublicNetworkListCache {
     networks: Vec<PublicNetwork>,
     favorites: BTreeSet<String>,
     ordered: Arc<[PublicNetworkDisplay]>,
+    revision: u64,
+    /// The filter and list revision `matching` was computed for.
+    filter: Option<(String, u64)>,
+    matching: Arc<[usize]>,
+    matching_revision: u64,
 }
 impl PublicNetworkListCache {
     fn refresh(&mut self, networks: &[PublicNetwork], favorites: &BTreeSet<String>) {
@@ -553,6 +497,25 @@ impl PublicNetworkListCache {
             .collect::<Vec<_>>()
             .into();
         self.initialized = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+    /// Indices of ordered networks whose normalized names contain `filter`,
+    /// and a revision that changes whenever they change.
+    fn matching(&mut self, filter: &str) -> (u64, Arc<[usize]>) {
+        if self
+            .filter
+            .as_ref()
+            .is_none_or(|(old, revision)| old != filter || *revision != self.revision)
+        {
+            self.matching = (self.ordered.iter().enumerate())
+                .filter(|(_, display)| display.normalized_name.contains(filter))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>()
+                .into();
+            self.filter = Some((filter.to_owned(), self.revision));
+            self.matching_revision = self.matching_revision.wrapping_add(1);
+        }
+        (self.matching_revision, Arc::clone(&self.matching))
     }
 }
 struct AvailableNetwork {
@@ -572,6 +535,7 @@ struct AutoJoinListCache {
     catalog: Vec<PublicNetwork>,
     draft: Vec<JoinNetwork>,
     ordered: Arc<[AvailableNetwork]>,
+    revision: u64,
 }
 impl AutoJoinListCache {
     fn refresh(
@@ -662,6 +626,7 @@ impl AutoJoinListCache {
         self.draft = draft.to_vec();
         self.network_revision = networks.revision;
         self.initialized = true;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
@@ -693,7 +658,11 @@ pub struct App {
     system_language: Language,
     snapshot: Snapshot,
     peer_list: PeerListCache,
-    peer_rows: PeerRowCache,
+    peer_rows: VirtualRows<u64, RowLayout>,
+    /// The peer whose Manage menu is open stays built while scrolled away.
+    peer_menu: Option<u64>,
+    catalog_rows: VirtualRows<String, RowLayout>,
+    auto_join_rows: VirtualRows<String, RowLayout>,
     network_list: NetworkListCache,
     public_list: PublicNetworkListCache,
     auto_join_list: AutoJoinListCache,
@@ -805,7 +774,10 @@ impl App {
             system_language: Language::system(),
             snapshot: Snapshot::default(),
             peer_list: PeerListCache::default(),
-            peer_rows: PeerRowCache::default(),
+            peer_rows: VirtualRows::default(),
+            peer_menu: None,
+            catalog_rows: VirtualRows::eager_up_to(EAGER_ROWS),
+            auto_join_rows: VirtualRows::eager_up_to(EAGER_ROWS),
             network_list: NetworkListCache::default(),
             public_list: PublicNetworkListCache::default(),
             auto_join_list: AutoJoinListCache::default(),
@@ -1854,7 +1826,7 @@ impl App {
                         | Phase::Resetting
                         | Phase::Disconnecting
                 ) {
-                    ui.spinner();
+                    spinner(ui);
                 } else {
                     ui.label(
                         RichText::new(self.language().text("IPv4 · per-peer transport"))
@@ -2163,20 +2135,12 @@ impl App {
             &self.settings,
         );
         let mut peer_rows = std::mem::take(&mut self.peer_rows);
-        if peer_rows.peer_revision != peer_list.revision {
-            peer_rows
-                .rows
-                .retain(|rid, _| self.snapshot.peers.contains_key(rid));
-            peer_rows.peer_revision = peer_list.revision;
-        }
+        let own_role = self.selected_network.as_ref().and_then(|network| {
+            let (rid, _) = self.identity.as_ref()?;
+            self.snapshot.roles.get(network)?.get(rid).copied()
+        });
         card().inner_margin(14).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            peer_rows.refresh_layout(
-                ui,
-                language,
-                &self.settings,
-                self.selected_network.is_some(),
-            );
             if peer_list.visible.is_empty() {
                 ui.add_space(15.);
                 ui.label(
@@ -2187,9 +2151,39 @@ impl App {
                 );
                 ui.add_space(15.);
             }
-            let keep_menus_alive = egui::Popup::is_any_open(ui.ctx());
-            for (index, display_index) in peer_list.visible.iter().enumerate() {
-                let display = &peer_list.peers[*display_index];
+            let settings = [
+                self.settings.show_internal_ids,
+                self.settings.show_peer_details,
+                self.settings.show_peer_ip,
+                self.selected_network.is_some(),
+            ];
+            peer_rows.update(
+                peer_list.revision,
+                RowLayout::new(ui, language, settings),
+                || {
+                    let peers = &peer_list.peers;
+                    peer_list
+                        .visible
+                        .iter()
+                        .map(|index| peers[*index].key)
+                        .collect()
+                },
+            );
+            let count = peer_list.visible.len();
+            let roles = self
+                .selected_network
+                .as_ref()
+                .and_then(|network| self.snapshot.roles.get(network));
+            let plan = peer_rows.plan(ui, self.peer_menu.as_ref(), |index| {
+                let peer = &self.snapshot.peers[&peer_list.peers[peer_list.visible[index]].key];
+                let role = roles.and_then(|roles| roles.get(&peer.peer.rid).copied());
+                let ping = self.pings.get(&peer.peer.rid);
+                peer_row_kind(peer, ping, role, &self.settings, index + 1 < count)
+            });
+            // Only rows in view are built; the others keep their measured space.
+            let mut open_menu = None;
+            peer_rows.show(ui, egui::Id::new("peer-rows"), plan, |ui, index| {
+                let display = &peer_list.peers[peer_list.visible[index]];
                 let peer = &self.snapshot.peers[&display.key];
                 let role = self.selected_network.as_ref().and_then(|network| {
                     self.snapshot
@@ -2198,212 +2192,173 @@ impl App {
                         .get(&peer.peer.rid)
                         .copied()
                 });
-                let own_role = self.selected_network.as_ref().and_then(|network| {
-                    let (rid, _) = self.identity.as_ref()?;
-                    self.snapshot.roles.get(network)?.get(rid).copied()
-                });
-                let separator = index + 1 < peer_list.visible.len();
-                if let Some(row) = peer_rows.rows.get(&display.key).filter(|row| {
-                    row.matches(
-                        peer,
-                        self.pings.get(&peer.peer.rid),
-                        role,
-                        own_role,
-                        separator,
-                    )
-                }) {
-                    let size = Vec2::new(ui.available_width(), row.height);
-                    let rect = egui::Rect::from_min_size(ui.next_widget_position(), size);
-                    if !keep_menus_alive && !ui.is_rect_visible(rect) {
-                        // Same allocation and spacing as push_id, with no
-                        // widgets, text layout, or actions for an offscreen row.
-                        ui.allocate_space(size);
-                        continue;
-                    }
-                }
-                let response = ui.push_id(peer.peer.rid, |ui| {
-                    ui.horizontal(|ui| {
-                        let color = peer_color(&peer.status);
-                        dot(ui, color);
-                        let width = (ui.available_width() - 330.).max(100.);
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(
-                                width,
-                                if self.settings.show_internal_ids {
-                                    58.
-                                } else {
-                                    43.
-                                },
-                            ),
-                            egui::Layout::top_down(Align::LEFT),
-                            |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&peer.peer.name).size(13.).strong(),
-                                    )
+                let separator = index + 1 < count;
+                ui.horizontal(|ui| {
+                    let color = peer_color(&peer.status);
+                    dot(ui, color);
+                    let width = (ui.available_width() - 330.).max(100.);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(
+                            width,
+                            if self.settings.show_internal_ids {
+                                58.
+                            } else {
+                                43.
+                            },
+                        ),
+                        egui::Layout::top_down(Align::LEFT),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(RichText::new(&peer.peer.name).size(13.).strong())
                                     .truncate(),
-                                )
-                                .on_hover_text(&peer.peer.name);
+                            )
+                            .on_hover_text(&peer.peer.name);
+                            ui.label(
+                                RichText::new(&display.address)
+                                    .monospace()
+                                    .size(11.)
+                                    .color(muted()),
+                            );
+                            if self.settings.show_internal_ids {
                                 ui.label(
-                                    RichText::new(&display.address)
+                                    RichText::new(format!("RID {}", peer.peer.rid))
                                         .monospace()
-                                        .size(11.)
+                                        .size(10.)
                                         .color(muted()),
                                 );
-                                if self.settings.show_internal_ids {
-                                    ui.label(
-                                        RichText::new(format!("RID {}", peer.peer.rid))
-                                            .monospace()
-                                            .size(10.)
-                                            .color(muted()),
-                                    );
-                                }
-                            },
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            let rid = peer.peer.rid;
-                            let pending =
-                                matches!(self.pings.get(&rid), Some(PingState::Pending { .. }));
-                            if ui
-                                .add_enabled(
-                                    can_ping && peer.status == PeerState::Connected && !pending,
-                                    egui::Button::new(language.text("Test RTT")),
-                                )
-                                .clicked()
-                            {
-                                self.next_ping_id = self.next_ping_id.wrapping_add(1);
-                                let id = self.next_ping_id;
-                                self.pings.insert(
-                                    rid,
-                                    PingState::Pending {
-                                        id,
-                                        started: Instant::now(),
-                                    },
-                                );
-                                self.backend.send(Action::Engine(Command::Tagged {
+                            }
+                        },
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        let rid = peer.peer.rid;
+                        let pending =
+                            matches!(self.pings.get(&rid), Some(PingState::Pending { .. }));
+                        if ui
+                            .add_enabled(
+                                can_ping && peer.status == PeerState::Connected && !pending,
+                                egui::Button::new(language.text("Test RTT")),
+                            )
+                            .clicked()
+                        {
+                            self.next_ping_id = self.next_ping_id.wrapping_add(1);
+                            let id = self.next_ping_id;
+                            self.pings.insert(
+                                rid,
+                                PingState::Pending {
                                     id,
-                                    command: Box::new(Command::Ping { peer: rid }),
-                                }));
+                                    started: Instant::now(),
+                                },
+                            );
+                            self.backend.send(Action::Engine(Command::Tagged {
+                                id,
+                                command: Box::new(Command::Ping { peer: rid }),
+                            }));
+                        }
+                        match self.pings.get(&rid) {
+                            Some(PingState::Pending { .. }) => {
+                                spinner(ui);
                             }
-                            match self.pings.get(&rid) {
-                                Some(PingState::Pending { .. }) => {
-                                    ui.spinner();
-                                }
-                                Some(PingState::Measured(ms)) => {
-                                    ui.label(
-                                        language
-                                            .format("RTT: {ms} ms", &[("ms", &format!("{ms:.1}"))]),
-                                    );
-                                }
-                                _ => {}
-                            }
-                            if let Some(network) = &self.selected_network {
-                                if own_role == Some(2) {
-                                    ui.add_enabled_ui(can_manage, |ui| {
-                                        ui.menu_button(language.text("Manage"), |ui| {
-                                            let role_action = match role {
-                                                Some(2) => Some(MemberAction::RevokeAdmin),
-                                                Some(1) => Some(MemberAction::GrantAdmin),
-                                                _ => None,
-                                            };
-                                            for action in
-                                                role_action.into_iter().chain([MemberAction::Kick])
-                                            {
-                                                if ui
-                                                    .button(language.text(action.label()))
-                                                    .clicked()
-                                                {
-                                                    self.member_confirmation =
-                                                        Some(MemberConfirmation {
-                                                            network: network.clone(),
-                                                            network_name: self
-                                                                .snapshot
-                                                                .networks
-                                                                .iter()
-                                                                .find(|n| &n.network_id == network)
-                                                                .map(|n| n.name.clone())
-                                                                .unwrap_or_default(),
-                                                            member: peer.peer.rid,
-                                                            member_name: peer.peer.name.clone(),
-                                                            action,
-                                                        });
-                                                    ui.close();
-                                                }
-                                            }
-                                        });
-                                    });
-                                }
-                                badge(
-                                    ui,
-                                    role_label(role, language),
-                                    if role == Some(2) { mint() } else { muted() },
+                            Some(PingState::Measured(ms)) => {
+                                ui.label(
+                                    language.format("RTT: {ms} ms", &[("ms", &format!("{ms:.1}"))]),
                                 );
+                            }
+                            _ => {}
+                        }
+                        if let Some(network) = &self.selected_network {
+                            if own_role == Some(2) {
+                                let menu = ui.add_enabled_ui(can_manage, |ui| {
+                                    ui.menu_button(language.text("Manage"), |ui| {
+                                        let role_action = match role {
+                                            Some(2) => Some(MemberAction::RevokeAdmin),
+                                            Some(1) => Some(MemberAction::GrantAdmin),
+                                            _ => None,
+                                        };
+                                        for action in
+                                            role_action.into_iter().chain([MemberAction::Kick])
+                                        {
+                                            if ui.button(language.text(action.label())).clicked() {
+                                                self.member_confirmation =
+                                                    Some(MemberConfirmation {
+                                                        network: network.clone(),
+                                                        network_name: self
+                                                            .snapshot
+                                                            .networks
+                                                            .iter()
+                                                            .find(|n| &n.network_id == network)
+                                                            .map(|n| n.name.clone())
+                                                            .unwrap_or_default(),
+                                                        member: peer.peer.rid,
+                                                        member_name: peer.peer.name.clone(),
+                                                        action,
+                                                    });
+                                                ui.close();
+                                            }
+                                        }
+                                    })
+                                    .inner
+                                    .is_some()
+                                });
+                                if menu.inner {
+                                    open_menu = Some(display.key);
+                                }
                             }
                             badge(
                                 ui,
-                                language.text(
-                                    peer.transport
-                                        .map(|p| p.label())
-                                        .unwrap_or(peer.status.label()),
-                                ),
-                                color,
-                            )
-                            .on_hover_text(language.message(
-                                if peer.detail.is_empty() {
-                                    peer.status.label()
-                                } else {
-                                    &peer.detail
-                                },
-                            ));
-                        });
-                    });
-                    if let Some(PingState::Failed(error)) = self.pings.get(&peer.peer.rid) {
-                        ui.label(
-                            RichText::new(language.message(error))
-                                .size(11.)
-                                .color(amber()),
-                        );
-                    }
-                    if self.settings.show_peer_details && !peer.detail.is_empty() {
-                        ui.label(
-                            RichText::new(language.message(&peer.detail))
-                                .size(11.)
-                                .color(muted()),
-                        );
-                    }
-                    if self.settings.show_peer_ip && peer.status == PeerState::Connected {
-                        if let (Some(path), Some(endpoint)) = (peer.transport, peer.endpoint) {
-                            let address = if path == openrad::peer::TransportPath::Relay {
-                                language
-                                    .format("Relay IP: {ip}", &[("ip", &endpoint.ip().to_string())])
-                            } else {
-                                language.format(
-                                    "Peer IP: {endpoint}",
-                                    &[("endpoint", &endpoint.to_string())],
-                                )
-                            };
-                            ui.label(RichText::new(address).monospace().size(11.).color(muted()));
+                                role_label(role, language),
+                                if role == Some(2) { mint() } else { muted() },
+                            );
                         }
-                    }
-                    if separator {
-                        ui.separator();
-                    }
+                        badge(
+                            ui,
+                            language.text(
+                                peer.transport
+                                    .map(|p| p.label())
+                                    .unwrap_or(peer.status.label()),
+                            ),
+                            color,
+                        )
+                        .on_hover_text(language.message(
+                            if peer.detail.is_empty() {
+                                peer.status.label()
+                            } else {
+                                &peer.detail
+                            },
+                        ));
+                    });
                 });
-                let height = response.response.rect.height();
-                let ping = self.pings.get(&peer.peer.rid);
-                if let Some(row) = peer_rows
-                    .rows
-                    .get_mut(&display.key)
-                    .filter(|row| row.matches(peer, ping, role, own_role, separator))
-                {
-                    row.height = height;
-                } else {
-                    peer_rows.rows.insert(
-                        display.key,
-                        CachedPeerRow::new(height, peer, ping, role, own_role, separator),
+                if let Some(PingState::Failed(error)) = self.pings.get(&peer.peer.rid) {
+                    ui.label(
+                        RichText::new(language.message(error))
+                            .size(11.)
+                            .color(amber()),
                     );
                 }
-            }
+                if self.settings.show_peer_details && !peer.detail.is_empty() {
+                    ui.label(
+                        RichText::new(language.message(&peer.detail))
+                            .size(11.)
+                            .color(muted()),
+                    );
+                }
+                if self.settings.show_peer_ip && peer.status == PeerState::Connected {
+                    if let (Some(path), Some(endpoint)) = (peer.transport, peer.endpoint) {
+                        let address = if path == openrad::peer::TransportPath::Relay {
+                            language.format("Relay IP: {ip}", &[("ip", &endpoint.ip().to_string())])
+                        } else {
+                            language.format(
+                                "Peer IP: {endpoint}",
+                                &[("endpoint", &endpoint.to_string())],
+                            )
+                        };
+                        ui.label(RichText::new(address).monospace().size(11.).color(muted()));
+                    }
+                }
+                if separator {
+                    ui.separator();
+                }
+            });
+            self.peer_menu = open_menu;
         });
         self.peer_list = peer_list;
         self.peer_rows = peer_rows;
@@ -2468,7 +2423,7 @@ impl App {
                     self.cursor = 0;
                 }
                 if self.search_in_flight.is_some() {
-                    ui.spinner();
+                    spinner(ui);
                 }
             });
             ui.label(
@@ -2485,20 +2440,18 @@ impl App {
             self.search_due = Some(Instant::now() + SEARCH_DEBOUNCE);
         }
         if let Some(due) = self.search_due {
-            if Instant::now() >= due
-                && !self.mutation_busy()
-                && self.search_in_flight.is_none()
-                && self.connected()
-            {
+            let now = Instant::now();
+            if now < due {
+                ui.ctx().request_repaint_after(due - now);
+            } else if !self.mutation_busy() && self.search_in_flight.is_none() && self.connected() {
                 self.command(Command::Search {
                     query: self.query.trim().to_owned(),
                     cursor: 0,
                 });
             } else {
-                ui.ctx().request_repaint_after(
-                    due.saturating_duration_since(Instant::now())
-                        .max(Duration::from_millis(20)),
-                );
+                // Search results, operation results and phase changes wake the
+                // UI; this only bounds the wait, without polling every frame.
+                ui.ctx().request_repaint_after(SEARCH_RETRY);
             }
         }
         ui.add_space(18.);
@@ -2545,7 +2498,7 @@ impl App {
                         .color(muted()),
                 );
                 if self.busy {
-                    ui.spinner();
+                    spinner(ui);
                     ui.label(RichText::new(language.text("Working…")).color(muted()));
                 }
             });
@@ -2553,59 +2506,67 @@ impl App {
             let filter = self.query.trim().to_lowercase();
             self.network_list
                 .refresh(&self.snapshot, &self.network_preferences.favorites);
-            for display in self
-                .public_networks()
-                .iter()
-                .filter(|display| display.normalized_name.contains(&filter))
-            {
-                let network = &display.network;
+            let public = self.public_networks();
+            let (revision, matching) = self.public_list.matching(&filter);
+            let mut rows = std::mem::take(&mut self.catalog_rows);
+            rows.update(revision, RowLayout::new(ui, language, [false; 4]), || {
+                matching
+                    .iter()
+                    .map(|index| public[*index].network.name.clone())
+                    .collect()
+            });
+            let joined_names = &self.network_list.joined_names;
+            let plan = rows.plan(ui, None, |index| {
+                u64::from(joined_names.contains(&public[matching[index]].network.name))
+            });
+            rows.show(ui, egui::Id::new("catalog-rows"), plan, |ui, index| {
+                let network = &public[matching[index]].network;
                 let joined = self.network_list.joined_names.contains(&network.name);
-                ui.push_id(&network.name, |ui| {
-                    card().inner_margin(18).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            self.favorite_button(ui, &network.name, false);
-                            let width = (ui.available_width() - 110.).max(150.);
-                            ui.allocate_ui_with_layout(
-                                Vec2::new(width, 45.),
-                                egui::Layout::top_down(Align::LEFT),
-                                |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&network.name).size(16.).strong(),
-                                        )
-                                        .truncate(),
+                card().inner_margin(18).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        self.favorite_button(ui, &network.name, false);
+                        let width = (ui.available_width() - 110.).max(150.);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(width, 45.),
+                            egui::Layout::top_down(Align::LEFT),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&network.name).size(16.).strong(),
                                     )
-                                    .on_hover_text(&network.name);
-                                    ui.add_space(5.);
-                                    ui.label(
-                                        RichText::new(language.message(&format!(
-                                            "Public network  ·  {} members reported",
-                                            network.reported_count
-                                        )))
-                                        .size(11.)
-                                        .color(muted()),
-                                    );
-                                },
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                                if joined {
-                                    badge(ui, language.text("Joined"), mint());
-                                } else if ui
-                                    .add_enabled(
-                                        !self.mutation_busy(),
-                                        primary(language.text("Join network")),
-                                    )
-                                    .clicked()
-                                {
-                                    self.command(Command::Join(network.name.clone()));
-                                }
-                            });
+                                    .truncate(),
+                                )
+                                .on_hover_text(&network.name);
+                                ui.add_space(5.);
+                                ui.label(
+                                    RichText::new(language.message(&format!(
+                                        "Public network  ·  {} members reported",
+                                        network.reported_count
+                                    )))
+                                    .size(11.)
+                                    .color(muted()),
+                                );
+                            },
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if joined {
+                                badge(ui, language.text("Joined"), mint());
+                            } else if ui
+                                .add_enabled(
+                                    !self.mutation_busy(),
+                                    primary(language.text("Join network")),
+                                )
+                                .clicked()
+                            {
+                                self.command(Command::Join(network.name.clone()));
+                            }
                         });
-                        self.join_selection_button(ui, &network.name, false);
                     });
-                    ui.add_space(9.);
+                    self.join_selection_button(ui, &network.name, false);
                 });
-            }
+                ui.add_space(9.);
+            });
+            self.catalog_rows = rows;
             if self.cursor != 0
                 && self.catalog_query == self.query.trim()
                 && self.search_in_flight.is_none()
@@ -2752,7 +2713,7 @@ impl App {
                 .color(muted()),
             );
             if active {
-                ui.spinner();
+                spinner(ui);
             }
         });
         if !self.connected() {
@@ -2781,98 +2742,123 @@ impl App {
                 .color(muted()),
             );
         }
-        for network in available.iter() {
+        let mut rows = std::mem::take(&mut self.auto_join_rows);
+        rows.update(
+            self.auto_join_list.revision,
+            RowLayout::new(ui, language, [false; 4]),
+            || {
+                available
+                    .iter()
+                    .map(|network| network.name.clone())
+                    .collect()
+            },
+        );
+        let run = &self.join_run;
+        let plan = rows.plan(ui, None, |index| {
+            let network = &available[index];
+            let name = network.name.as_str();
+            let password = network.selected && network.private && !network.joined && !active;
+            let status = run.results.contains_key(name)
+                || run.pending.values().any(|pending| pending == name)
+                || (active && network.selected);
+            u64::from(network.selected)
+                | u64::from(password) << 1
+                | u64::from(network.joined) << 2
+                | u64::from(status) << 3
+        });
+        rows.show(ui, egui::Id::new("auto-join-rows"), plan, |ui, index| {
+            let network = &available[index];
             let name = network.name.as_str();
             let mut private = network.private;
             let mut selected = network.selected;
             let joined = network.joined;
-            ui.push_id(name, |ui| {
-                card().inner_margin(14).show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .add_enabled(!active, egui::Checkbox::new(&mut selected, name))
-                            .changed()
-                        {
-                            self.select_join_network(
-                                JoinNetwork {
-                                    name: name.to_owned(),
-                                    private,
-                                },
-                                selected,
-                            );
-                        }
-                        self.favorite_button(ui, name, private);
-                        if joined {
-                            let pending = self.membership_pending(name);
-                            badge(
-                                ui,
-                                language.text(if pending {
-                                    "Pending approval"
-                                } else {
-                                    "Joined"
-                                }),
-                                if pending { amber() } else { mint() },
-                            );
-                        }
-                    });
-                    if selected {
-                        if ui
-                            .add_enabled(
-                                !active,
-                                egui::Checkbox::new(&mut private, language.text("Private network")),
-                            )
-                            .changed()
-                        {
-                            if let Some(network) = self
-                                .join_draft
-                                .iter_mut()
-                                .find(|network| network.name == name)
-                            {
-                                network.private = private;
-                            }
-                            self.join_passwords.remove(name);
-                        }
-                        if private && !joined && !active {
-                            let label = ui.label(language.text("Password"));
-                            let password = self.join_passwords.entry(name.to_owned()).or_default();
-                            ui.add(
-                                egui::TextEdit::singleline(&mut **password)
-                                    .password(true)
-                                    .char_limit(256)
-                                    .desired_width(f32::INFINITY),
-                            )
-                            .labelled_by(label.id);
-                        }
-                    }
-                    if let Some((message, error)) = self.join_run.results.get(name) {
-                        ui.label(
-                            RichText::new(language.message(message))
-                                .size(12.)
-                                .color(if *error { red() } else { mint() }),
-                        );
-                    } else if self
-                        .join_run
-                        .pending
-                        .values()
-                        .any(|pending| pending.as_str() == name)
+            card().inner_margin(14).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(!active, egui::Checkbox::new(&mut selected, name))
+                        .changed()
                     {
-                        ui.label(
-                            RichText::new(language.text("Joining…"))
-                                .size(12.)
-                                .color(blue()),
+                        self.select_join_network(
+                            JoinNetwork {
+                                name: name.to_owned(),
+                                private,
+                            },
+                            selected,
                         );
-                    } else if active && selected {
-                        ui.label(
-                            RichText::new(language.text("Waiting to join…"))
-                                .size(12.)
-                                .color(muted()),
+                    }
+                    self.favorite_button(ui, name, private);
+                    if joined {
+                        let pending = self.membership_pending(name);
+                        badge(
+                            ui,
+                            language.text(if pending {
+                                "Pending approval"
+                            } else {
+                                "Joined"
+                            }),
+                            if pending { amber() } else { mint() },
                         );
                     }
                 });
+                if selected {
+                    if ui
+                        .add_enabled(
+                            !active,
+                            egui::Checkbox::new(&mut private, language.text("Private network")),
+                        )
+                        .changed()
+                    {
+                        if let Some(network) = self
+                            .join_draft
+                            .iter_mut()
+                            .find(|network| network.name == name)
+                        {
+                            network.private = private;
+                        }
+                        self.join_passwords.remove(name);
+                    }
+                    if private && !joined && !active {
+                        let label = ui.label(language.text("Password"));
+                        let password = self.join_passwords.entry(name.to_owned()).or_default();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut **password)
+                                .password(true)
+                                .char_limit(256)
+                                .desired_width(f32::INFINITY),
+                        )
+                        .labelled_by(label.id);
+                    }
+                }
+                if let Some((message, error)) = self.join_run.results.get(name) {
+                    ui.label(
+                        RichText::new(language.message(message))
+                            .size(12.)
+                            .color(if *error { red() } else { mint() }),
+                    );
+                } else if self
+                    .join_run
+                    .pending
+                    .values()
+                    .any(|pending| pending.as_str() == name)
+                {
+                    ui.label(
+                        RichText::new(language.text("Joining…"))
+                            .size(12.)
+                            .color(blue()),
+                    );
+                } else if active && selected {
+                    ui.label(
+                        RichText::new(language.text("Waiting to join…"))
+                            .size(12.)
+                            .color(muted()),
+                    );
+                }
             });
-            ui.add_space(8.);
-        }
+            // The same 8-point gap between cards as outside a row scope.
+            ui.add_space(8. - ui.spacing().item_spacing.y);
+        });
+        self.auto_join_rows = rows;
     }
     fn broadcast_settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -3797,7 +3783,7 @@ impl App {
                 ui.label(language.text(
                     "The VPN session stays available to the CLI. Use Disconnect to stop it.",
                 ));
-                ui.spinner();
+                spinner(ui);
             });
         }
         self.advance_join(&ctx, Instant::now());
@@ -3924,6 +3910,34 @@ fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
             ui.label(RichText::new(text).size(11.).color(color))
         })
         .response
+}
+/// Loading indicators animate at this interval. egui's spinner requests a
+/// repaint every frame, redrawing the whole window at the display refresh rate
+/// for as long as a connection, search, join or RTT probe is pending.
+const SPINNER_FRAME: Duration = Duration::from_millis(33);
+
+/// egui's spinner, animated at [`SPINNER_FRAME`] instead of every frame.
+fn spinner(ui: &mut egui::Ui) -> egui::Response {
+    let size = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+    if ui.is_rect_visible(rect) {
+        ui.ctx().request_repaint_after(SPINNER_FRAME);
+        let radius = rect.height().min(rect.width()) / 2. - 2.;
+        let count = (radius.round() as u32).clamp(8, 128);
+        let time = ui.input(|i| i.time);
+        let start = time * std::f64::consts::TAU;
+        let end = start + 240f64.to_radians() * time.sin();
+        let points = (0..count)
+            .map(|i| {
+                let (sin, cos) = egui::lerp(start..=end, f64::from(i) / f64::from(count)).sin_cos();
+                rect.center() + radius * Vec2::new(cos as f32, sin as f32)
+            })
+            .collect();
+        let stroke = Stroke::new(3., ui.visuals().strong_text_color());
+        ui.painter().add(egui::Shape::line(points, stroke));
+    }
+    response
 }
 fn dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(12., 14.), egui::Sense::hover());
@@ -5424,34 +5438,57 @@ mod tests {
             [("α", 1), ("alpha", 2), ("Beta", 3), ("beta", 4)]
         );
     }
+    fn sized_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        size: Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        );
+        output.textures_delta.clear();
+        output
+    }
+    fn peer_labels(output: &egui::FullOutput) -> usize {
+        labels(output)
+            .iter()
+            .filter(|label| label.starts_with("Synthetic peer"))
+            .count()
+    }
     #[test]
-    fn peer_rows_keep_exact_scroll_extent_and_remeasure_layout_changes() {
+    fn peer_rows_build_only_visible_rows_with_exact_extents_across_layout_changes() {
         let mut fixture = Fixture::new();
         let app = fixture.app();
         app.phase = Phase::Connected;
         app.settings.language = LanguagePreference::English;
         app.settings.show_traffic = false;
-        app.settings.show_peer_details = true;
         app.snapshot.networks = vec![Network {
             name: "LAN".into(),
             network_id: "a".into(),
         }];
-        for rid in 1..=80 {
+        for rid in 1..=2000 {
             app.snapshot.peers.insert(
                 rid,
-                cached_peer(rid, &format!("Synthetic peer {rid:03}"), &["a"]),
+                cached_peer(rid, &format!("Synthetic peer {rid:04}"), &["a"]),
             );
         }
         let ctx = egui::Context::default();
         configure(&ctx);
         ctx.enable_accesskit();
-        let render = |app: &mut App| {
+        let render = |app: &mut App, width: f32| {
             let mut extent = Vec2::ZERO;
+            let passes = ctx.cumulative_pass_nr();
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        Vec2::new(780., 540.),
+                        Vec2::new(width, 900.),
                     )),
                     ..Default::default()
                 },
@@ -5465,64 +5502,155 @@ mod tests {
                 },
             );
             output.textures_delta.clear();
-            (output, extent)
+            (output, extent.y, ctx.cumulative_pass_nr() - passes)
         };
-        // Warm the actual row measurements and scrollbar width.
-        for _ in 0..3 {
-            render(app);
-        }
-        let (output, extent) = render(app);
-        assert_eq!(app.peer_rows.rows.len(), 80);
+        let settle = |app: &mut App, width: f32| {
+            for _ in 0..3 {
+                render(app, width);
+            }
+            render(app, width)
+        };
+        let (output, extent, passes) = settle(app, 780.);
+        assert_eq!(passes, 1, "a settled list needs no extra pass");
+        assert!(peer_labels(&output) < 20);
+        let row = |output: &egui::FullOutput, rid: u64| {
+            node_rect(output, &format!("Synthetic peer {rid:04}")).top()
+        };
+        let stride = row(&output, 2) - row(&output, 1);
+        assert!(stride > 30.);
+        let (_, stable, _) = render(app, 780.);
+        assert_eq!(stable, extent);
+        // Removing a peer that was never shown shortens the list by exactly
+        // one row: unshown rows reserve the height measured for their kind.
+        app.snapshot.peers.remove(&1500);
+        let (_, shorter, _) = settle(app, 780.);
         assert!(
-            labels(&output)
-                .iter()
-                .filter(|label| label.starts_with("Synthetic peer"))
-                .count()
-                < 20
+            (extent - shorter - stride).abs() < 0.1,
+            "{extent} {shorter} {stride}"
         );
-        let (_, next_extent) = render(app);
-        assert!((extent.y - next_extent.y).abs() < 0.1);
-        let old_height = app.peer_rows.rows[&80].height;
-        let peer = app.snapshot.peers.get_mut(&80).unwrap();
+        // Resizing re-measures only the rows in view instead of every peer.
+        for width in [700., 640., 760., 900.] {
+            let (output, _, passes) = render(app, width);
+            assert!(passes <= 2);
+            assert!(peer_labels(&output) < 20, "{width}");
+        }
+        // Lines added to a visible row move the rows below it.
+        let output = settle(app, 780.).0;
+        let below = row(&output, 3);
+        let peer = app.snapshot.peers.get_mut(&2).unwrap();
         peer.transport = Some(openrad::peer::TransportPath::DirectUdp);
-        peer.endpoint = Some("192.0.2.80:12345".parse().unwrap());
+        peer.endpoint = Some("192.0.2.2:12345".parse().unwrap());
         app.settings.show_peer_ip = true;
-        render(app);
-        assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
-        app.settings.show_peer_ip = false;
-        render(app);
-        assert!((app.peer_rows.rows[&80].height - old_height).abs() < 0.1);
-        app.snapshot.peers.get_mut(&80).unwrap().endpoint =
-            Some("[2001:db8::80]:23456".parse().unwrap());
-        assert!(!app.peer_rows.rows[&80].matches(
-            &app.snapshot.peers[&80],
-            None,
-            None,
-            None,
-            false
-        ));
-        render(app);
-        app.settings.show_internal_ids = true;
-        render(app);
-        assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
-        let old_height = app.peer_rows.rows[&80].height;
-        app.snapshot.peers.get_mut(&80).unwrap().detail =
+        let output = settle(app, 780.).0;
+        assert!(labels(&output).contains(&"Peer IP: 192.0.2.2:12345".to_owned()));
+        assert!(row(&output, 3) >= below + 14.);
+        assert!((row(&output, 5) - row(&output, 4) - stride).abs() < 0.1);
+        let below = row(&output, 3);
+        app.settings.show_peer_details = true;
+        app.snapshot.peers.get_mut(&2).unwrap().detail =
             "Long synthetic connection detail that wraps across several lines. ".repeat(6);
         app.pings
-            .insert(80, PingState::Failed("Synthetic ping failure".into()));
-        render(app);
-        assert!(app.peer_rows.rows[&80].height > old_height);
-        let cached = &app.peer_rows.rows[&80];
-        assert!(cached.matches(
-            &app.snapshot.peers[&80],
-            app.pings.get(&80),
-            None,
-            None,
-            false
-        ));
-        app.snapshot.peers.remove(&80);
-        render(app);
-        assert!(!app.peer_rows.rows.contains_key(&80));
+            .insert(2, PingState::Failed("Synthetic ping failure".into()));
+        let (output, extent, _) = settle(app, 780.);
+        assert!(labels(&output).contains(&"Synthetic ping failure".to_owned()));
+        assert!(row(&output, 3) > below + 28.);
+        assert!(peer_labels(&output) < 20);
+        app.snapshot.peers.remove(&2);
+        let (output, shorter, _) = settle(app, 780.);
+        assert!(!labels(&output).contains(&"Synthetic peer 0002".to_owned()));
+        assert!(extent - shorter > stride + 28.);
+    }
+
+    #[test]
+    fn open_peer_menu_stays_open_when_a_roster_update_moves_its_row_out_of_view() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        app.phase = Phase::Connected;
+        app.settings.language = LanguagePreference::English;
+        app.settings.show_traffic = false;
+        app.identity = Some((1, "Synthetic device".into()));
+        app.selected_network = Some("a".into());
+        app.snapshot.networks = vec![Network {
+            name: "LAN".into(),
+            network_id: "a".into(),
+        }];
+        let mut roles = BTreeMap::from([(1, 2)]);
+        for rid in 2..=400 {
+            app.snapshot.peers.insert(
+                rid,
+                cached_peer(rid, &format!("Synthetic peer {rid:04}"), &["a"]),
+            );
+            roles.insert(rid, 1);
+        }
+        app.snapshot.roles.insert("a".into(), roles);
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        ctx.enable_accesskit();
+        let size = Vec2::new(780., 1100.);
+        sized_frame(&ctx, app, size, vec![]);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        let manage = output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter(|(_, node)| {
+                node.role() == egui::accesskit::Role::Button && node.label() == Some("Manage")
+            })
+            .filter_map(|(_, node)| node.bounds())
+            .min_by(|a, b| a.y0.total_cmp(&b.y0))
+            .expect("the first peer row is in view");
+        let pos = egui::pos2(
+            ((manage.x0 + manage.x1) / 2.) as f32,
+            ((manage.y0 + manage.y1) / 2.) as f32,
+        );
+        for pressed in [true, false] {
+            sized_frame(
+                &ctx,
+                app,
+                size,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(labels(&output).contains(&"Remove member".to_owned()));
+        assert_eq!(app.peer_menu, Some(2));
+        // Renaming sorts the peer last, far below the view. Its row alone is
+        // still built, so egui keeps its menu open.
+        app.snapshot.peers.get_mut(&2).unwrap().peer.name = "Synthetic peer zz".into();
+        sized_frame(&ctx, app, size, vec![]);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(egui::Popup::is_any_open(&ctx));
+        assert!(labels(&output).contains(&"Remove member".to_owned()));
+        assert!(labels(&output).contains(&"Synthetic peer zz".to_owned()));
+        assert!(peer_labels(&output) < 40);
+        // Closing the menu releases the row.
+        sized_frame(
+            &ctx,
+            app,
+            size,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        sized_frame(&ctx, app, size, vec![]);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert_eq!(app.peer_menu, None);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(!labels(&output).contains(&"Synthetic peer zz".to_owned()));
     }
 
     #[test]
@@ -6828,5 +6956,160 @@ mod tests {
         }));
         app.consume(&ctx);
         assert!(matches!(app.pings.get(&2), Some(PingState::Measured(ms)) if *ms == 17.));
+    }
+    /// Render settled frames with advancing time; return the last output.
+    fn timed_frames(ctx: &egui::Context, app: &mut App, frames: u32) -> egui::FullOutput {
+        let start = ctx.input(|i| i.time);
+        let mut last = None;
+        for frame in 1..=frames {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1120., 1600.),
+                    )),
+                    time: Some(start + f64::from(frame) / 60.),
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            );
+            output.textures_delta.clear();
+            last = Some(output);
+        }
+        last.unwrap()
+    }
+    fn repaint_delay(output: &egui::FullOutput) -> Duration {
+        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    #[test]
+    fn pending_work_animates_without_repainting_every_frame() {
+        type Setup = fn(&mut App);
+        let cases: [(&str, Setup); 6] = [
+            ("connecting", |app| app.phase = Phase::Connecting),
+            ("loading", |app| app.phase = Phase::Loading),
+            ("RTT probe", |app| {
+                app.pings.insert(
+                    2,
+                    PingState::Pending {
+                        id: 1,
+                        started: Instant::now(),
+                    },
+                );
+            }),
+            ("search", |app| {
+                app.page = Page::Discover;
+                app.search_in_flight = Some(String::new());
+                app.has_searched = true;
+            }),
+            ("auto join", |app| {
+                app.page = Page::AutoJoin;
+                app.join_run.pending.insert(1, "LAN".into());
+            }),
+            ("closing", |app| app.closing = true),
+        ];
+        for (name, setup) in cases {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.phase = Phase::Connected;
+            app.settings.language = LanguagePreference::English;
+            app.snapshot.networks = vec![Network {
+                name: "LAN".into(),
+                network_id: "a".into(),
+            }];
+            app.snapshot
+                .peers
+                .insert(2, cached_peer(2, "Synthetic peer", &["a"]));
+            setup(app);
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let output = timed_frames(&ctx, app, 60);
+            assert!(
+                output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.role() == egui::accesskit::Role::ProgressIndicator),
+                "{name} shows a loading indicator"
+            );
+            // Animated, but at a bounded rate rather than every display refresh.
+            let delay = repaint_delay(&output);
+            assert!(
+                delay >= SPINNER_FRAME - Duration::from_millis(17) && delay <= SPINNER_FRAME,
+                "{name}: {delay:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_due_search_waits_for_wake_ups_instead_of_polling() {
+        for (connected, in_flight) in [(false, false), (true, true)] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.settings.language = LanguagePreference::English;
+            app.page = Page::Discover;
+            app.has_searched = true;
+            if connected {
+                app.phase = Phase::Connected;
+            }
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            timed_frames(&ctx, app, 30);
+            app.search_due = Some(Instant::now() - Duration::from_millis(1));
+            app.search_in_flight = in_flight.then(String::new);
+            let output = timed_frames(&ctx, app, 30);
+            assert!(app.search_due.is_some(), "the search stays due");
+            if in_flight {
+                // The in-flight spinner animates; the search does not add work.
+                assert!(repaint_delay(&output) >= SPINNER_FRAME - Duration::from_millis(17));
+            } else {
+                assert!(repaint_delay(&output) >= SEARCH_RETRY - Duration::from_millis(17));
+            }
+        }
+    }
+
+    #[test]
+    fn long_network_lists_build_only_rows_in_view_and_short_lists_build_every_row() {
+        for (count, page) in [
+            (EAGER_ROWS, Page::Discover),
+            (EAGER_ROWS, Page::AutoJoin),
+            (600, Page::Discover),
+            (600, Page::AutoJoin),
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.phase = Phase::Connected;
+            app.settings.language = LanguagePreference::English;
+            app.page = page;
+            app.has_searched = true;
+            app.catalog = (0..count)
+                .map(|index| PublicNetwork {
+                    name: format!("Synthetic lobby {index:04}"),
+                    reported_count: index as u32,
+                })
+                .collect();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let size = Vec2::new(780., 1200.);
+            sized_frame(&ctx, app, size, vec![]);
+            let output = sized_frame(&ctx, app, size, vec![]);
+            let built = labels(&output)
+                .iter()
+                .filter(|label| label.starts_with("Synthetic lobby"))
+                .count();
+            // The first rows are in view; the list starts below the page header.
+            assert!(labels(&output).contains(&"Synthetic lobby 0000".to_owned()));
+            assert!(labels(&output).contains(&"Synthetic lobby 0002".to_owned()));
+            if count <= EAGER_ROWS {
+                assert!(built >= count, "{count}: {built}");
+            } else {
+                assert!(built < 40, "{count}: {built}");
+            }
+        }
     }
 }
