@@ -111,6 +111,25 @@ def main():
     if blocked.returncode != 1 or (test / 'wine-prefix/drive_c/OpenRadBlocked').exists():
         raise AssertionError('Failed Radmin preparation copied files or configured/launched OpenRad')
     checks.append({'case': 'failed Radmin preparation blocks installation before files or TAP setup', 'result': 'passed'})
+    # The persistent setup log is UTF-16LE with a BOM and records each run's
+    # worker exit codes and final result, including the silent failure above.
+    logs = list((drive / 'users').glob('*/AppData/Local/OpenRad/logs/setup.log'))
+    if len(logs) != 1:
+        raise AssertionError(f'Expected one setup.log in the Wine profile, found {logs}')
+    raw = logs[0].read_bytes()
+    if not raw.startswith(b'\xff\xfe'):
+        raise AssertionError('setup.log has no UTF-16LE BOM')
+    text = raw[2:].decode('utf-16-le')
+    runs = text.count('==== OpenRad setup 0.0.0 started ====')
+    for expected, minimum in [('Worker configure exit code: 0', 1),
+                              ('Setup finished; exit code 0: installed', 1),
+                              ('Setup finished; exit code 0: already installed', 1),
+                              ('Setup finished; exit code 1: Radmin VPN preparation failed', 1)]:
+        if text.count(expected) < minimum:
+            raise AssertionError(f'setup.log lacks {expected!r}:\n{text}')
+    if runs != len(checks) or text.count('Setup finished;') != runs or 'exit code -1' in text:
+        raise AssertionError(f'setup.log does not record one result per run ({runs} runs):\n{text}')
+    checks.append({'case': 'setup.log records every run, worker exit code and failure', 'result': 'passed'})
     print(json.dumps({'environment': command([args.wine, '--version'], environment) + ' on Linux',
                       'fixture_directory': str(test), 'silent_control_flow_only': True,
                       'real_openrad_executed': False,

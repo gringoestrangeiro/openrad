@@ -34,6 +34,9 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   `bridge.forward-player-address: false` restaura o comportamento anterior. Outras conexoes nao
   sao alteradas.
 - **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
+- **Windows (instalador):** `setup.log` persistente (UTF-16LE) em `%LOCALAPPDATA%\OpenRad\logs`
+  registra cada etapa, codigo de saida do worker e resultado; o worker de setup grava suas etapas
+  SetupAPI e o inventario de adaptadores TAP em `setup-worker-startup.log`.
 
 ## 2.2.0 — 2026-11-01
 
