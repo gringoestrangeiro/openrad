@@ -1,10 +1,10 @@
 # OpenRad
 
-[![OpenRad intro animation](docs/assets/openrad-intro.gif)](docs/assets/openrad-intro.mp4)
+[![OpenRad animated logo — click to watch the full video](docs/assets/openrad-intro.gif)](docs/assets/openrad-intro.mp4)
 
-[Watch the OpenRad intro animation (silent MP4)](docs/assets/openrad-intro.mp4)
+[Watch the full OpenRad logo animation (1080p, 24 FPS, 9 seconds, no audio)](docs/assets/openrad-intro.mp4)
 
-The Windows desktop shows the OpenRad logo animation on first launch, then
+The Windows desktop also shows its native OpenRad logo animation on first launch, then
 offers a quick setup to choose a dark/light theme, configure auto-connection,
 and optionally create the **OpenRad** desktop shortcut. The theme can be
 changed at any time in **Settings > Workspace**. These choices are saved to
