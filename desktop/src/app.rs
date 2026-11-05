@@ -242,38 +242,129 @@ impl PeerSelection {
             && self.show_offline == settings.show_offline_peers
     }
 }
+
+/// UI-owned snapshots invalidate presentation caches on every mutable access,
+/// including direct field edits. Read-only draws keep their revision. Ordinary
+/// Snapshot callers have no revision and retain content-based cache validation.
+trait SnapshotSource {
+    fn snapshot(&self) -> &Snapshot;
+    fn source_revision(&self) -> Option<u64> {
+        None
+    }
+}
+impl SnapshotSource for Snapshot {
+    fn snapshot(&self) -> &Snapshot {
+        self
+    }
+}
+struct UiSnapshot {
+    value: Snapshot,
+    revision: u64,
+    peer_counts: std::cell::Cell<Option<(usize, usize)>>,
+}
+fn next_snapshot_revision() -> u64 {
+    // Distinguish newly created sources as well as edits of an existing source.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+impl Default for UiSnapshot {
+    fn default() -> Self {
+        Snapshot::default().into()
+    }
+}
+impl From<Snapshot> for UiSnapshot {
+    fn from(value: Snapshot) -> Self {
+        Self {
+            value,
+            revision: next_snapshot_revision(),
+            peer_counts: std::cell::Cell::new(None),
+        }
+    }
+}
+impl UiSnapshot {
+    fn invalidate(&mut self) {
+        self.revision = next_snapshot_revision();
+        self.peer_counts.set(None);
+    }
+    fn replace(&mut self, value: Snapshot) {
+        self.invalidate();
+        self.value = value;
+    }
+    fn peer_counts(&self) -> (usize, usize) {
+        if let Some(counts) = self.peer_counts.get() {
+            return counts;
+        }
+        let mut counts = (0, 0);
+        for peer in self.value.peers.values() {
+            counts.0 += usize::from(peer.status == PeerState::Connected);
+            counts.1 += usize::from(matches!(
+                peer.status,
+                PeerState::Online | PeerState::Connecting
+            ));
+        }
+        self.peer_counts.set(Some(counts));
+        counts
+    }
+}
+impl std::ops::Deref for UiSnapshot {
+    type Target = Snapshot;
+    fn deref(&self) -> &Snapshot {
+        &self.value
+    }
+}
+impl std::ops::DerefMut for UiSnapshot {
+    fn deref_mut(&mut self) -> &mut Snapshot {
+        self.invalidate();
+        &mut self.value
+    }
+}
+impl SnapshotSource for UiSnapshot {
+    fn snapshot(&self) -> &Snapshot {
+        &self.value
+    }
+    fn source_revision(&self) -> Option<u64> {
+        Some(self.revision)
+    }
+}
 #[derive(Default)]
 struct PeerListCache {
     peers: Vec<PeerDisplay>,
     visible: Vec<usize>,
     selection: Option<PeerSelection>,
     revision: u64,
+    source_revision: Option<u64>,
 }
 impl PeerListCache {
     fn refresh(
         &mut self,
-        snapshot: &Snapshot,
+        source: &impl SnapshotSource,
         network: Option<&str>,
         filter: &str,
         settings: &Settings,
     ) {
-        let same_keys = self.peers.len() == snapshot.peers.len()
-            && self
-                .peers
-                .iter()
-                .map(|peer| peer.key)
-                .eq(snapshot.peers.keys().copied());
-        let mut changed = !same_keys;
-        if same_keys {
-            for (display, peer) in self.peers.iter_mut().zip(snapshot.peers.values()) {
-                changed |= display.refresh(peer);
+        let source_revision = source.source_revision();
+        let mut changed = false;
+        if source_revision.is_none() || self.source_revision != source_revision {
+            let snapshot = source.snapshot();
+            let same_keys = self.peers.len() == snapshot.peers.len()
+                && self
+                    .peers
+                    .iter()
+                    .map(|peer| peer.key)
+                    .eq(snapshot.peers.keys().copied());
+            changed = !same_keys;
+            if same_keys {
+                for (display, peer) in self.peers.iter_mut().zip(snapshot.peers.values()) {
+                    changed |= display.refresh(peer);
+                }
+            } else {
+                self.peers = snapshot
+                    .peers
+                    .iter()
+                    .map(|(key, peer)| PeerDisplay::new(*key, peer))
+                    .collect();
             }
-        } else {
-            self.peers = snapshot
-                .peers
-                .iter()
-                .map(|(key, peer)| PeerDisplay::new(*key, peer))
-                .collect();
+            self.source_revision = source_revision;
         }
         if self
             .selection
@@ -394,9 +485,19 @@ struct NetworkListCache {
     counts: BTreeMap<String, usize>,
     ordered: Arc<[Network]>,
     revision: u64,
+    source_revision: Option<u64>,
 }
 impl NetworkListCache {
-    fn refresh(&mut self, snapshot: &Snapshot, favorites: &BTreeSet<String>) {
+    fn refresh(&mut self, source: &impl SnapshotSource, favorites: &BTreeSet<String>) {
+        let source_revision = source.source_revision();
+        if source_revision.is_some()
+            && self.source_revision == source_revision
+            && self.favorites == *favorites
+        {
+            return;
+        }
+        self.source_revision = source_revision;
+        let snapshot = source.snapshot();
         let same_networks = same_joined_networks(&self.networks, &snapshot.networks);
         let same_memberships = self.memberships.len() == snapshot.peers.len()
             && self.memberships.iter().zip(&snapshot.peers).all(
@@ -656,7 +757,7 @@ pub struct App {
     block_input: String,
     block_direction: runtime::BlockDirection,
     system_language: Language,
-    snapshot: Snapshot,
+    snapshot: UiSnapshot,
     peer_list: PeerListCache,
     peer_rows: VirtualRows<u64, RowLayout>,
     /// The peer whose Manage menu is open stays built while scrolled away.
@@ -772,7 +873,7 @@ impl App {
             block_direction: runtime::BlockDirection::Both,
             settings,
             system_language: Language::system(),
-            snapshot: Snapshot::default(),
+            snapshot: UiSnapshot::default(),
             peer_list: PeerListCache::default(),
             peer_rows: VirtualRows::default(),
             peer_menu: None,
@@ -881,7 +982,7 @@ impl App {
                     if self.identity.as_ref().is_some_and(|(old, _)| *old != rid) {
                         self.interrupt_join();
                         self.join_passwords.clear();
-                        self.snapshot = Snapshot::default();
+                        self.snapshot.replace(Snapshot::default());
                         self.selected_network = None;
                     }
                     self.identity = Some((rid, name));
@@ -1010,7 +1111,7 @@ impl App {
                     {
                         self.selected_network = None;
                     }
-                    self.snapshot = state;
+                    self.snapshot.replace(state);
                 }
                 Notice::Engine(Update::Catalog {
                     query,
@@ -1885,18 +1986,7 @@ impl App {
                 blue(),
                 self.settings.show_traffic_graphs.then_some(&self.upload),
             );
-            let active = self
-                .snapshot
-                .peers
-                .values()
-                .filter(|p| p.status == PeerState::Connected)
-                .count();
-            let queued = self
-                .snapshot
-                .peers
-                .values()
-                .filter(|p| matches!(p.status, PeerState::Online | PeerState::Connecting))
-                .count();
+            let (active, queued) = self.snapshot.peer_counts();
             metric(
                 &mut cols[2],
                 language.text("PEER CONNECTIONS"),
@@ -3851,7 +3941,10 @@ fn apply_theme(ctx: &egui::Context, preference: ThemePreference) {
     } else {
         egui::Theme::Dark
     };
-    let mut style = (*ctx.style_of(theme)).clone();
+    // Both palettes share the configured typography and control dimensions.
+    // The light theme otherwise starts from egui's defaults (including much
+    // smaller buttons), because configure installs our metrics on Dark.
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = if preference == ThemePreference::Light {
         egui::Visuals::light()
     } else {
@@ -5305,6 +5398,87 @@ mod tests {
         snapshot.peers.insert(3, cached_peer(3, "áLPHA", &["a"]));
         cache.refresh(&snapshot, Some("a"), "Ál", &settings);
         assert_eq!(ids(&cache), [3]);
+    }
+    #[test]
+    fn ui_snapshot_caches_track_edits_replacements_and_notice_transitions() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        let ctx = egui::Context::default();
+        let mut initial = Snapshot {
+            networks: vec![Network {
+                name: "LAN".into(),
+                network_id: "a".into(),
+            }],
+            ..Default::default()
+        };
+        initial.peers.insert(1, cached_peer(1, "Alpha", &["a"]));
+        app.backend
+            .notices
+            .send(Notice::Engine(Update::State(initial)));
+        app.consume(&ctx);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "", &app.settings);
+        assert_eq!(app.snapshot.peer_counts(), (1, 0));
+        assert_eq!(app.network_list.counts["a"], 2);
+        let source_revision = app.snapshot.source_revision();
+        let list_revision = app.peer_list.revision;
+        // Read-only snapshots and repeated draws do not invalidate their data.
+        let mut replacement = app.snapshot.snapshot().clone();
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "alpha", &app.settings);
+        assert_eq!(app.snapshot.source_revision(), source_revision);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        app.peer_list
+            .refresh(&app.snapshot, None, "absent", &app.settings);
+        assert!(app.peer_list.visible.is_empty());
+        assert!(app.peer_list.revision > list_revision);
+
+        // A newly wrapped source with the same keys must not inherit a token
+        // from the previous source. Its different metadata/counts are visible.
+        replacement.peers.get_mut(&1).unwrap().peer.name = "Replacement".into();
+        replacement.peers.get_mut(&1).unwrap().status = PeerState::Online;
+        replacement
+            .roles
+            .insert("a".into(), [(1, 1), (2, 1), (3, 1)].into_iter().collect());
+        app.snapshot = replacement.into();
+        assert_ne!(app.snapshot.source_revision(), source_revision);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "replacement", &app.settings);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        assert_eq!(app.network_list.counts["a"], 3);
+        assert_eq!(app.snapshot.peer_counts(), (0, 1));
+
+        // Direct edits use the same invalidation path as consumed snapshots.
+        app.snapshot.peers.get_mut(&1).unwrap().peer.name = "Edited".into();
+        app.snapshot.peers.get_mut(&1).unwrap().status = PeerState::Connected;
+        app.snapshot.roles.get_mut("a").unwrap().insert(4, 1);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "edited", &app.settings);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        assert_eq!(app.network_list.counts["a"], 4);
+        assert_eq!(app.snapshot.peer_counts(), (1, 0));
+        app.backend.notices.send(Notice::Phase(
+            Phase::Disconnected,
+            "Synthetic disconnect".into(),
+        ));
+        app.consume(&ctx);
+        assert_eq!(app.snapshot.peer_counts(), (0, 0));
+        app.settings.show_offline_peers = false;
+        app.peer_list
+            .refresh(&app.snapshot, None, "", &app.settings);
+        assert!(app.peer_list.visible.is_empty());
+        app.identity = Some((1, "Previous".into()));
+        app.backend.notices.send(Notice::Identity {
+            rid: 2,
+            name: "New identity".into(),
+        });
+        app.consume(&ctx);
+        assert!(app.joined_networks().is_empty());
+        assert_eq!(app.snapshot.peer_counts(), (0, 0));
     }
     #[test]
     fn network_caches_preserve_count_fallbacks_roles_and_join_selection_precedence() {
@@ -6980,6 +7154,25 @@ mod tests {
     }
     fn repaint_delay(output: &egui::FullOutput) -> Duration {
         output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    #[test]
+    fn switching_palettes_preserves_configured_typography_and_control_sizes() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let configured = ctx.style_of(egui::Theme::Dark);
+        for preference in [
+            ThemePreference::Light,
+            ThemePreference::Dark,
+            ThemePreference::Light,
+        ] {
+            apply_theme(&ctx, preference);
+            let style = ctx.global_style();
+            assert_eq!(style.spacing, configured.spacing);
+            assert_eq!(style.text_styles, configured.text_styles);
+            assert_eq!(style.visuals.dark_mode, preference == ThemePreference::Dark);
+        }
+        use_light_palette(false);
     }
 
     #[test]

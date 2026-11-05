@@ -885,6 +885,36 @@ pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration)
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+// The public Reply remains a JSON Value for API callers. IPC can serialize
+// this owned capture directly, without building an intermediate Value tree.
+#[derive(Serialize)]
+struct StatusSnapshot {
+    phase: &'static str,
+    rid: u64,
+    node_name: Option<String>,
+    process_id: u32,
+    preferences: ServicePreferences,
+    interface_disabled: bool,
+    error: Option<String>,
+    #[serde(serialize_with = "serialize_status_snapshot")]
+    snapshot: Option<Arc<Snapshot>>,
+}
+fn serialize_status_snapshot<S>(
+    snapshot: &Option<Arc<Snapshot>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    snapshot.as_deref().serialize(serializer)
+}
+#[derive(Serialize)]
+struct StatusReply<'a> {
+    ok: bool,
+    message: &'static str,
+    data: &'a StatusSnapshot,
+}
+
 struct State {
     identity: Option<Identity>,
     preferences: ServicePreferences,
@@ -1038,29 +1068,39 @@ impl Shared {
             )));
         }
     }
+    fn status_snapshot(&self) -> StatusSnapshot {
+        // Capture owned metadata and one immutable snapshot reference, then let
+        // both reply paths serialize after releasing the engine state lock.
+        let state = self.lock_state();
+        StatusSnapshot {
+            phase: state.phase,
+            rid: self.rid,
+            node_name: state.identity.as_ref().map(|id| id.node_name.clone()),
+            process_id: std::process::id(),
+            preferences: state.preferences.clone(),
+            interface_disabled: self.disable_interface,
+            error: state.error.clone(),
+            snapshot: state.snapshot.clone(),
+        }
+    }
     fn status(&self) -> Reply {
-        // Keep the immutable snapshot alive without cloning the roster or
-        // holding the engine state lock throughout JSON construction.
-        let (phase, node_name, preferences, error, snapshot) = {
-            let state = self.lock_state();
-            (
-                state.phase,
-                state.identity.as_ref().map(|id| id.node_name.clone()),
-                state.preferences.clone(),
-                state.error.clone(),
-                state.snapshot.clone(),
-            )
-        };
-        Reply::ok(
-            phase,
-            json!({
-            "phase":phase,"rid":self.rid,"node_name":node_name,
-            "process_id": std::process::id(),
-            "preferences": preferences,
-            "interface_disabled":self.disable_interface,
-                "error":error,"snapshot":snapshot.as_deref(),
-            }),
-        )
+        let status = self.status_snapshot();
+        Reply::ok(status.phase, json!(status))
+    }
+    fn status_payload(&self) -> Result<Vec<u8>> {
+        let status = self.status_snapshot();
+        Ok(serde_json::to_vec(&StatusReply {
+            ok: true,
+            message: status.phase,
+            data: &status,
+        })?)
+    }
+    fn reply_payload(&self, command: Request) -> Result<Vec<u8>> {
+        if matches!(&command, Request::Status) {
+            self.status_payload()
+        } else {
+            Ok(serde_json::to_vec(&self.handle(command))?)
+        }
     }
     fn command(&self, command: Command) -> Reply {
         let ping = match &command {
@@ -1467,8 +1507,7 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     ensure!(!bytes.is_empty(), "empty control request");
     let command: Request = serde_json::from_slice(&bytes)?;
     let stopping = matches!(&command, Request::Stop);
-    let reply = shared.handle(command);
-    let payload = serde_json::to_vec(&reply)?;
+    let payload = shared.reply_payload(command)?;
     ensure!(
         payload.len() as u64 <= REPLY_LIMIT,
         "control reply too large"
@@ -1598,7 +1637,7 @@ fn serve_connection(mut stream: windows_pipe::Connection, shared: Arc<Shared>) -
         zeroize::Zeroizing::new(stream.read_message(REQUEST_LIMIT, Duration::from_secs(5))?);
     let command: Request = serde_json::from_slice(&bytes)?;
     let stopping = matches!(&command, Request::Stop);
-    let payload = serde_json::to_vec(&shared.handle(command))?;
+    let payload = shared.reply_payload(command)?;
     ensure!(
         payload.len() as u64 <= REPLY_LIMIT,
         "control reply too large"
@@ -1768,6 +1807,53 @@ mod tests {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
         Shared::new(&id, false)
     }
+
+    #[test]
+    fn direct_status_payload_preserves_the_public_json_contract() {
+        let shared = shared();
+        let verify = || {
+            let expected = serde_json::to_value(shared.handle(Request::Status)).unwrap();
+            let actual: Value =
+                serde_json::from_slice(&shared.reply_payload(Request::Status).unwrap()).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(actual["ok"], true);
+        };
+        verify();
+        {
+            let mut state = shared.lock_state();
+            state.phase = "connected";
+            state.error = Some("reconexão temporária".into());
+            state.identity.as_mut().unwrap().node_name = "OpenRad Café".into();
+            let mut snapshot = Snapshot::default();
+            snapshot.peers.insert(
+                2,
+                runtime::PeerView {
+                    peer: crate::protocol::Peer {
+                        rid: 2,
+                        name: "peer coração".into(),
+                        vip: Ipv4Addr::new(26, 0, 0, 2),
+                        server: None,
+                        state: 0,
+                        network_ids: Default::default(),
+                    },
+                    status: runtime::PeerState::Offline,
+                    detail: "details".into(),
+                    transport: None,
+                    endpoint: None,
+                },
+            );
+            state.snapshot = Some(Arc::new(snapshot));
+        }
+        verify();
+        {
+            let mut state = shared.lock_state();
+            state.snapshot = None;
+            state.phase = "reconnecting";
+            state.error = None;
+        }
+        verify();
+    }
+
     #[test]
     fn stopping_before_session_publication_cannot_start_an_uncancelled_engine() {
         let shared = shared();
@@ -2372,6 +2458,84 @@ mod tests {
         assert!(shared.state.lock().unwrap().pending.is_empty());
     }
     #[test]
+    fn status_payload_matches_public_reply_after_all_status_inputs_change() {
+        let shared = shared();
+        let assert_matches = || {
+            let payload = shared.reply_payload(Request::Status).unwrap();
+            let actual: Value = serde_json::from_slice(&payload).unwrap();
+            let expected = serde_json::to_value(shared.handle(Request::Status)).unwrap();
+            assert_eq!(actual, expected);
+            assert!(actual["data"]["snapshot"].is_null() || actual["data"]["snapshot"].is_object());
+            actual
+        };
+        let connecting = assert_matches();
+        assert_eq!(connecting["data"]["phase"], "connecting");
+        assert!(connecting["data"]["error"].is_null());
+        assert!(connecting["data"]["snapshot"].is_null());
+        {
+            let mut state = shared.lock_state();
+            state.identity.as_mut().unwrap().node_name = "Renamed 漢字".into();
+            state.preferences.force_relay = true;
+            state.preferences.traffic_peers = Some([2, 20].into_iter().collect());
+            state.preferences.broadcast_peers =
+                Some(BroadcastSelection::Exclude([20].into_iter().collect()));
+            state
+                .preferences
+                .blocked
+                .insert("26.0.0.20".parse().unwrap(), BlockDirection::Both);
+        }
+        let renamed = assert_matches();
+        assert_eq!(renamed["data"]["node_name"], "Renamed 漢字");
+        assert_eq!(renamed["data"]["preferences"]["force_relay"], true);
+        shared.update(Update::State(Snapshot {
+            elapsed_secs: 42,
+            traffic: runtime::Traffic {
+                sent_bytes: 4321,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        let connected = assert_matches();
+        assert_eq!(connected["data"]["snapshot"]["elapsed_secs"], 42);
+        assert_eq!(connected["data"]["snapshot"]["traffic"]["sent_bytes"], 4321);
+        shared.disconnected("Synthetic reconnect reason".into());
+        let reconnecting = assert_matches();
+        assert_eq!(reconnecting["data"]["phase"], "reconnecting");
+        assert_eq!(reconnecting["data"]["error"], "Synthetic reconnect reason");
+        assert!(reconnecting["data"]["snapshot"].is_null());
+        shared.lock_state().identity = None;
+        assert!(assert_matches()["data"]["node_name"].is_null());
+        let payload = shared.reply_payload(Request::BlockList).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap(),
+            serde_json::to_value(shared.handle(Request::BlockList)).unwrap()
+        );
+    }
+
+    #[test]
+    fn status_capture_releases_state_lock_and_retains_previous_snapshot() {
+        let shared = shared();
+        shared.update(Update::State(Snapshot {
+            elapsed_secs: 42,
+            ..Default::default()
+        }));
+        let captured = shared.status_snapshot();
+        assert!(shared.state.try_lock().is_ok());
+        shared.update(Update::State(Snapshot {
+            elapsed_secs: 43,
+            ..Default::default()
+        }));
+        shared.disconnected("Synthetic disconnect".into());
+        let previous = serde_json::to_value(&captured).unwrap();
+        assert_eq!(previous["phase"], "connected");
+        assert_eq!(previous["snapshot"]["elapsed_secs"], 42);
+        assert!(previous["error"].is_null());
+        let current: Value = serde_json::from_slice(&shared.status_payload().unwrap()).unwrap();
+        assert_eq!(current["data"]["phase"], "reconnecting");
+        assert!(current["data"]["snapshot"].is_null());
+    }
+
+    #[test]
     fn status_preserves_snapshot_json_and_previous_snapshot_ownership() {
         let shared = shared();
         let snapshot = Snapshot {
@@ -2409,6 +2573,10 @@ mod tests {
         assert_eq!(reply.data["snapshot"], expected);
         assert_eq!(reply.data["rid"], 123);
         assert_eq!(reply.data["phase"], "connected");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&shared.status_payload().unwrap()).unwrap(),
+            serde_json::to_value(&reply).unwrap()
+        );
         let restored: Snapshot = serde_json::from_value(reply.data["snapshot"].clone()).unwrap();
         assert_eq!(
             restored.peers[&2].endpoint,

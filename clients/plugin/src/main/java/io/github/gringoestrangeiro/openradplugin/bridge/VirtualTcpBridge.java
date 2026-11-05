@@ -595,8 +595,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
         final ArrayDeque<Flight> flights = new ArrayDeque<>();
         SocketChannel channel;
         SelectionKey selection;
-        InetSocketAddress origin;
-        int originPort;
+        InetSocketAddress origin, originEndpoint;
         long receiveNext, sendUna, sendNext, windowSeq, windowAck, lastProgress = createdAt;
         long pendingFin = -1,
                 halfCloseAt,
@@ -668,12 +667,12 @@ public final class VirtualTcpBridge implements AutoCloseable {
         /** Bind first so the source port is known (and registered) before the server accepts. */
         void publishOrigin() throws IOException {
             channel.bind(new InetSocketAddress(backend.getAddress(), 0));
-            originPort = ((InetSocketAddress) channel.getLocalAddress()).getPort();
+            originEndpoint = (InetSocketAddress) channel.getLocalAddress();
             byte[] ip = {
                 (byte) (peerIp >>> 24), (byte) (peerIp >>> 16), (byte) (peerIp >>> 8), (byte) peerIp
             };
             origin = new InetSocketAddress(InetAddress.getByAddress(ip), key.port());
-            origins.register(originPort, origin);
+            origins.register(originEndpoint, origin);
         }
 
         void connected() throws IOException {
@@ -857,7 +856,9 @@ public final class VirtualTcpBridge implements AutoCloseable {
 
         void acknowledge(long acknowledgement, boolean duplicateCandidate) {
             if (acknowledgement == sendUna) {
-                if (duplicateCandidate && !flights.isEmpty() && ++duplicateAcks == 3) {
+                // Persist replies repeat the ACK while the receiver has no space; they
+                // are not evidence of loss and must not consume the retransmission budget.
+                if (duplicateCandidate && peerWindow != 0 && !flights.isEmpty() && ++duplicateAcks == 3) {
                     slowStartThreshold = Math.max(2 * mss, (int) (sendNext - sendUna) / 2);
                     congestionWindow = slowStartThreshold;
                     retransmit(flights.peekFirst(), false);
@@ -1144,7 +1145,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
 
         void closeChannel() {
             if (origin != null) {
-                origins.unregister(originPort, origin);
+                origins.unregister(originEndpoint, origin);
                 origin = null;
             }
             if (selection != null) selection.cancel();

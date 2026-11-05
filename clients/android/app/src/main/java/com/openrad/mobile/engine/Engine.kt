@@ -194,14 +194,18 @@ class Engine(
     fun delete(networkId: String, done: (CommandResult) -> Unit) = submit(Command.Remove(networkId, true, done))
 
     private fun submit(command: Command) {
-        if (phase != EngineState.Phase.ONLINE) {
-            command.wipe()
-            command.fail("control session is not online")
-            return
+        // Admission and shutdown draining share a gate. A command must never
+        // arrive after the final drain while the last published phase is ONLINE.
+        val failure = synchronized(lock) {
+            when {
+                !running.get() || phase != EngineState.Phase.ONLINE -> "control session is not online"
+                !commands.offer(command) -> "control command queue is full"
+                else -> null
+            }
         }
-        if (!commands.offer(command)) {
+        if (failure != null) {
             command.wipe()
-            command.fail("control command queue is full")
+            command.fail(failure)
         }
     }
 
@@ -346,8 +350,10 @@ class Engine(
                 if (attempt >= limit) {
                     phase = EngineState.Phase.ERROR
                     event("Connection failed: $message", true)
-                    publish(force = true)
                     halt()
+                    // StateFlow may conflate the final equal snapshot. The
+                    // service must see isRunning=false on its first ERROR.
+                    publish(force = true)
                 } else {
                     phase = EngineState.Phase.RECONNECTING
                     event("Connection lost: $message. Retrying…", true)
@@ -1539,8 +1545,10 @@ class Engine(
     }
 
     private fun drainCommands(reason: String) {
-        while (true) {
-            val c = commands.poll() ?: break
+        val queued = synchronized(lock) {
+            ArrayList<Command>().also { commands.drainTo(it) }
+        }
+        for (c in queued) {
             c.wipe()
             c.fail(reason)
         }

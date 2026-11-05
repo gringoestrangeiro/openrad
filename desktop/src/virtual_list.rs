@@ -23,6 +23,9 @@ pub struct VirtualRows<K, L> {
     layout: Option<L>,
     generation: u64,
     keys: Vec<K>,
+    /// Only one row is retained. Cache its lookup, including a missing key,
+    /// until the requested key or the list's key/order revision changes.
+    retained: Option<(K, Option<usize>)>,
     /// Latest stride of each row and the layout generation it was measured
     /// in; generation 0 marks a row that was never shown.
     strides: Vec<(f32, u64)>,
@@ -31,7 +34,9 @@ pub struct VirtualRows<K, L> {
     /// heights cannot make the list re-plan every frame.
     estimates: HashMap<u64, (f32, u64)>,
     latest: Option<f32>,
-    offsets: Vec<f32>,
+    // Accumulate in double precision: subtracting neighboring f32 offsets in
+    // a tall list can lose more than TOLERANCE and re-discard every frame.
+    offsets: Vec<f64>,
     dirty: bool,
 }
 
@@ -51,6 +56,7 @@ impl<K, L> Default for VirtualRows<K, L> {
             layout: None,
             generation: 1,
             keys: Vec::new(),
+            retained: None,
             strides: Vec::new(),
             estimates: HashMap::new(),
             latest: None,
@@ -82,6 +88,7 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
                 .map(|key| previous.get(key).copied().unwrap_or((0., 0)))
                 .collect();
             self.revision = Some(revision);
+            self.retained = None;
             self.dirty = true;
         }
         if self.layout.as_ref() != Some(&layout) {
@@ -104,7 +111,7 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
             self.offsets.push(0.);
             let mut total = 0.;
             for (index, &(stride, generation)) in self.strides.iter().enumerate() {
-                total += if generation == self.generation {
+                total += f64::from(if generation == self.generation {
                     stride
                 } else {
                     match self.estimates.get(&kind(index)) {
@@ -113,7 +120,7 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
                         Some(&(estimate, _)) => estimate,
                         None => fallback,
                     }
-                };
+                });
                 self.offsets.push(total);
             }
             self.dirty = false;
@@ -124,14 +131,26 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
         let (first, last) = if count <= self.eager {
             (0, count)
         } else {
-            let first = self.offsets[1..].partition_point(|end| *end <= clip.top() - top);
+            let first = self.offsets[1..]
+                .partition_point(|end| *end <= f64::from(clip.top()) - f64::from(top));
             let last = self.offsets[..count]
-                .partition_point(|start| *start < clip.bottom() - top)
+                .partition_point(|start| *start < f64::from(clip.bottom()) - f64::from(top))
                 .max(first);
             (first, last)
         };
-        let keep = keep
-            .and_then(|key| self.keys.iter().position(|candidate| candidate == key))
+        let retained = if let Some(key) = keep {
+            if self.retained.as_ref().is_none_or(|(old, _)| old != key) {
+                self.retained = Some((
+                    key.clone(),
+                    self.keys.iter().position(|candidate| candidate == key),
+                ));
+            }
+            self.retained.as_ref().and_then(|(_, index)| *index)
+        } else {
+            self.retained = None;
+            None
+        };
+        let keep = retained
             .filter(|index| !(first..last).contains(index))
             .map(|index| (index, kind(index)));
         Plan {
@@ -162,7 +181,10 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
                 let Range { start, end } = plan.visible;
                 // Skipped rows end with item spacing, like rows that were built.
                 if start > 0 {
-                    ui.allocate_space(Vec2::new(0., (self.offsets[start] - spacing).max(0.)));
+                    ui.allocate_space(Vec2::new(
+                        0.,
+                        (self.offsets[start] - f64::from(spacing)).max(0.) as f32,
+                    ));
                 }
                 let mut moved = false;
                 for (index, kind) in (start..end).zip(plan.kinds) {
@@ -173,14 +195,15 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
                     moved |= self.record(index, kind, ui.cursor().min.y - before);
                 }
                 if end < count {
-                    let rest = self.offsets[count] - self.offsets[end] - spacing;
-                    ui.allocate_space(Vec2::new(0., rest.max(0.)));
+                    let rest = self.offsets[count] - self.offsets[end] - f64::from(spacing);
+                    ui.allocate_space(Vec2::new(0., rest.max(0.) as f32));
                 }
                 if let Some((index, kind)) = plan.keep {
                     // Built in place, outside the flow, so the list does not move.
                     let rect = Rect::from_x_y_ranges(
                         columns,
-                        plan.top + self.offsets[index]..=plan.top + self.offsets[index + 1],
+                        (f64::from(plan.top) + self.offsets[index]) as f32
+                            ..=(f64::from(plan.top) + self.offsets[index + 1]) as f32,
                     );
                     let mut kept = ui.new_child(
                         UiBuilder::new()
@@ -205,7 +228,7 @@ impl<K: Clone + Eq + Hash + std::fmt::Debug, L: PartialEq> VirtualRows<K, L> {
 
     /// Store a measured stride. Returns whether the planned offsets were wrong.
     fn record(&mut self, index: usize, kind: u64, stride: f32) -> bool {
-        let planned = self.offsets[index + 1] - self.offsets[index];
+        let planned = (self.offsets[index + 1] - self.offsets[index]) as f32;
         self.strides[index] = (stride, self.generation);
         self.latest = Some(stride);
         let estimate = self.estimates.entry(kind).or_insert((stride, 0));
@@ -275,10 +298,10 @@ mod tests {
                             list.plan(ui, keep.as_ref(), |index| (rows.kind)(rows.keys[index]));
                         list.show(ui, Id::new("rows"), plan, |ui, index| {
                             let key = rows.keys[index];
-                            built.borrow_mut().push((key, ui.id()));
                             work += 1;
                             let size = Vec2::new(100., (rows.height)(key));
-                            ui.allocate_exact_size(size, egui::Sense::hover());
+                            let (_, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+                            built.borrow_mut().push((key, response.id));
                         });
                     })
                     .content_size
@@ -426,5 +449,86 @@ mod tests {
         assert_eq!(kept.built.last(), Some(&(7, id)));
         assert_eq!(kept.built.iter().filter(|(key, _)| *key == 7).count(), 1);
         assert!((kept.extent - frame.extent).abs() < 0.5);
+    }
+
+    #[test]
+    fn fractional_row_heights_at_large_offsets_settle_without_replanning() {
+        let ctx = egui::Context::default();
+        let keys: Vec<u32> = (0..50_000).collect();
+        let kind_calls = std::cell::Cell::new(0);
+        let kind = |_| {
+            kind_calls.set(kind_calls.get() + 1);
+            0
+        };
+        let rows = Rows {
+            keys: &keys,
+            revision: 0,
+            layout: 0.,
+            height: &|_| 20.3125,
+            kind: &kind,
+        };
+        let mut list = VirtualRows::default();
+        settle(&ctx, &mut list, &rows, None);
+        let frame = settle(&ctx, &mut list, &rows, Some(28.3125 * 45_000.));
+        assert!(frame.work <= VISIBLE, "{}", frame.work);
+        assert!(
+            !list.dirty,
+            "unchanged rows must not re-plan the entire list"
+        );
+        kind_calls.set(0);
+        let frame = render(&ctx, &mut list, &rows, None, Some(28.3125 * 45_000.));
+        assert!(frame.work <= VISIBLE, "{}", frame.work);
+        assert!(kind_calls.get() <= VISIBLE, "{}", kind_calls.get());
+    }
+
+    #[test]
+    fn retained_rows_track_changed_keys_reordering_removal_and_reappearance() {
+        let ctx = egui::Context::default();
+        let keys: Vec<u32> = (0..500).collect();
+        let rows = Rows {
+            keys: &keys,
+            revision: 0,
+            layout: 0.,
+            height: &|_| 20.,
+            kind: &|_| 0,
+        };
+        let mut list = VirtualRows::default();
+        let first = settle(&ctx, &mut list, &rows, None);
+        let id = first.built.iter().find(|(key, _)| *key == 8).unwrap().1;
+        for _ in 0..2 {
+            let kept = render(&ctx, &mut list, &rows, Some(8), Some(28. * 400.));
+            assert_eq!(kept.built.last(), Some(&(8, id)));
+            assert_eq!(kept.built.iter().filter(|(key, _)| *key == 8).count(), 1);
+            assert_eq!(kept.extent, first.extent);
+        }
+        let changed = render(&ctx, &mut list, &rows, Some(7), Some(28. * 400.));
+        assert_eq!(changed.built.last().map(|(key, _)| *key), Some(7));
+        assert!(!changed.built.iter().any(|(key, _)| *key == 8));
+        let reversed: Vec<_> = keys.iter().rev().copied().collect();
+        let rows = Rows {
+            keys: &reversed,
+            revision: 1,
+            ..rows
+        };
+        let reordered = render(&ctx, &mut list, &rows, Some(8), Some(0.));
+        assert_eq!(reordered.built.last(), Some(&(8, id)));
+        let removed: Vec<_> = reversed.iter().copied().filter(|key| *key != 8).collect();
+        let missing = Rows {
+            keys: &removed,
+            revision: 2,
+            ..rows
+        };
+        for _ in 0..2 {
+            let frame = render(&ctx, &mut list, &missing, Some(8), Some(0.));
+            assert!(!frame.built.iter().any(|(key, _)| *key == 8));
+        }
+        let restored = Rows {
+            revision: 3,
+            ..rows
+        };
+        let frame = render(&ctx, &mut list, &restored, Some(8), Some(0.));
+        assert_eq!(frame.built.last(), Some(&(8, id)));
+        let closed = render(&ctx, &mut list, &restored, None, Some(0.));
+        assert!(!closed.built.iter().any(|(key, _)| *key == 8));
     }
 }

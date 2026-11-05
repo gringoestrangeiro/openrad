@@ -726,6 +726,16 @@ impl Enet {
     pub fn set_stop(&mut self, stop: Option<Arc<AtomicBool>>) {
         self.stop = stop;
     }
+    fn check_cancelled(&self) -> Result<()> {
+        ensure!(
+            !self
+                .stop
+                .as_ref()
+                .is_some_and(|s| s.load(Ordering::Relaxed)),
+            "cancelled"
+        );
+        Ok(())
+    }
     pub fn sustain(&mut self) {
         self.deadline = None;
     }
@@ -854,6 +864,7 @@ impl Enet {
         self.in_flight() + len.div_ceil(self.mtu - 32) <= SEND_WINDOW
     }
     pub fn send(&mut self, data: &[u8]) -> Result<()> {
+        self.check_cancelled()?;
         ensure!(
             self.connected && !data.is_empty() && data.len() <= 65536,
             "UDP message size/state"
@@ -888,6 +899,8 @@ impl Enet {
         Ok(())
     }
     pub fn receive(&mut self, max: usize) -> Result<Vec<u8>> {
+        // Already assembled records bypass pump, including its stop check.
+        self.check_cancelled()?;
         let until = Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(data) = self.ready.pop_front() {
@@ -957,13 +970,7 @@ impl Enet {
         Ok(())
     }
     fn pump(&mut self) -> Result<()> {
-        ensure!(
-            !self
-                .stop
-                .as_ref()
-                .is_some_and(|s| s.load(Ordering::Relaxed)),
-            "cancelled"
-        );
+        self.check_cancelled()?;
         ensure!(
             self.deadline.is_none_or(|d| Instant::now() < d),
             "UDP handshake deadline"
@@ -1554,6 +1561,35 @@ mod tests {
         enet.remote_id = 0;
         (enet, remote)
     }
+    #[test]
+    fn cancellation_rejects_a_record_already_in_the_ready_queue() {
+        let (mut enet, _remote) = pair();
+        enet.ready.push_back(b"buffered reply".to_vec());
+        enet.set_stop(Some(Arc::new(AtomicBool::new(true))));
+        assert_eq!(enet.receive(64).unwrap_err().to_string(), "cancelled");
+        assert_eq!(
+            enet.ready.len(),
+            1,
+            "cancelled reads must not consume bytes"
+        );
+    }
+
+    #[test]
+    fn cancellation_prevents_sending_a_new_record() {
+        let (mut enet, remote) = pair();
+        remote.set_nonblocking(true).unwrap();
+        enet.set_stop(Some(Arc::new(AtomicBool::new(true))));
+        let result = enet.send(b"must not reach the wire");
+        let mut bytes = [0; 4096];
+        assert_eq!(result.unwrap_err().to_string(), "cancelled");
+        assert_eq!(
+            remote.recv(&mut bytes).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(enet.outgoing, 0);
+        assert!(enet.pending.is_empty());
+    }
+
     fn packet(command: &[u8]) -> Vec<u8> {
         let mut b = vec![0, 0, 0, 0, 0x80, 0, 0, 42];
         b.extend(command);

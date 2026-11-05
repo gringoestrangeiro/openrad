@@ -386,7 +386,25 @@ impl Replacement {
             .pending
             .as_ref()
             .context("No replacement identity to save")?;
-        save(vault, next)?;
+        // The profile lock excludes writers during this attempt, but another
+        // frontend may have changed the identity since a failed save released it.
+        let saved = load(vault)?;
+        let next_bytes = Zeroizing::new(serde_json::to_vec(next)?);
+        let expected = current
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()?
+            .map(Zeroizing::new);
+        let unchanged = match saved {
+            Some(saved) => {
+                let saved = Zeroizing::new(serde_json::to_vec(&saved)?);
+                // Also admit a write that succeeded before reporting an error.
+                saved == next_bytes || expected.as_ref() == Some(&saved)
+            }
+            None => current.is_none(),
+        };
+        ensure!(unchanged, "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.");
+        vault.set(&next_bytes)?;
         *current = self.pending.take();
         Ok(())
     }
@@ -733,6 +751,60 @@ mod tests {
         assert_eq!(settings.reconnect_base_delay_seconds, 1);
         assert_eq!(settings.recent_activity_count, 40);
     }
+    #[test]
+    fn replacement_retry_preserves_an_identity_changed_by_another_frontend() {
+        let original = identity();
+        let mut issued = original.clone();
+        issued.rid = 456;
+        let mut concurrent = original.clone();
+        concurrent.rid = 789;
+        let mut renamed = original.clone();
+        renamed.node_name = "changed in another frontend".into();
+        for external in [
+            Some(serde_json::to_vec(&concurrent).unwrap()),
+            Some(serde_json::to_vec(&renamed).unwrap()),
+            Some(b"corrupt saved identity".to_vec()),
+            None,
+        ] {
+            let vault = MemoryVault::default();
+            save(&vault, &original).unwrap();
+            let mut current = Some(original.clone());
+            let mut replacement = Replacement::default();
+            replacement.prepare(|| Ok(issued.clone())).unwrap();
+            vault.fail.set(true);
+            assert!(replacement.commit(&vault, &mut current).is_err());
+            vault.fail.set(false);
+            *vault.data.borrow_mut() = external.clone();
+
+            assert!(replacement.commit(&vault, &mut current).is_err());
+            assert_eq!(*vault.data.borrow(), external);
+            assert_eq!(current.as_ref().unwrap().rid, original.rid);
+            assert!(replacement.is_pending());
+            replacement
+                .prepare(|| panic!("must keep the issued identity"))
+                .unwrap();
+
+            save(&vault, &original).unwrap();
+            replacement.commit(&vault, &mut current).unwrap();
+            assert_eq!(current.as_ref().unwrap().rid, issued.rid);
+        }
+    }
+
+    #[test]
+    fn replacement_retry_accepts_the_same_identity_already_saved() {
+        let vault = MemoryVault::default();
+        let mut current = Some(identity());
+        let mut issued = identity();
+        issued.rid = 456;
+        let mut replacement = Replacement::default();
+        replacement.prepare(|| Ok(issued.clone())).unwrap();
+        // A credential-store write can take effect even if its caller sees an error.
+        save(&vault, &issued).unwrap();
+        replacement.commit(&vault, &mut current).unwrap();
+        assert_eq!(current.unwrap().rid, issued.rid);
+        assert!(!replacement.is_pending());
+    }
+
     #[test]
     fn replacement_preserves_old_identity_until_success_and_retries_only_storage() {
         let vault = MemoryVault::default();

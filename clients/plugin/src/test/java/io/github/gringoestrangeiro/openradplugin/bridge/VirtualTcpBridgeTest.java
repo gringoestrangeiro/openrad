@@ -618,7 +618,7 @@ class VirtualTcpBridgeTest {
                         1024 * 1024,
                         d.connectTimeout(),
                         d.handshakeTimeout(),
-                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(15),
                         d.halfCloseTimeout(),
                         d.timeWait(),
                         1);
@@ -636,12 +636,15 @@ class VirtualTcpBridgeTest {
             client.advertisedWindow = 0;
             client.ack(); // No data ACK: the original bytes remain in flight.
             int probes = 0;
-            while (probes < 2) {
+            while (probes < 4) {
                 TcpSegment packet = client.take();
                 assertEquals(0, packet.flags() & RST);
-                if (packet.payload().length == 1 && packet.sequence() == wire(client.serverNext))
+                if (packet.payload().length == 1 && packet.sequence() == wire(client.serverNext)) {
                     probes++;
-                else
+                    // A real zero-window receiver responds to every persist probe. These
+                    // repeated ACKs must not trigger fast retransmit or spend its retry budget.
+                    client.ack();
+                } else
                     assertEquals(
                             ACK | FIN, packet.flags(), "ordinary RTO ran against a zero window");
             }

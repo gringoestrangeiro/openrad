@@ -5,15 +5,15 @@ import java.net.SocketAddress;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Maps the loopback source port of each bridge-to-backend connection to the VPN player's
- * virtual address. The bridge binds its local port before connecting, so a backend
- * connection from {@code 127.0.0.1:port} identifies exactly one live virtual flow. Entries
+ * Maps the loopback source endpoint of each bridge-to-backend connection to the VPN player's
+ * virtual address. The bridge binds before connecting, so its complete local address and port
+ * identify one live virtual flow. Other loopback addresses can use the same port. Entries
  * are bounded by the bridge's own connection limit and removed when the flow closes.
  */
 public final class VirtualOrigins {
     private static final VirtualOrigins SHARED = new VirtualOrigins();
 
-    private final ConcurrentHashMap<Integer, InetSocketAddress> byPort =
+    private final ConcurrentHashMap<InetSocketAddress, InetSocketAddress> byEndpoint =
             new ConcurrentHashMap<>();
 
     /** One registry per plugin class loader, shared by every runtime generation. */
@@ -21,12 +21,12 @@ public final class VirtualOrigins {
         return SHARED;
     }
 
-    void register(int localPort, InetSocketAddress origin) {
-        byPort.put(localPort, origin);
+    void register(InetSocketAddress localEndpoint, InetSocketAddress origin) {
+        byEndpoint.put(localEndpoint, origin);
     }
 
-    void unregister(int localPort, InetSocketAddress origin) {
-        byPort.remove(localPort, origin);
+    void unregister(InetSocketAddress localEndpoint, InetSocketAddress origin) {
+        byEndpoint.remove(localEndpoint, origin);
     }
 
     /** Virtual origin of a backend client address, or null for any other connection. */
@@ -34,10 +34,10 @@ public final class VirtualOrigins {
         if (!(backendClient instanceof InetSocketAddress)) return null;
         InetSocketAddress client = (InetSocketAddress) backendClient;
         if (client.getAddress() == null || !client.getAddress().isLoopbackAddress()) return null;
-        return byPort.get(client.getPort());
+        return byEndpoint.get(client);
     }
 
     public int size() {
-        return byPort.size();
+        return byEndpoint.size();
     }
 }

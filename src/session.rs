@@ -193,6 +193,9 @@ impl Framed {
         Ok(())
     }
     pub fn receive(&mut self, max: usize) -> Result<Vec<u8>> {
+        // A complete read-ahead record can bypass both socket-read loops, which
+        // otherwise perform the cancellation checks.
+        self.check_cancelled()?;
         let remaining = self
             .deadline
             .map(|d| d.saturating_duration_since(Instant::now()))
@@ -445,7 +448,13 @@ fn resolve_hostname_limited(
         let remaining = until.saturating_duration_since(Instant::now());
         ensure!(!remaining.is_zero(), "DNS resolution timeout");
         match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
-            Ok(result) => return result.context("resolve TCP endpoint"),
+            Ok(result) => {
+                // Cancellation or the deadline may have won while recv_timeout
+                // was waiting (or before this thread resumed after a result).
+                ensure!(!is_cancelled(stop), "cancelled");
+                ensure!(Instant::now() < until, "DNS resolution timeout");
+                return result.context("resolve TCP endpoint");
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(error) => return Err(error.into()),
         }
@@ -1290,6 +1299,27 @@ mod provision_tests {
     use super::*;
 
     #[test]
+    fn dns_result_completed_during_cancellation_is_rejected() {
+        use std::sync::atomic::AtomicUsize;
+        static WORKERS: AtomicUsize = AtomicUsize::new(0);
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancel = stop.clone();
+        let result = resolve_hostname_limited(
+            Instant::now() + Duration::from_secs(2),
+            &Some(stop),
+            &WORKERS,
+            move || {
+                // Let the caller enter its bounded receive before this result
+                // races cancellation. Both outcomes must reject the reply.
+                std::thread::sleep(Duration::from_millis(20));
+                cancel.store(true, Ordering::SeqCst);
+                Ok(vec!["127.0.0.1:17301".parse().unwrap()])
+            },
+        );
+        assert_eq!(result.unwrap_err().to_string(), "cancelled");
+    }
+
+    #[test]
     fn timed_out_dns_lookups_keep_a_global_worker_bound() {
         use std::sync::{atomic::AtomicUsize, Condvar, Mutex};
         static WORKERS: AtomicUsize = AtomicUsize::new(0);
@@ -1615,6 +1645,19 @@ mod framed_read_tests {
                 "no data arrived"
             );
         }
+    }
+
+    #[test]
+    fn cancellation_rejects_a_record_already_in_the_read_ahead_buffer() {
+        let (mut reader, _writer) = pair();
+        let stop = Arc::new(AtomicBool::new(true));
+        reader.set_stop(Some(stop));
+        // Seed the buffer directly so this tests cancellation independently of
+        // TCP batching and the timing of the preceding receive.
+        reader.inbound = frame(b"buffered reply").into_boxed_slice();
+        reader.end = reader.inbound.len();
+        assert_eq!(reader.receive(64).unwrap_err().to_string(), "cancelled");
+        assert_eq!(reader.start, 0, "cancelled reads must not consume bytes");
     }
 
     #[test]

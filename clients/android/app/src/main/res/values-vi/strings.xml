@@ -188,4 +188,5 @@
     <string name="block_limit">Chặn ẩn hỗ trợ tối đa %1$d địa chỉ</string>
     <string name="block_added">Đã áp dụng chặn ẩn cho %1$s</string>
     <string name="block_removed">Đã bỏ chặn ẩn cho %1$s</string>
+    <string name="preferences_save_failed">Không thể lưu tùy chọn. Các giá trị trước đó được giữ nguyên.</string>
 </resources>

@@ -67,6 +67,26 @@ UninstPage instfiles
     Quit
 !macroend
 
+; Serialize installation, repair and removal across user sessions. Retain the
+; handle until process exit. A failed CreateMutex must not allow mutations.
+!macro OpenRadAcquireSetupMutex STOP
+    System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Global\OpenRadSetup") p .r0 ?e'
+    Pop $1
+    StrCpy $SetupMutex $0
+    ${If} $SetupMutex == 0
+        ${Log} "Cannot acquire setup/uninstall mutex; Windows error $1"
+        MessageBox MB_OK|MB_ICONSTOP "OpenRad could not lock installation changes. Close any other setup or uninstaller and try again." /SD IDOK
+        SetErrorLevel 1
+        ${STOP}
+    ${EndIf}
+    ${If} $1 == 183
+        ${Log} "Another OpenRad setup or uninstall is already running"
+        MessageBox MB_OK|MB_ICONINFORMATION "OpenRad setup or uninstall is already running. Finish that operation first." /SD IDOK
+        SetErrorLevel 1
+        ${STOP}
+    ${EndIf}
+!macroend
+
 !macro OpenRadLogFunctions UN
 Function ${UN}OpenRadLogOpen
     ; Call before SetShellVarContext all, which maps $LOCALAPPDATA to ProgramData.
@@ -341,14 +361,7 @@ Function .onInit
         MessageBox MB_OK|MB_ICONSTOP "This OpenRad package requires Windows 10 or 11." /SD IDOK
         !insertmacro OpenRadQuit 1 "Windows older than 10"
     ${EndIf}
-    System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Global\OpenRadSetup") p .r0 ?e'
-    Pop $1
-    StrCpy $SetupMutex $0
-    ${If} $1 == 183
-        ${Log} "Dialog: another OpenRad setup is already running"
-        MessageBox MB_OK|MB_ICONINFORMATION "OpenRad setup is already running. Finish that setup first." /SD IDOK
-        !insertmacro OpenRadQuit 1 "another setup instance is running"
-    ${EndIf}
+    !insertmacro OpenRadAcquireSetupMutex Quit
     StrCpy $NoLaunch 0
     StrCpy $StopApproved 0
     ${GetParameters} $Params
@@ -559,6 +572,7 @@ Function un.onInit
     ${Log} "==== OpenRad uninstall ${OPENRAD_VERSION} started ===="
     ${Log} "Command line: $CMDLINE"
     Call un.OpenRadLogEnvironment
+    !insertmacro OpenRadAcquireSetupMutex Abort
     SetRegView 64
     SetShellVarContext all
     ; The Settings shortcut launches this process before the desktop finishes
