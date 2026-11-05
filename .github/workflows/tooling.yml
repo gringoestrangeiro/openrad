@@ -68,11 +68,25 @@ jobs:
       - name: Fetch checksum-pinned portable NSIS compiler
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
-          Invoke-WebRequest 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip' -OutFile $archive
           $expected = 'c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1'
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
-            throw 'NSIS compiler archive checksum mismatch'
+          $sources = @(
+            'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip',
+            'https://mse.uk.distfiles.macports.org/nsis/nsis-3.11.zip'
+          )
+          $verified = $false
+          foreach ($url in $sources) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $archive -TimeoutSec 40 -ErrorAction Stop
+              if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expected) {
+                $verified = $true
+                break
+              }
+              Write-Warning 'NSIS download does not match the pinned official SHA-256; trying next source.'
+            } catch {
+              Write-Warning 'NSIS download failed; trying next source.'
+            }
           }
+          if (-not $verified) { throw 'No verified NSIS 3.11 archive available from configured sources' }
           Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'openrad-nsis')
       - name: Exercise production mutex macro in unelevated disposable fixture
         # Never launches OpenRad setup, the driver, or a real recovery worker.
