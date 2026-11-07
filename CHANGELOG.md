@@ -1,13 +1,21 @@
 # Changelog
 
-## Unreleased — 2.3.0-dev
+## 2.3.0 — 2026-11-07
 
-Integra o restante do PR #18 (49 commits de `mariananetto-sys`) que chegou depois do corte da
-v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identidade VPN.**
+Servidor de coordenacao Go auto-hospedado e escolha de servidor personalizado no desktop e no CLI;
+desktop com primeira execucao guiada, tema neutro indigo e listas virtualizadas; VPN do Windows ao
+entrar na sessao; cadastro interrompido que nao gera um segundo aparelho; IP real `26.x.x.x` dos
+jogadores no Paper; e JARs Minecraft nomeados so pela versao do jogo, um por versao principal.
+Inclui o restante do PR #18 que chegou depois do corte da v2.2.0. **Sem alteracoes no wire format
+nem na identidade VPN.** Windows segue experimental e Minecraft alpha; veja as
+[notas da 2.3.0](docs/releases/2.3.0.md) para pacotes, validacao e limitacoes.
 
 - **Desktop:** primeira execucao com animacao do logo (pulavel), configuracao rapida com tema
   claro/escuro, conexao automatica e atalho opcional na area de trabalho no Windows; a conexao
   automatica espera o fim dessa configuracao. Traducoes da primeira execucao em todos os idiomas.
+- **Desktop (visual):** paleta neutra clara/escura com destaque indigo (verde so para estado
+  saudavel); botoes, campos, menus e selos com um estilo compartilhado; navegacao por icones na
+  barra lateral, sem a barra de trilha e sem botoes duplicados em Minhas redes.
 - **Identidade/cadastro:** um cadastro interrompido fica marcado como pendente (Rust, Android,
   Python) e nao gera um segundo aparelho ao reconectar/reiniciar; substituicoes pendentes ficam
   protegidas no desligamento; importacoes e edicoes offline do desktop/CLI exigem a posse do perfil.
@@ -33,6 +41,13 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   `26.x.x.x` em vez de `127.0.0.1` (bans/limites por IP, logs e outros plugins);
   `bridge.forward-player-address: false` restaura o comportamento anterior. Outras conexoes nao
   sao alteradas.
+- **Pacotes Minecraft:** os nomes dos JARs trazem so a versao do Minecraft (sem `-javaN`). O CI
+  continua compilando e testando cada patch; `tools/minecraft_release_jars.py` junta patches da mesma
+  versao principal somente quando os builds sao identicos byte a byte, fora os metadados de versao.
+  Resultado: 12 JARs Fabric e 9 Paper (antes 33 e 21). Um JAR Fabric combinado lista cada patch
+  coberto em `depends.minecraft`, entao o Fabric Loader continua recusando um patch nao testado.
+- **Android:** `versionCode` 8 (a 2.3.0 ainda tinha o 7 da 2.2.0 e nao instalaria como
+  atualizacao); o workflow do APK sem assinatura e `sign-android-local.ps1` esperam a 2.3.0.
 - **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
 - **Desktop (desempenho):** listas de peers, e listas de Descobrir/Entrada automatica com mais de
   100 itens, constroem so as linhas visiveis; redimensionar a janela ou a barra lateral nao refaz
@@ -41,6 +56,11 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   30 fps em vez de redesenhar a janela a cada quadro da tela enquanto conecta, busca ou entra em
   redes; a busca pendente nao faz mais polling a cada 20 ms. Menus "Gerenciar" abertos continuam
   abertos quando a linha sai da tela.
+- **Windows (inicio com a sessao):** o servico VPN pode iniciar ao entrar no Windows, sem abrir o
+  desktop, por uma tarefa agendada por usuario; ligado por padrao em perfis novos e registrado so
+  depois de a identidade ser salva, respeitando quem desligou. Salvar outras preferencias nao
+  depende mais do Agendador de Tarefas, a tarefa e removida na desinstalacao e uma instalacao
+  danificada continua desinstalavel.
 - **Windows (instalador):** `setup.log` persistente (UTF-16LE) em `%LOCALAPPDATA%\OpenRad\logs`
   registra cada etapa, codigo de saida do worker e resultado; o worker de setup grava suas etapas
   SetupAPI e o inventario de adaptadores TAP em `setup-worker-startup.log`.

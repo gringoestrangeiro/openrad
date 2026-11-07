@@ -85,23 +85,25 @@ for protocol and transport details.
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
 The current release is **[2.3.0](docs/releases/2.3.0.md)**; see the
-[changelog](CHANGELOG.md) for earlier versions. Windows is experimental,
-Android beta, and the Minecraft builds alpha.
+[changelog](CHANGELOG.md) for earlier versions. Windows is experimental and
+the Minecraft builds alpha.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
 - **Windows:** Run `OpenRad-Setup-2.3.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.3.0-android.apk` (Android 8.0 or newer).
+- **Android:** Install `openrad-2.3.0-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
 - **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
-  `OpenRadPlugin-2.3.0-paper-<version>-java<N>.jar` for your Paper version in the server's
-  `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
+  `OpenRadPlugin-2.3.0-paper-<versions>.jar` whose name includes your Paper version (for
+  example `-1.21` or `-26.1.1-26.3`) in the server's `plugins/` folder; see
+  [Minecraft server plugin](#minecraft-server-plugin-paper).
 - **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
-  `OpenRadClientMod-2.3.0-fabric-<version>.jar`, matching your game version, in the Fabric
-  profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README.md).
-- **Self-hosted server (alpha):** Extract `openrad-server-v2.3.0-linux-x86_64.tar.gz`
+  `OpenRadClientMod-2.3.0-fabric-<versions>.jar`, the one whose range includes your game
+  version (for example `-1.21-1.21.5` for 1.21.4), in the Fabric profile's `mods/` folder
+  with the Fabric API; see the [mod guide](clients/mod/README.md).
+- **Self-hosted server (beta):** Extract `openrad-server-v2.3.0-linux-x86_64.tar.gz`
   (or the experimental `openrad-server-v2.3.0-windows-x86_64.zip`, not yet validated on
   native Windows) and run `openrad-server serve`. Point the desktop (**Settings → Server**)
   or CLI (`openrad server set`) at it with its `modulus.bin`; see the [server guide](server/README.md).
