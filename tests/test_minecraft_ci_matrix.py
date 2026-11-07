@@ -100,7 +100,7 @@ class MinecraftCIMatrixTests(unittest.TestCase):
 
     def test_release_jar_names_carry_no_java_version(self):
         self.assertNotRegex(self.text, r"-java\$|java\$\{\{")
-        self.assertIn('OpenRadPlugin-2.3.1-paper-$MC.jar', self.text)
+        self.assertIn('OpenRadPlugin-2.3.2-paper-$MC.jar', self.text)
 
     def test_release_jars_merge_only_after_the_full_matrix(self):
         job = self.text.split("\n  release-jars:", 1)[1]
@@ -112,8 +112,8 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         self.assertIn("test_minecraft_release_jars.py", inventory)
 
     def test_versioned_artifacts_and_checksum_uploaded(self):
-        self.assertIn("openrad-2.3.1-fabric-${{ matrix.minecraft }}-verified", self.text)
-        self.assertIn("openrad-2.3.1-paper-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.2-fabric-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.2-paper-${{ matrix.minecraft }}-verified", self.text)
         self.assertIn("sha256sum", self.text)
         self.assertIn("if-no-files-found: error", self.text)
 

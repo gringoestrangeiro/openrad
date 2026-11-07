@@ -2,7 +2,7 @@ name: OpenRad Minecraft version compatibility (development)
 
 on:
   pull_request:
-    branches: [main, '2.2.0-dev', '2.3.0-dev', '2.3.1-dev']
+    branches: [main, '2.2.0-dev', '2.3.0-dev', '2.3.1-dev', '2.3.2-dev']
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
@@ -18,7 +18,7 @@ on:
       - 'tools/minecraft_release_jars.py'
       - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
-  # Release candidates are validated by pull_request. 2.3.0-dev and 2.3.1-dev
+  # Release candidates are validated by pull_request. 2.3.x-dev branches
   # are also validated on push as a standalone branch; while it has an open PR, the PR
   # run additionally tests the merge result. That overlap is intentional: a
   # concurrency group would cancel one of the two different validations.
@@ -27,6 +27,7 @@ on:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'
       - '2.3.0-dev'
       - '2.3.1-dev'
+      - '2.3.2-dev'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
@@ -107,7 +108,7 @@ jobs:
       - name: Verify regular Fabric version, bytecode, mixins and metadata
         if: ${{ !startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod
-        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.3.1.jar "${{ matrix.minecraft }}" 2.3.1
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.3.2.jar "${{ matrix.minecraft }}" 2.3.2
       - name: Compile and test modern Fabric on Java 25
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod/modern
@@ -116,7 +117,7 @@ jobs:
       - name: Verify modern Fabric version, bytecode, mixins and metadata
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         run: |
-          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.3.1-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.3.1
+          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.3.2-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.3.2
 
       - name: Stage version-specific verified Fabric JAR and checksum
         shell: bash
@@ -126,17 +127,17 @@ jobs:
           set -euo pipefail
           mkdir -p dist/minecraft/fabric
           if [[ "$MC" == 26.* ]]; then
-            source="clients/mod/modern/build/libs/OpenRadClientMod-2.3.1-modern-$MC.jar"
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.3.2-modern-$MC.jar"
           else
-            source="clients/mod/fabric/build/libs/fabric-2.3.1.jar"
+            source="clients/mod/fabric/build/libs/fabric-2.3.2.jar"
           fi
           test -s "$source"
-          output="dist/minecraft/fabric/OpenRadClientMod-2.3.1-fabric-$MC.jar"
+          output="dist/minecraft/fabric/OpenRadClientMod-2.3.2-fabric-$MC.jar"
           cp "$source" "$output"
-          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.3.1-fabric-$MC.jar" > SHA256SUMS)
+          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.3.2-fabric-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.3.1-fabric-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.2-fabric-${{ matrix.minecraft }}-verified
           path: dist/minecraft/fabric/
           if-no-files-found: error
           retention-days: 14
@@ -268,11 +269,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/minecraft/paper
-          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.1-paper-$MC.jar"
-          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.1-paper-$MC.jar" > SHA256SUMS)
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.2-paper-$MC.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.2-paper-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.3.1-paper-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.2-paper-${{ matrix.minecraft }}-verified
           path: dist/minecraft/paper/
           if-no-files-found: error
           retention-days: 14
@@ -293,13 +294,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: openrad-2.3.1-*-verified
+          pattern: openrad-2.3.2-*-verified
           path: dist/minecraft/patches
       - name: Merge byte-identical patch builds per major version
-        run: python tools/minecraft_release_jars.py dist/minecraft/patches dist/minecraft/release --mod-version 2.3.1
+        run: python tools/minecraft_release_jars.py dist/minecraft/patches dist/minecraft/release --mod-version 2.3.2
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.3.1-minecraft-release-jars
+          name: openrad-2.3.2-minecraft-release-jars
           path: dist/minecraft/release/
           if-no-files-found: error
           retention-days: 30

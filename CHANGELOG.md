@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.3.2 — 2026-11-07
+
+Correcao do plugin Paper e do mod Fabric: a sessao de controle caia poucos segundos depois de
+conectar (`service disconnected session during connected session`, sem codigo de motivo) quando a
+maquina tinha IPv6 global. **So os JARs Minecraft mudam**; desktop/CLI, Windows, Android, Python e
+servidor Go sao os mesmos arquivos da 2.3.0. Sem alteracoes no wire format nem na identidade VPN.
+Veja as [notas da 2.3.2](docs/releases/2.3.2.md).
+
+- **Mod e plugin:** os candidatos de peer (TCP, UDP e endereco mapeado) eram escritos com
+  `getHostAddress()` do Java, que poe o IPv6 por extenso e com a zona da interface (`...%wlan0`).
+  Agora o texto e igual ao do Rust: IPv4 com pontos e IPv6 compactado (RFC 5952), sem zona; os
+  candidatos locais seguem a ordem do Rust (IPv4 primeiro).
+
 ## 2.3.1 — 2026-11-07
 
 Correcao do plugin Paper e do mod Fabric: sessoes de controle que caiam em loop

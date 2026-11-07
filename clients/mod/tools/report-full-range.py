@@ -66,7 +66,7 @@ def main():
     files = []
     for version in ALL:
         modern = version in MODERN
-        mod_version = "2.3.1"
+        mod_version = "2.3.2"
         name = f"OpenRadClientMod-{mod_version}-fabric-{version}.jar"
         path = RELEASE / name
         status, note = check_mod(path, version, mod_version)

@@ -22,7 +22,7 @@ foreach($target in $Targets){
 }
 foreach($target in $Targets){
     $isModern=$target -in $modern
-    $modVersion='2.3.1'
+    $modVersion='2.3.2'
     $buildDir=if($isModern){Join-Path $root 'modern'}else{$root}
     # Per-patch name, as staged by CI; tools/minecraft_release_jars.py merges identical builds per major.
     $jarName="OpenRadClientMod-$modVersion-fabric-$target.jar"
