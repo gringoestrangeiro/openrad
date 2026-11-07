@@ -672,7 +672,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 (byte) (peerIp >>> 24), (byte) (peerIp >>> 16), (byte) (peerIp >>> 8), (byte) peerIp
             };
             origin = new InetSocketAddress(InetAddress.getByAddress(ip), key.port());
-            origins.register(originEndpoint, origin);
+            origins.register(originEndpoint, origin, channel);
         }
 
         void connected() throws IOException {
@@ -1145,7 +1145,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
 
         void closeChannel() {
             if (origin != null) {
-                origins.unregister(originEndpoint, origin);
+                origins.unregister(originEndpoint, channel);
                 origin = null;
             }
             if (selection != null) selection.cancel();
