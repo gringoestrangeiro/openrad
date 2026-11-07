@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.3.1 — 2026-11-07
+
+Correcao do plugin Paper e do mod Fabric: sessoes de controle que caiam em loop
+(`AttachmentClosed`, `service disconnected session`), modo somente relay no mod e o botao OpenRad
+duplicado ao redimensionar a janela. **So os JARs Minecraft mudam**; desktop/CLI, Windows, Android,
+Python e servidor Go sao os mesmos arquivos da 2.3.0. Sem alteracoes no wire format nem na
+identidade VPN. Veja as [notas da 2.3.1](docs/releases/2.3.1.md).
+
+- **Mod:** uma recusa do servico (op 44) nao derruba mais a sessao inteira (paridade com o Rust e o
+  plugin); um registro de peer malformado so e registrado no log; o intervalo de reconexao cresce de
+  3 s ate 60 s e so volta ao inicio depois de 60 s conectado, como no daemon Rust; ofertas de peer
+  sem rota livre ficam para a proxima varredura em vez de discar e cancelar.
+- **Mod e plugin:** a desconexao do servico (op 16) informa o codigo do motivo e a etapa (consulta do
+  catalogo, entrada na rede X de N, sessao conectada). Quando outro cliente conecta com a mesma
+  identidade (motivo 1), ficam em FALHA e nao reconectam sozinhos, em vez de derrubarem um ao outro
+  a cada poucos segundos.
+- **Mod:** `force-relay=true` (ou **Somente relay** em Avancado) conecta aos peers so pelo relay,
+  sem TCP/UDP direto em nenhuma direcao, como o `force-relay` do desktop.
+- **Mod:** redimensionar a janela no Multijogador (1.21+/26.x) nao empilha mais botoes OpenRad.
+
 ## 2.3.0 — 2026-11-07
 
 Servidor de coordenacao Go auto-hospedado e escolha de servidor personalizado no desktop e no CLI;

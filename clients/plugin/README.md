@@ -1,12 +1,12 @@
-# OpenRad Plugin 2.3.0 (alpha)
+# OpenRad Plugin 2.3.1 (alpha)
 
-> **Download:** [release 2.3.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.0), um JAR por versão principal do Paper,
+> **Download:** [release 2.3.1](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.1), um JAR por versão principal do Paper,
 > dividida só onde os patches precisam de builds diferentes. O nome traz apenas a versão do Minecraft:
-> `OpenRadPlugin-2.3.0-paper-1.21.jar` para Paper 1.21.x (Java 21), `-26.1.1-26.3` para Paper 26.1.1 a 26.3 (Java 25)
+> `OpenRadPlugin-2.3.1-paper-1.21.jar` para Paper 1.21.x (Java 21), `-26.1.1-26.3` para Paper 26.1.1 a 26.3 (Java 25)
 > e alvos experimentais `-1.17-1.17.1`, `-1.18`, `-1.18.1-1.18.2`, `-1.19-1.19.2`, `-1.19.3-1.19.4`, `-1.20.1-1.20.4` e `-1.20.5-1.20.6`.
 > Cada patch continua compilado e testado separadamente no CI; patches só compartilham um JAR quando os builds são idênticos byte a byte.
 
-**Novidades da 2.3.0:** jogadores que entram pela VPN aparecem no Paper com o próprio IP `26.x.x.x` ([`bridge.forward-player-address`](#configuração-manual-opcional)), uma nova senha de rede privada é gravada antes de trocar a referência no YAML e a resolução DNS de peers é limitada. Compilar um alvo não comprova gameplay nessa versão. Consulte as [notas da 2.3.0](../../docs/releases/2.3.0.md).
+**Novidades da 2.3.1:** a desconexao pelo servico mostra o codigo do motivo e a etapa (catalogo, entrada na rede X de N, sessao conectada), e o plugin para em FALHA, sem reconectar em loop, quando outro cliente conecta com a mesma identidade (`identity.json` copiado ou um segundo servidor); use `/orb reconnect` depois de resolver. A 2.3.0 trouxe o IP `26.x.x.x` dos jogadores ([`bridge.forward-player-address`](#configuração-manual-opcional)). Compilar um alvo não comprova gameplay nessa versão. Consulte as [notas da 2.3.1](../../docs/releases/2.3.1.md).
 
 Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
@@ -14,7 +14,7 @@ Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio serv
 
 ## Início rápido (3 passos)
 
-1. Baixe o JAR da sua versão do Paper na [release 2.3.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
+1. Baixe o JAR da sua versão do Paper na [release 2.3.1](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.1) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
 2. No **console** do servidor, entre na sua rede Radmin:
 
    ```text
