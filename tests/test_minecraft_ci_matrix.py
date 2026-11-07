@@ -98,6 +98,19 @@ class MinecraftCIMatrixTests(unittest.TestCase):
             self.assertRegex(self.text, re.escape(f"minecraft: '{version}'") +
                              r"\s+api: '" + re.escape(version) + r"\.build\.\+'\s+java: 25")
 
+    def test_release_jar_names_carry_no_java_version(self):
+        self.assertNotRegex(self.text, r"-java\$|java\$\{\{")
+        self.assertIn('OpenRadPlugin-2.3.0-paper-$MC.jar', self.text)
+
+    def test_release_jars_merge_only_after_the_full_matrix(self):
+        job = self.text.split("\n  release-jars:", 1)[1]
+        self.assertIn("needs: [changes, fabric, paper]", job)
+        self.assertIn("needs.changes.outputs.fabric == 'true' && needs.changes.outputs.paper == 'true'", job)
+        self.assertIn("tools/minecraft_release_jars.py", job)
+        self.assertNotIn("--allow-partial", job)
+        inventory = self.text.split("\n  fabric:", 1)[0]
+        self.assertIn("test_minecraft_release_jars.py", inventory)
+
     def test_versioned_artifacts_and_checksum_uploaded(self):
         self.assertIn("openrad-2.3.0-fabric-${{ matrix.minecraft }}-verified", self.text)
         self.assertIn("openrad-2.3.0-paper-${{ matrix.minecraft }}-verified", self.text)

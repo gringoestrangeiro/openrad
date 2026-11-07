@@ -13,7 +13,7 @@ spec.loader.exec_module(verifier)
 
 
 class VerifyVersionJarTest(unittest.TestCase):
-    def fixture(self, directory, compatibility="JAVA_17", extra_major=61, mutation=None, minecraft="1.18.2"):
+    def fixture(self, directory, compatibility="JAVA_17", extra_major=61, mutation=None, minecraft="1.18.2", target=None):
         jar = Path(directory) / "synthetic.jar"
         java = 25 if minecraft.startswith("26.") else 17
         major = java + 44
@@ -21,7 +21,7 @@ class VerifyVersionJarTest(unittest.TestCase):
             metadata = {"version": "2.3.0", "environment": "client",
                 "entrypoints": {"client": ["io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod"]},
                 "mixins": ["openrad-client.mixins.json"],
-                "depends": {"minecraft": minecraft, "java": f">={java}"}}
+                "depends": {"minecraft": minecraft if target is None else target, "java": f">={java}"}}
             mixin_names = ["ConnectionRoutingMixin" if java == 25 else "ConnectionMixin", "LegacyStatusPingerMixin", "MultiplayerScreenMixin"]
             if java == 25:
                 mixin_names.append("ScreenWidgetInvoker")
@@ -50,6 +50,24 @@ class VerifyVersionJarTest(unittest.TestCase):
     def test_accepts_matching_legacy_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             verifier.verify(self.fixture(directory), "1.18.2", "2.3.0")
+
+    def test_accepts_merged_release_listing_the_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jar = self.fixture(directory, target=["1.18", "1.18.1", "1.18.2"])
+            for minecraft in ("1.18", "1.18.1", "1.18.2"):
+                verifier.verify(jar, minecraft, "2.3.0")
+
+    def test_rejects_merged_release_without_the_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jar = self.fixture(directory, target=["1.18", "1.18.1"])
+            with self.assertRaisesRegex(ValueError, "JAR targets"):
+                verifier.verify(jar, "1.18.2", "2.3.0")
+
+    def test_rejects_version_ranges_in_merged_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jar = self.fixture(directory, target=[">=1.18", "1.18.2"])
+            with self.assertRaisesRegex(ValueError, "JAR targets"):
+                verifier.verify(jar, "1.18.2", "2.3.0")
 
     def test_rejects_newer_mixin_compatibility(self):
         with tempfile.TemporaryDirectory() as directory:

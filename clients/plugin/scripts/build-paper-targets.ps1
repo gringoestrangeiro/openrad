@@ -8,7 +8,8 @@ $results=@()
 foreach($target in $Targets){
   if(-not $known.ContainsKey($target)){throw "Unsupported Paper target: $target"}
   $java=if($target -in @('1.17','1.17.1')){16}elseif($target -in @('1.18','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4')){17}elseif($target -in @('1.20.5','1.20.6','1.21')){21}else{25}
-  $name=if($target -in @("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4", "1.20.1", "1.20.2", "1.20.3", "1.20.4")){"OpenRadPlugin-2.3.0-paper-$target-java$java-experimental.jar"}else{"OpenRadPlugin-2.3.0-paper-$target-java$java.jar"}
+  # Per-patch name, as staged by CI; tools/minecraft_release_jars.py merges identical builds per major.
+  $name="OpenRadPlugin-2.3.0-paper-$target.jar"
   $result=[ordered]@{minecraft=$target;paperApi=$known[$target];java=$java;status='BUILD_FAILED';experimental=($target -in @('1.17','1.17.1','1.18','1.18.1','1.18.2','1.19','1.19.1','1.19.2','1.19.3','1.19.4','1.20.1','1.20.2','1.20.3','1.20.4','1.20.5'));runtimeValidated=$false;jar=$null;sha256=$null;error=$null}
   Push-Location $root
   try {

@@ -15,6 +15,8 @@ on:
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
       - 'tests/test_minecraft_ci_matrix.py'
+      - 'tools/minecraft_release_jars.py'
+      - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
   # Release candidates are validated by pull_request. 2.3.0-dev is also
   # validated on push as a standalone branch; while it has an open PR, the PR
@@ -36,6 +38,8 @@ on:
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
       - 'tests/test_minecraft_ci_matrix.py'
+      - 'tools/minecraft_release_jars.py'
+      - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
   workflow_dispatch:
 
@@ -72,6 +76,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_scope.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_release_jars.py -v
       - run: python -m unittest discover -s clients/mod/tools -p test_verify_version_jar.py -v
 
   fabric:
@@ -259,18 +264,44 @@ jobs:
         shell: bash
         env:
           MC: ${{ matrix.minecraft }}
-          JAVA: ${{ matrix.java }}
         run: |
           set -euo pipefail
           mkdir -p dist/minecraft/paper
-          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.0-paper-$MC-java$JAVA.jar"
-          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.0-paper-$MC.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.0-paper-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: openrad-2.3.0-paper-${{ matrix.minecraft }}-verified
           path: dist/minecraft/paper/
           if-no-files-found: error
           retention-days: 14
+
+  release-jars:
+    # Combines the per-patch JARs into one JAR per major version wherever the
+    # patch builds are byte-identical apart from version metadata. Runs only
+    # when the whole matrix ran and passed, so every target is present.
+    needs: [changes, fabric, paper]
+    if: ${{ needs.changes.outputs.fabric == 'true' && needs.changes.outputs.paper == 'true' }}
+    name: Minecraft release JARs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: openrad-2.3.0-*-verified
+          path: dist/minecraft/patches
+      - name: Merge byte-identical patch builds per major version
+        run: python tools/minecraft_release_jars.py dist/minecraft/patches dist/minecraft/release --mod-version 2.3.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.3.0-minecraft-release-jars
+          path: dist/minecraft/release/
+          if-no-files-found: error
+          retention-days: 30
 
 # This matrix checks all 33 configured Fabric targets and 21 Paper API targets
 # as individual jobs. It does not claim real multiplayer/VPN interoperability.

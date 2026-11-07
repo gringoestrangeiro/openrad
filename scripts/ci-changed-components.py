@@ -25,6 +25,7 @@ _BOTH_EXACT = {
     ".github/workflows/minecraft-2.2.0-integration.yml",
     "scripts/ci-changed-components.py",
     "tools/minecraft_version_coverage.py",
+    "tools/minecraft_release_jars.py",
     "src/protocol.rs",
     "src/crypto.rs",
     "src/network.rs",

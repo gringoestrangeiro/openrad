@@ -2,6 +2,7 @@
 """Verify remapped Fabric JAR and exact Minecraft version without running Minecraft."""
 import json
 import pathlib
+import re
 import struct
 import sys
 import zipfile
@@ -19,7 +20,11 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             raise ValueError(f"Missing release classes/metadata: {sorted(missing)}")
         metadata = json.loads(z.read("fabric.mod.json"))
         actual_target = metadata.get("depends", {}).get("minecraft")
-        if actual_target != expected_minecraft:
+        # A release JAR merged from byte-identical patch builds lists every
+        # covered patch (tools/minecraft_release_jars.py); no ranges or wildcards.
+        targets = actual_target if isinstance(actual_target, list) else [actual_target]
+        exact = all(isinstance(t, str) and re.fullmatch(r"\d+(?:\.\d+){1,2}", t) for t in targets)
+        if expected_minecraft not in targets or not exact:
             raise ValueError(f"JAR targets {actual_target!r}, expected {expected_minecraft!r}")
         if metadata.get("version") != expected_version:
             raise ValueError(f"Wrong mod version: {metadata.get('version')!r}")
