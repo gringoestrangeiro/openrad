@@ -124,6 +124,51 @@ public final class Wire {
         }
     }
 
+    /**
+     * Wire text of an address, exactly like Rust's {@code IpAddr} Display: dotted IPv4, and IPv6
+     * compressed per RFC 5952 without a zone. {@link InetAddress#getHostAddress()} instead writes
+     * the uncompressed form and, for interface addresses, a {@code %zone} suffix (for example
+     * {@code 2804:...%wlan0}) that the service does not accept as a candidate address.
+     */
+    public static String addressText(InetAddress ip) {
+        byte[] b = ip.getAddress();
+        if (b.length == 4)
+            return (b[0] & 255) + "." + (b[1] & 255) + "." + (b[2] & 255) + "." + (b[3] & 255);
+        require(b.length == 16, "invalid IP address");
+        int[] groups = new int[8];
+        for (int i = 0; i < 8; i++) groups[i] = ((b[2 * i] & 255) << 8) | (b[2 * i + 1] & 255);
+        boolean mapped = true;
+        for (int i = 0; i < 5; i++) mapped &= groups[i] == 0;
+        if (mapped && groups[5] == 0xffff)
+            return "::ffff:" + (b[12] & 255) + "." + (b[13] & 255) + "." + (b[14] & 255) + "."
+                    + (b[15] & 255);
+        // The first longest run of at least two zero groups becomes "::".
+        int bestStart = -1, bestLength = 1;
+        for (int i = 0; i < 8; ) {
+            if (groups[i] != 0) {
+                i++;
+                continue;
+            }
+            int start = i;
+            while (i < 8 && groups[i] == 0) i++;
+            if (i - start > bestLength) {
+                bestStart = start;
+                bestLength = i - start;
+            }
+        }
+        StringBuilder text = new StringBuilder(39);
+        for (int i = 0; i < 8; i++) {
+            if (i == bestStart) {
+                text.append("::");
+                i += bestLength - 1;
+                continue;
+            }
+            if (text.length() > 0 && text.charAt(text.length() - 1) != ':') text.append(':');
+            text.append(Integer.toHexString(groups[i]));
+        }
+        return text.toString();
+    }
+
     public static String display(byte[] b) {
         require(
                 b.length >= 2

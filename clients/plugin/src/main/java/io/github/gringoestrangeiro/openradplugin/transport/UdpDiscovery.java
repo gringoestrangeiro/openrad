@@ -35,10 +35,22 @@ public final class UdpDiscovery {
                                                         && ip.isLinkLocalAddress()))
                         .map(ip -> new InetSocketAddress(ip, port))
                         .distinct()
+                        // Rust sorts candidates: IPv4 before IPv6, then by address bytes.
+                        .sorted(UdpDiscovery::compareCandidates)
                         .limit(32)
                         .toList();
         if (result.isEmpty()) throw new IOException("no routable local UDP candidates");
         return result;
+    }
+
+    static int compareCandidates(InetSocketAddress left, InetSocketAddress right) {
+        byte[] a = left.getAddress().getAddress(), b = right.getAddress().getAddress();
+        if (a.length != b.length) return Integer.compare(a.length, b.length);
+        for (int i = 0; i < a.length; i++) {
+            int order = Integer.compare(a[i] & 255, b[i] & 255);
+            if (order != 0) return order;
+        }
+        return Integer.compare(left.getPort(), right.getPort());
     }
 
     public static Mapping discover(DatagramSocket socket, List<Inet4Address> authenticatedHosts)

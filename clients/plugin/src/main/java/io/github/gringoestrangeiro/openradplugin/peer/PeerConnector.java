@@ -185,7 +185,7 @@ public final class PeerConnector {
                     tlv(
                             0x127d,
                             concat(
-                                    text(0x030001c2, a.getAddress().getHostAddress()),
+                                    text(0x030001c2, addressText(a.getAddress())),
                                     u32(0x010001c3, a.getPort()))));
         if (nonce != 0) body.add(u32(0x0100020a, nonce));
         return concat(request(cid, operation), tlv(root, concat(body.toArray(byte[][]::new))));
@@ -197,7 +197,7 @@ public final class PeerConnector {
                 tlv(
                         0x1231,
                         concat(
-                                text(0x030001c4, endpoint.getAddress().getHostAddress()),
+                                text(0x030001c4, addressText(endpoint.getAddress())),
                                 u32(0x010001c5, endpoint.getPort()),
                                 u32(0x0b0001dc, 0),
                                 u32(0x0b0001db, 0),
