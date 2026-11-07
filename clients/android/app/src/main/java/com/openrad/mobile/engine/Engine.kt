@@ -194,14 +194,18 @@ class Engine(
     fun delete(networkId: String, done: (CommandResult) -> Unit) = submit(Command.Remove(networkId, true, done))
 
     private fun submit(command: Command) {
-        if (phase != EngineState.Phase.ONLINE) {
-            command.wipe()
-            command.fail("control session is not online")
-            return
+        // Admission and shutdown draining share a gate. A command must never
+        // arrive after the final drain while the last published phase is ONLINE.
+        val failure = synchronized(lock) {
+            when {
+                !running.get() || phase != EngineState.Phase.ONLINE -> "control session is not online"
+                !commands.offer(command) -> "control command queue is full"
+                else -> null
+            }
         }
-        if (!commands.offer(command)) {
+        if (failure != null) {
             command.wipe()
-            command.fail("control command queue is full")
+            command.fail(failure)
         }
     }
 
@@ -247,19 +251,30 @@ class Engine(
 
     private fun runControl() {
         var attempt = 0
+        // Retry saving an issued credential without asking the service to issue another.
+        var issuedIdentity: Identity? = null
         val redirected = HashSet<String>()
         var host: String? = null
         while (running.get()) {
             var control: Control? = null
             val active = ArrayList<Active>()
             try {
-                var id = store.load()
+                var id = issuedIdentity
+                if (id != null) {
+                    store.save(id)
+                    issuedIdentity = null
+                } else {
+                    id = store.load()
+                }
                 if (id == null) {
                     phase = EngineState.Phase.PROVISIONING
                     publish(force = true)
                     event("Registering this device…", false)
-                    id = provisionIdentity(config.nodeName, config.host, config.port, protector, stopping, config.modulus)
+                    id = provisionIdentity(config.nodeName, config.host, config.port, protector, stopping, config.modulus,
+                        beforeRegister = store::markRegistrationPending)
+                    issuedIdentity = id
                     store.save(id)
+                    issuedIdentity = null
                     event("Device registered.", false)
                 }
                 if (id.nodeName != config.nodeName && config.nodeName.isNotBlank()) {
@@ -318,6 +333,12 @@ class Engine(
                     host = redirect.host
                     event("Server redirected the session to ${redirect.host}.", false)
                 }
+            } catch (e: RegistrationPendingException) {
+                error = e.message
+                phase = EngineState.Phase.ERROR
+                event(e.message ?: "registration outcome unknown", true)
+                halt()
+                publish(force = true)
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
@@ -329,8 +350,10 @@ class Engine(
                 if (attempt >= limit) {
                     phase = EngineState.Phase.ERROR
                     event("Connection failed: $message", true)
-                    publish(force = true)
                     halt()
+                    // StateFlow may conflate the final equal snapshot. The
+                    // service must see isRunning=false on its first ERROR.
+                    publish(force = true)
                 } else {
                     phase = EngineState.Phase.RECONNECTING
                     event("Connection lost: $message. Retrying…", true)
@@ -399,6 +422,7 @@ class Engine(
             commands.poll()
             val request = nextRequest
             nextRequest = nextRequest % 0xffffffffL + 1
+            var prepared: NetworkOperation? = null
             try {
                 when (next) {
                     is Command.Search -> {
@@ -412,6 +436,7 @@ class Engine(
                             next.done(CommandResult.Network(NetworkOperation.Outcome.Joined(already, pendingApproval)))
                         } else {
                             val op = NetworkOperation.join(next.name, next.password, request, request)
+                            prepared = op
                             control.send(op.packet)
                             lastJoinStart = t
                             active.add(Active(op, null, request, t + 35_000, next.done))
@@ -419,6 +444,7 @@ class Engine(
                     }
                     is Command.Create -> {
                         val op = NetworkOperation.create(next.name, next.password, request, request)
+                        prepared = op
                         control.send(op.packet)
                         lastJoinStart = t
                         active.add(Active(op, null, request, t + 35_000, next.done))
@@ -427,12 +453,20 @@ class Engine(
                         val network = synchronized(lock) { membership.networks[next.networkId] }
                             ?: fail("network is not an authenticated membership")
                         val op = NetworkOperation.remove(next.networkId, network.name, next.delete, request, request)
+                        prepared = op
                         control.send(op.packet)
                         active.add(Active(op, null, request, t + 35_000, next.done))
                     }
                 }
             } catch (e: ProtocolException) {
+                prepared?.wipe()
                 next.fail(e.message ?: "invalid request")
+            } catch (e: IOException) {
+                // This command has left the queue but is not active until send succeeds.
+                // Complete it here; reconnect cleanup cannot find it in either collection.
+                prepared?.wipe()
+                next.fail("control connection closed")
+                throw e
             } finally {
                 next.wipe()
             }
@@ -1511,11 +1545,13 @@ class Engine(
     }
 
     private fun drainCommands(reason: String) {
-        while (true) {
-            val c = commands.poll() ?: break
-            c.wipe()
-            c.fail(reason)
+        val queued = synchronized(lock) {
+            ArrayList<Command>().also { commands.drainTo(it) }
         }
+        // Wipe every password before any callback runs; one throwing callback
+        // must not skip the remaining commands' wipes or failure replies.
+        for (c in queued) c.wipe()
+        for (c in queued) runCatching { c.fail(reason) }
     }
 
     private fun halt() {

@@ -7,6 +7,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.openrad.mobile.engine.Identity
 import com.openrad.mobile.engine.IdentityStore
+import com.openrad.mobile.engine.RegistrationPendingException
 import com.openrad.mobile.model.AppSettings
 import com.openrad.mobile.model.JoinConfiguration
 
@@ -27,8 +28,9 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
         )
     }
 
-    override fun load(): Identity? {
+    @Synchronized override fun load(): Identity? {
         val text = prefs.getString(KEY, null) ?: return null
+        if (text == PENDING) throw RegistrationPendingException()
         return try {
             Codecs.decodeIdentity(text)
         } catch (e: Exception) {
@@ -37,17 +39,24 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
         }
     }
 
-    override fun save(identity: Identity) {
+    @Synchronized override fun save(identity: Identity) {
         check(prefs.edit().putString(KEY, Codecs.encodeIdentity(identity)).commit()) { "could not save identity" }
     }
 
-    override fun clear() {
-        prefs.edit().remove(KEY).commit()
+    @Synchronized override fun markRegistrationPending() {
+        val current = prefs.getString(KEY, null)
+        check(current == null || current == PENDING) { "an identity was saved while preparing registration" }
+        check(prefs.edit().putString(KEY, PENDING).commit()) { "could not save registration intent" }
+    }
+
+    @Synchronized override fun clear() {
+        check(prefs.edit().remove(KEY).commit()) { "could not clear identity" }
     }
 
     companion object {
         private const val FILE = "openrad_identity"
         private const val KEY = "identity"
+        private const val PENDING = "openrad-registration-pending-v1"
     }
 }
 
@@ -55,7 +64,9 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
 class PreferencesStore(context: Context) {
     private val prefs = context.getSharedPreferences("openrad_preferences", Context.MODE_PRIVATE)
 
-    private fun <T> read(key: String, default: T, decode: (String) -> T): T {
+    // SharedPreferences publishes a commit to its process cache before the disk result is known.
+    // Readers share this lock with saveString so they never observe a value that is rolled back.
+    private fun <T> read(key: String, default: T, decode: (String) -> T): T = synchronized(LOCK) {
         val raw = prefs.getString(key, null) ?: return default
         return try {
             decode(raw)
@@ -68,21 +79,28 @@ class PreferencesStore(context: Context) {
 
     fun settings(): AppSettings = read(SETTINGS, AppSettings(), Codecs::decodeSettings)
 
-    fun saveSettings(value: AppSettings) = prefs.edit().putString(SETTINGS, Codecs.encodeSettings(value)).apply()
+    private fun saveString(key: String, value: String): Boolean = synchronized(LOCK) {
+        commitPreferenceString(value,
+            { prefs.getString(key, null) },
+            { previous -> prefs.edit().putString(key, previous).commit() })
+    }
+
+    fun saveSettings(value: AppSettings): Boolean = saveString(SETTINGS, Codecs.encodeSettings(value))
 
     fun favorites(): Set<String> = read(FAVORITES, emptySet(), Codecs::decodeFavorites)
 
-    fun saveFavorites(value: Set<String>) = prefs.edit().putString(FAVORITES, Codecs.encodeFavorites(value)).apply()
+    fun saveFavorites(value: Set<String>): Boolean = saveString(FAVORITES, Codecs.encodeFavorites(value))
 
     fun configurations(): List<JoinConfiguration> = read(CONFIGS, emptyList(), Codecs::decodeConfigurations)
 
-    fun saveConfigurations(value: List<JoinConfiguration>) =
-        prefs.edit().putString(CONFIGS, Codecs.encodeConfigurations(value)).apply()
+    fun saveConfigurations(value: List<JoinConfiguration>): Boolean =
+        saveString(CONFIGS, Codecs.encodeConfigurations(value))
 
     fun hasCorruptValues(): Boolean = prefs.all.keys.any { it.endsWith(".corrupt") }
 
     companion object {
         private const val TAG = "OpenRad"
+        private val LOCK = Any()
         private const val SETTINGS = "settings"
         private const val FAVORITES = "favorites"
         private const val CONFIGS = "join_configurations"

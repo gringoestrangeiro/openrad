@@ -1,0 +1,100 @@
+name: Release tooling regressions
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'tools/**'
+      - 'tests/test_minecraft_*.py'
+      - 'packaging/windows/**'
+      - 'desktop/src/windows_startup.rs'
+      - 'src/platform/windows_radmin.ps1'
+      - 'docs/releases/**'
+      - 'CHANGELOG.md'
+      - 'Cargo.toml'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'tools/**'
+      - 'tests/test_minecraft_*.py'
+      - 'packaging/windows/**'
+      - 'desktop/src/windows_startup.rs'
+      - 'src/platform/windows_radmin.ps1'
+      - 'docs/releases/**'
+      - 'CHANGELOG.md'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-tooling:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check CI selection and version inventory
+        run: python -m unittest discover -s tests -p 'test_minecraft_*.py' -v
+      - name: Check packaged release history
+        run: python scripts/test-package-release-history.py
+      - name: Round-trip synthetic signing properties through Java
+        run: python scripts/test-android-signing-properties.py
+
+  windows-tooling:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reject signing output collisions without accessing keys
+        run: ./scripts/test-sign-android-paths.ps1
+      - name: Validate headless Windows logon tasks using mocked Task Scheduler
+        run: ./scripts/test-windows-startup.ps1
+      - name: Exercise adapter setup with mocked OS commands
+        run: ./packaging/windows/Test-SetupLogic.ps1
+      - name: Exercise recovery with mocked OS commands
+        run: ./packaging/windows/Test-RadminRecovery.ps1
+      - name: Fetch checksum-pinned portable NSIS compiler
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'nsis-3.11.zip'
+          $expected = 'c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1'
+          $sources = @(
+            'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip',
+            'https://mse.uk.distfiles.macports.org/nsis/nsis-3.11.zip'
+          )
+          $verified = $false
+          foreach ($url in $sources) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $archive -TimeoutSec 40 -ErrorAction Stop
+              if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expected) {
+                $verified = $true
+                break
+              }
+              Write-Warning 'NSIS download does not match the pinned official SHA-256; trying next source.'
+            } catch {
+              Write-Warning 'NSIS download failed; trying next source.'
+            }
+          }
+          if (-not $verified) { throw 'No verified NSIS 3.11 archive available from configured sources' }
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'openrad-nsis')
+      - name: Exercise production mutex macro in unelevated disposable fixture
+        # Never launches OpenRad setup, the driver, or a real recovery worker.
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'openrad-nsis/nsis-3.11/makensis.exe'
+          python scripts/test-windows-setup-mutex.py --makensis $compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

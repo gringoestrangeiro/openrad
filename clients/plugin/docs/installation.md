@@ -47,7 +47,7 @@ O arquivo de segredos é UTF-8 no formato JavaProperties; caracteres especiais d
 
 Configure `bridge.enabled: true` e a porta virtual, depois `/orb reload` (ou use `/orb enable`). O backend usa a porta do próprio Paper quando `bridge.backend-port: 0`. A leitura/validação e a conexão ocorrem em workers. `/orb status` mostra o IP 26atribuído e peers. O jogador usa o Radmin oficial na rede correspondente e conecta no endereço mostrado, com a porta virtual. Ping ICMP não é suportado.
 
-O plugin não modifica `online-mode`. Mantenha a autenticação de jogador que seu servidor já exige. O Paper enxerga uma conexão de loopback; o IP virtual não é encaminhado como IP real e não há suporte inventado a Bungee/Velocity forwarding.
+O plugin não modifica `online-mode`. Mantenha a autenticação de jogador que seu servidor já exige. Com `bridge.forward-player-address: true` (padrão), o Paper vê cada jogador da VPN com o próprio IP `26.x.x.x`, não `127.0.0.1`: bans e limites por IP, logs e plugins usam o endereço Radmin do jogador. Isso exige Paper 1.17.1+ (`ChannelInitializeListener`); se indisponível, o plugin avisa no log e o Paper vê `127.0.0.1`. Use `false` para manter loopback. Não é necessário habilitar Bungee/Velocity forwarding.
 
 ## Limites e operações
 

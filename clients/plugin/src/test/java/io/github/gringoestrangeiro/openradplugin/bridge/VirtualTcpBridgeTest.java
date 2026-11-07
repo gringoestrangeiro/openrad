@@ -95,6 +95,14 @@ class VirtualTcpBridgeTest {
         }
 
         Client(InetSocketAddress backend, VirtualTcpBridge.Limits limits) throws IOException {
+            this(backend, limits, null);
+        }
+
+        Client(
+                InetSocketAddress backend,
+                VirtualTcpBridge.Limits limits,
+                VirtualOrigins origins)
+                throws IOException {
             bridge =
                     new VirtualTcpBridge(
                             LOCAL,
@@ -116,7 +124,8 @@ class VirtualTcpBridgeTest {
                                 assertEquals(LOCAL, ip.sourceIp());
                                 assertEquals(PEER, ip.destinationIp());
                                 wire.add(TcpSegment.parse(ip.tcpBytes(), LOCAL, PEER));
-                            });
+                            },
+                            origins);
         }
 
         TcpSegment take() throws InterruptedException {
@@ -250,6 +259,42 @@ class VirtualTcpBridgeTest {
         public void close() {
             bridge.close();
         }
+    }
+
+    @Test
+    void backendSourcePortMapsToTheVirtualPlayerAddressUntilClose() throws Exception {
+        VirtualOrigins origins = new VirtualOrigins();
+        BlockingQueue<Optional<InetSocketAddress>> seen = new LinkedBlockingQueue<>();
+        try (Backend backend =
+                        new Backend(
+                                socket -> {
+                                    seen.add(
+                                            Optional.ofNullable(
+                                                    origins.lookup(
+                                                            socket.getRemoteSocketAddress())));
+                                    socket.getInputStream().readAllBytes();
+                                });
+                Client client =
+                        new Client(backend.address(), VirtualTcpBridge.Limits.defaults(), origins)) {
+            client.handshake();
+            Optional<InetSocketAddress> origin = seen.poll(5, TimeUnit.SECONDS);
+            assertNotNull(origin, "backend never accepted");
+            assertEquals(
+                    new InetSocketAddress(
+                            InetAddress.getByAddress(new byte[] {26, 1, 1, 3}), CLIENT_PORT),
+                    origin.orElseThrow());
+            assertEquals(1, origins.size());
+            // Unrelated loopback clients and non-loopback addresses are never mapped.
+            assertNull(origins.lookup(new InetSocketAddress(InetAddress.getLoopbackAddress(), 1)));
+            assertNull(
+                    origins.lookup(
+                            new InetSocketAddress(
+                                    InetAddress.getByAddress(new byte[] {10, 0, 0, 1}),
+                                    ((InetSocketAddress) backend.clients.get(0)
+                                                    .getRemoteSocketAddress())
+                                            .getPort())));
+        }
+        assertEquals(0, origins.size());
     }
 
     @Test
@@ -573,7 +618,7 @@ class VirtualTcpBridgeTest {
                         1024 * 1024,
                         d.connectTimeout(),
                         d.handshakeTimeout(),
-                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(15),
                         d.halfCloseTimeout(),
                         d.timeWait(),
                         1);
@@ -591,12 +636,15 @@ class VirtualTcpBridgeTest {
             client.advertisedWindow = 0;
             client.ack(); // No data ACK: the original bytes remain in flight.
             int probes = 0;
-            while (probes < 2) {
+            while (probes < 4) {
                 TcpSegment packet = client.take();
                 assertEquals(0, packet.flags() & RST);
-                if (packet.payload().length == 1 && packet.sequence() == wire(client.serverNext))
+                if (packet.payload().length == 1 && packet.sequence() == wire(client.serverNext)) {
                     probes++;
-                else
+                    // A real zero-window receiver responds to every persist probe. These
+                    // repeated ACKs must not trigger fast retransmit or spend its retry budget.
+                    client.ack();
+                } else
                     assertEquals(
                             ACK | FIN, packet.flags(), "ordinary RTO ran against a zero window");
             }
@@ -893,6 +941,43 @@ class VirtualTcpBridgeTest {
             assertEquals(SYN | ACK, take(responses).flags());
             await(() -> backend.accepted.get() == 3);
             assertEquals(0, bridge.snapshot().resets());
+        }
+    }
+
+    @Test
+    void freshSynReusingATimeWaitPortOpensANewFlow() throws Exception {
+        BlockingQueue<TcpSegment> responses = new LinkedBlockingQueue<>();
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge =
+                        new VirtualTcpBridge(
+                                LOCAL,
+                                LOCAL_MAC,
+                                PORT,
+                                backend.address(),
+                                VirtualTcpBridge.Limits.defaults(),
+                                (rid, frame) -> {
+                                    var ip = Ipv4Packet.parse(EthernetFrame.parse(frame).payload());
+                                    responses.add(
+                                            TcpSegment.parse(
+                                                    ip.tcpBytes(),
+                                                    ip.sourceIp(),
+                                                    ip.destinationIp()));
+                                })) {
+            long rid = 9100;
+            int port = 44100;
+            var grant =
+                    new InboundFirewall.PeerGrant(rid, true, Set.of("synthetic"), PEER, PEER_MAC);
+            closeCleanly(bridge, responses, rid, port);
+            // A duplicate of the old SYN stays absorbed by the tombstone.
+            sendTcp(bridge, grant, port, 7000, 0, SYN, EMPTY);
+            assertNull(responses.poll(300, TimeUnit.MILLISECONDS));
+            assertEquals(VirtualTcpBridge.TcpState.TIME_WAIT, bridge.state(rid, port));
+            // A new connection from the same source port is accepted immediately.
+            sendTcp(bridge, grant, port, 90_000, 0, SYN, EMPTY);
+            TcpSegment synAck = take(responses);
+            assertEquals(SYN | ACK, synAck.flags());
+            assertEquals(90_001, synAck.acknowledgement());
+            await(() -> backend.accepted.get() == 2);
         }
     }
 

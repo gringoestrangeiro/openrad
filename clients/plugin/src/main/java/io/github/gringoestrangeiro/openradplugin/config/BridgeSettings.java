@@ -14,7 +14,38 @@ public record BridgeSettings(
         int tcpProbePort,
         String udpProbeHost,
         int udpProbePort,
-        int diagnosticTimeoutMillis) {
+        int diagnosticTimeoutMillis,
+        boolean forwardPlayerAddress) {
+    /** Settings without an explicit choice report VPN players' virtual 26.x addresses. */
+    public BridgeSettings(
+            boolean enabled,
+            String backendHost,
+            int backendPort,
+            int virtualPort,
+            int maxPlayers,
+            int maxPendingTcp,
+            int timeoutSeconds,
+            String tcpProbeHost,
+            int tcpProbePort,
+            String udpProbeHost,
+            int udpProbePort,
+            int diagnosticTimeoutMillis) {
+        this(
+                enabled,
+                backendHost,
+                backendPort,
+                virtualPort,
+                maxPlayers,
+                maxPendingTcp,
+                timeoutSeconds,
+                tcpProbeHost,
+                tcpProbePort,
+                udpProbeHost,
+                udpProbePort,
+                diagnosticTimeoutMillis,
+                true);
+    }
+
     public static BridgeSettings from(FileConfiguration config) {
         String host = config.getString("bridge.backend-host", "127.0.0.1");
         if (!"127.0.0.1".equals(host) && !"::1".equals(host)) {
@@ -44,7 +75,8 @@ public record BridgeSettings(
                 tcpPort,
                 udp,
                 udpPort,
-                ConfigScalars.integer(config, "diagnostics.timeout-millis", 2000, 100, 5000));
+                ConfigScalars.integer(config, "diagnostics.timeout-millis", 2000, 100, 5000),
+                ConfigScalars.flag(config, "bridge.forward-player-address", true));
     }
 
     /** {@code backend-port: 0} means "the port this Paper server listens on". */
@@ -66,7 +98,8 @@ public record BridgeSettings(
                 tcpProbePort,
                 udpProbeHost,
                 udpProbePort,
-                diagnosticTimeoutMillis);
+                diagnosticTimeoutMillis,
+                forwardPlayerAddress);
     }
 
     private static boolean validProbeHost(String host) {

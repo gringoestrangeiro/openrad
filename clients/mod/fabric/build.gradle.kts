@@ -62,7 +62,7 @@ sourceSets.main {
 if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
-        inputs.property("compatibilityAdapterVersion", "1182-v4")
+        inputs.property("compatibilityAdapterVersion", "1182-v5")
         // Filters differ across 1.17/1.18, 1.19.2 and 1.19.3/4. Without this
         // input a matrix build can reuse source transformed for the prior target.
         inputs.property("minecraftTarget", minecraftTarget)
@@ -77,8 +77,7 @@ if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19
                         .replace("import net.minecraft.client.gui.components.Tooltip;", "// Tooltip was introduced after Minecraft 1.19.2")
                         .replace("save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr(\"openrad.menu.reconnect_note\")) : null);", ";")
                         .replace("option.setTooltip(Tooltip.create(Component.literal(item.entry().name())));", ";")
-                        .replace("ScreenEvents.afterTick(screen).register(ignored -> button.setTooltip(Tooltip.create(", "/* Legacy 1.19.2 has no dynamic Tooltip API")
-                        .replace("OpenRadI18n.tr(\"openrad.menu.status\", phase(controller.status().phase())))));", "*/")
+                        .replace("button.setTooltip(Tooltip.create(OpenRadI18n.tr(\"openrad.menu.status\", phase(current))));", ";")
                         .replace("box.getX()", "box.x")
                         .replace("box.getY()", "box.y")
                 }

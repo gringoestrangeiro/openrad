@@ -1,7 +1,31 @@
 //! Shared public service configuration. These values are not credentials.
 
+use std::sync::atomic::{AtomicU16, Ordering};
+
 /// Default public registration endpoint; the CLI accepts a `--host` override.
 pub const DEFAULT_BOOTSTRAP_HOST: &str = "148.113.190.78";
+
+/// TCP port of the official service's control sessions.
+pub const DEFAULT_CONTROL_PORT: u16 = 17301;
+
+static CONTROL_PORT: AtomicU16 = AtomicU16::new(DEFAULT_CONTROL_PORT);
+
+/// TCP port used by registration, attachment and peer-coordinator sessions in
+/// this process. Every host a server hands out (home server, coordinators)
+/// belongs to the same deployment, so one port applies to all of them.
+pub fn control_port() -> u16 {
+    CONTROL_PORT.load(Ordering::Relaxed)
+}
+
+/// Select the control port for a custom server; zero restores the default.
+pub fn set_control_port(port: u16) {
+    let port = if port == 0 {
+        DEFAULT_CONTROL_PORT
+    } else {
+        port
+    };
+    CONTROL_PORT.store(port, Ordering::Relaxed);
+}
 
 /// Public RSA modulus used to bootstrap authenticated service sessions.
 pub const SERVER_MODULUS: &[u8] = &[

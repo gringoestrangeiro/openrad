@@ -74,3 +74,9 @@ clients/android/local.properties
 clients/python/__pycache__/
 clients/python/.venv/
 *.pyc
+
+# Coordination server (server/): local builds and databases (they hold the RSA private key)
+/server/openrad-server
+/server/*.db
+/server/*.db-shm
+/server/*.db-wal

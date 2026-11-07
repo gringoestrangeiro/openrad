@@ -2,25 +2,44 @@ name: OpenRad Minecraft version compatibility (development)
 
 on:
   pull_request:
-    branches: [main, '2.2.0-dev']
+    branches: [main, '2.2.0-dev', '2.3.0-dev']
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
       - 'tests/test_minecraft_ci_matrix.py'
+      - 'tools/minecraft_release_jars.py'
+      - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
+  # Release candidates are validated by pull_request. 2.3.0-dev is also
+  # validated on push as a standalone branch; while it has an open PR, the PR
+  # run additionally tests the merge result. That overlap is intentional: a
+  # concurrency group would cancel one of the two different validations.
   push:
     branches:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'
-      - 'release/2.2.0-candidates'
-      - '2.2.0-dev'
+      - '2.3.0-dev'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
+      - 'src/protocol.rs'
+      - 'src/crypto.rs'
+      - 'src/network.rs'
+      - 'tests/fixtures/**'
+      - 'scripts/ci-changed-components.py'
+      - 'tests/test_minecraft_ci_scope.py'
       - 'tools/minecraft_version_coverage.py'
       - 'tests/test_minecraft_version_coverage.py'
       - 'tests/test_minecraft_ci_matrix.py'
+      - 'tools/minecraft_release_jars.py'
+      - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
   workflow_dispatch:
 
@@ -28,6 +47,24 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect Minecraft changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fabric: ${{ steps.scope.outputs.fabric }}
+      paper: ${{ steps.scope.outputs.paper }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check changes requiring validation (fail closed)
+        id: scope
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python3 scripts/ci-changed-components.py
+
   inventory:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -38,9 +75,13 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
       - run: python -m unittest discover -s tests -p test_minecraft_ci_matrix.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_ci_scope.py -v
+      - run: python -m unittest discover -s tests -p test_minecraft_release_jars.py -v
       - run: python -m unittest discover -s clients/mod/tools -p test_verify_version_jar.py -v
 
   fabric:
+    needs: changes
+    if: ${{ needs.changes.outputs.fabric == 'true' }}
     name: Fabric ${{ matrix.minecraft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -65,7 +106,7 @@ jobs:
       - name: Verify regular Fabric version, bytecode, mixins and metadata
         if: ${{ !startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod
-        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.2.0.jar "${{ matrix.minecraft }}" 2.2.0
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.3.0.jar "${{ matrix.minecraft }}" 2.3.0
       - name: Compile and test modern Fabric on Java 25
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod/modern
@@ -74,7 +115,7 @@ jobs:
       - name: Verify modern Fabric version, bytecode, mixins and metadata
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         run: |
-          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.2.0
+          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.3.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.3.0
 
       - name: Stage version-specific verified Fabric JAR and checksum
         shell: bash
@@ -84,22 +125,24 @@ jobs:
           set -euo pipefail
           mkdir -p dist/minecraft/fabric
           if [[ "$MC" == 26.* ]]; then
-            source="clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-$MC.jar"
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.3.0-modern-$MC.jar"
           else
-            source="clients/mod/fabric/build/libs/fabric-2.2.0.jar"
+            source="clients/mod/fabric/build/libs/fabric-2.3.0.jar"
           fi
           test -s "$source"
-          output="dist/minecraft/fabric/OpenRadClientMod-2.2.0-fabric-$MC.jar"
+          output="dist/minecraft/fabric/OpenRadClientMod-2.3.0-fabric-$MC.jar"
           cp "$source" "$output"
-          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.2.0-fabric-$MC.jar" > SHA256SUMS)
+          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.3.0-fabric-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.0-fabric-${{ matrix.minecraft }}-verified
           path: dist/minecraft/fabric/
           if-no-files-found: error
           retention-days: 14
 
   paper:
+    needs: changes
+    if: ${{ needs.changes.outputs.paper == 'true' }}
     name: Paper ${{ matrix.minecraft }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -221,18 +264,44 @@ jobs:
         shell: bash
         env:
           MC: ${{ matrix.minecraft }}
-          JAVA: ${{ matrix.java }}
         run: |
           set -euo pipefail
           mkdir -p dist/minecraft/paper
-          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar"
-          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.0-paper-$MC.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.0-paper-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.2.0-paper-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.0-paper-${{ matrix.minecraft }}-verified
           path: dist/minecraft/paper/
           if-no-files-found: error
           retention-days: 14
+
+  release-jars:
+    # Combines the per-patch JARs into one JAR per major version wherever the
+    # patch builds are byte-identical apart from version metadata. Runs only
+    # when the whole matrix ran and passed, so every target is present.
+    needs: [changes, fabric, paper]
+    if: ${{ needs.changes.outputs.fabric == 'true' && needs.changes.outputs.paper == 'true' }}
+    name: Minecraft release JARs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: openrad-2.3.0-*-verified
+          path: dist/minecraft/patches
+      - name: Merge byte-identical patch builds per major version
+        run: python tools/minecraft_release_jars.py dist/minecraft/patches dist/minecraft/release --mod-version 2.3.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openrad-2.3.0-minecraft-release-jars
+          path: dist/minecraft/release/
+          if-no-files-found: error
+          retention-days: 30
 
 # This matrix checks all 33 configured Fabric targets and 21 Paper API targets
 # as individual jobs. It does not claim real multiplayer/VPN interoperability.

@@ -17,10 +17,10 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $UnsignedApk) {
-    $UnsignedApk = Join-Path $repo 'dist\android-local-signing\openrad-2.2.0-android-UNSIGNED.apk'
+    $UnsignedApk = Join-Path $repo 'dist\android-local-signing\openrad-2.3.0-android-UNSIGNED.apk'
 }
 if (-not $OutputApk) {
-    $OutputApk = Join-Path $repo 'dist\android-release-signed\openrad-2.2.0-android.apk'
+    $OutputApk = Join-Path $repo 'dist\android-release-signed\openrad-2.3.0-android.apk'
 }
 if (-not (Test-Path -LiteralPath $UnsignedApk -PathType Leaf)) {
     throw "Unsigned APK missing: $UnsignedApk. Download the unsigned GitHub Actions artifact into dist/android-local-signing first."
@@ -42,15 +42,34 @@ if ($ExpectedCommit) {
 if (-not (Test-Path -LiteralPath $Keystore -PathType Leaf)) {
     throw 'Original signing keystore not found. Do not generate a new key: upgrades would be incompatible.'
 }
-# Move-Item -Force replaces whatever file -OutputApk names, so refuse every input
-# (including the keystore) before any password is requested or used.
+# Both generated outputs can replace files. Refuse every input (including the
+# keystore) before requesting passwords or invoking any signing tools.
 $fullOutput = [IO.Path]::GetFullPath($OutputApk)
 if ([IO.Path]::GetExtension($fullOutput) -ne '.apk') {
     throw '-OutputApk must name a .apk file.'
 }
-foreach ($input in @($Keystore, $UnsignedApk, $ReferenceApk)) {
-    if ($input -and [string]::Equals([IO.Path]::GetFullPath($input), $fullOutput, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "-OutputApk must not be an input file: $input"
+$outDir = Split-Path -Parent $fullOutput
+$checksumOutput = Join-Path $outDir 'SHA256SUMS'
+foreach ($generated in @($fullOutput, $checksumOutput)) {
+    foreach ($input in @($Keystore, $UnsignedApk, $ReferenceApk)) {
+        if ($input -and [string]::Equals([IO.Path]::GetFullPath($input), $generated, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Signing output must not be an input file: $input"
+        }
+    }
+}
+# A junction/symlink in either direction can hide an input/output collision.
+# Fail closed rather than resolving only one side of an alias.
+foreach ($path in @($fullOutput, $checksumOutput, $Keystore, $UnsignedApk, $ReferenceApk)) {
+    if (-not $path) { continue }
+    $ancestor = [IO.Path]::GetFullPath($path)
+    while ($ancestor) {
+        if (Test-Path -LiteralPath $ancestor) {
+            $item = Get-Item -LiteralPath $ancestor -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Signing path must not use a reparse point: $ancestor"
+            }
+        }
+        $ancestor = Split-Path -Parent $ancestor
     }
 }
 if (-not $SdkRoot) {
@@ -100,6 +119,7 @@ $original = $null
 $referenceTempDir = $null
 $pendingSigned = $null
 $aligned = $null
+$pendingChecksum = $null
 $storeSecret = $null
 $keySecret = $null
 $storeText = $null
@@ -107,9 +127,9 @@ $keyText = $null
 try {
     $unsignedDetails = Read-Package $UnsignedApk
     if ($unsignedDetails -notmatch "name='com[.]openrad[.]mobile'" -or
-        $unsignedDetails -notmatch "versionCode='7'" -or
-        $unsignedDetails -notmatch "versionName='2[.]2[.]0'") {
-        throw "The unsigned APK is not OpenRad com.openrad.mobile 2.2.0 (versionCode 7)."
+        $unsignedDetails -notmatch "versionCode='8'" -or
+        $unsignedDetails -notmatch "versionName='2[.]3[.]0'") {
+        throw "The unsigned APK is not OpenRad com.openrad.mobile 2.3.0 (versionCode 8)."
     }
     $sumFile = Join-Path (Split-Path -Parent $UnsignedApk) 'SHA256SUMS'
     if (Test-Path -LiteralPath $sumFile -PathType Leaf) {
@@ -137,7 +157,7 @@ try {
     }
     $original = Read-Certificate $ReferenceApk
     Write-Output 'Reference: verified official v2.0.1 APK signature and package metadata.'
-    Write-Output 'Candidate: verified unsigned v2.2.0 APK package metadata and optional SHA256.'
+    Write-Output 'Candidate: verified unsigned v2.3.0 APK package metadata and optional SHA256.'
 
     $storeSecret = Read-Host 'Password for the ORIGINAL keystore (not shown)' -AsSecureString
     $keySecret = Read-Host 'Password for the ORIGINAL key alias (not shown)' -AsSecureString
@@ -188,17 +208,20 @@ try {
     }
     $signedDetails = Read-Package $pendingSigned
     if ($signedDetails -notmatch "name='com[.]openrad[.]mobile'" -or
-        $signedDetails -notmatch "versionCode='7'" -or
-        $signedDetails -notmatch "versionName='2[.]2[.]0'") {
+        $signedDetails -notmatch "versionCode='8'" -or
+        $signedDetails -notmatch "versionName='2[.]3[.]0'") {
         throw 'Signed APK application ID or version mismatch.'
     }
     Move-Item -LiteralPath $pendingSigned -Destination $OutputApk -Force
     $pendingSigned = $null
     $digest = (Get-FileHash -LiteralPath $OutputApk -Algorithm SHA256).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText((Join-Path $outDir 'SHA256SUMS'),
+    $pendingChecksum = Join-Path $outDir ('.openrad-checksum-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    [IO.File]::WriteAllText($pendingChecksum,
         ($digest + '  ' + (Split-Path $OutputApk -Leaf) + [Environment]::NewLine),
         (New-Object Text.UTF8Encoding($false)))
-    Write-Output "SUCCESS: locally signed OpenRad 2.2.0 APK: $OutputApk"
+    Move-Item -LiteralPath $pendingChecksum -Destination $checksumOutput -Force
+    $pendingChecksum = $null
+    Write-Output "SUCCESS: locally signed OpenRad 2.3.0 APK: $OutputApk"
     Write-Output 'SUCCESS: certificate SHA-256 matches official Android 2.0.1 release.'
     Write-Output "SHA-256: $digest"
 }
@@ -209,6 +232,9 @@ finally {
     if ($keySecret) { $keySecret.Dispose() }
     if ($pendingSigned -and (Test-Path -LiteralPath $pendingSigned)) {
         Remove-Item -LiteralPath $pendingSigned -Force
+    }
+    if ($pendingChecksum -and (Test-Path -LiteralPath $pendingChecksum)) {
+        Remove-Item -LiteralPath $pendingChecksum -Force
     }
     if ($aligned -and (Test-Path -LiteralPath $aligned)) {
         Remove-Item -LiteralPath $aligned -Force

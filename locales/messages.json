@@ -1,4 +1,9 @@
 {
+  "The saved identity changed in another frontend. Keep this window open to recover the pending identity.": [
+    "A identidade salva foi alterada em outro aplicativo. Mantenha esta janela aberta para recuperar a identidade pendente.",
+    "Сохранённая идентификация изменена в другом приложении. Оставьте это окно открытым для восстановления ожидающей сохранения идентификации.",
+    "Danh tính đã lưu đã được thay đổi trong ứng dụng khác. Giữ cửa sổ này mở để khôi phục danh tính đang chờ lưu."
+  ],
   "System language (automatic)": [
     "Idioma do sistema (automático)",
     "Язык системы (автоматически)",
@@ -418,6 +423,36 @@
     "Conectar ao iniciar o OpenRad",
     "Подключаться при запуске OpenRad",
     "Kết nối khi khởi chạy OpenRad"
+  ],
+  "Settings were not saved: {error}. The Windows startup task could not be rolled back: {rollback}": [
+    "Não foi possível salvar as configurações: {error}. Não foi possível reverter a tarefa de inicialização do Windows: {rollback}",
+    "Не удалось сохранить настройки: {error}. Не удалось откатить задачу автозапуска Windows: {rollback}",
+    "Không thể lưu cài đặt: {error}. Không thể hoàn tác tác vụ khởi động cùng Windows: {rollback}"
+  ],
+  "Cannot start OpenRad at login without a saved identity": [
+    "Não é possível iniciar o OpenRad ao entrar no Windows sem uma identidade salva",
+    "Невозможно запустить OpenRad при входе в Windows без сохранённых данных устройства",
+    "Không thể khởi động OpenRad khi đăng nhập nếu chưa có danh tính đã lưu"
+  ],
+  "OpenRad CLI is missing: {0}": [
+    "A CLI do OpenRad não foi encontrada: {0}",
+    "Не найден CLI OpenRad: {0}",
+    "Không tìm thấy CLI của OpenRad: {0}"
+  ],
+  "Start VPN with Windows (without opening the interface)": [
+    "Iniciar a VPN com o Windows (sem abrir a interface)",
+    "Запускать VPN вместе с Windows (без открытия интерфейса)",
+    "Khởi động VPN cùng Windows (không mở giao diện)"
+  ],
+  "Automatic VPN startup is configured after the first identity is saved.": [
+    "A inicialização automática da VPN é configurada depois que a primeira identidade é salva.",
+    "Автозапуск VPN настраивается после сохранения первых данных устройства.",
+    "Khởi động VPN tự động sẽ được thiết lập sau khi lưu danh tính đầu tiên."
+  ],
+  "Starts only the VPN in the background after Windows sign-in. Requires a saved identity and Windows Task Scheduler. Closing this window keeps the connection active.": [
+    "Inicia apenas a VPN em segundo plano após entrar no Windows. Requer uma identidade salva e o Agendador de Tarefas do Windows. Fechar esta janela mantém a conexão ativa.",
+    "Запускает только VPN в фоновом режиме после входа в Windows. Требуются сохранённые данные устройства и Планировщик заданий Windows. Закрытие этого окна не разрывает соединение.",
+    "Chỉ khởi động VPN chạy nền sau khi đăng nhập Windows. Yêu cầu danh tính đã lưu và Trình lập lịch tác vụ của Windows. Đóng cửa sổ này vẫn giữ kết nối."
   ],
   "Reconnect after a connection failure": [
     "Reconectar após uma falha de conexão",
@@ -983,6 +1018,11 @@
     "Não foi possível carregar as configurações. Corrija settings.json e reinicie.",
     "Не удалось загрузить настройки. Исправьте settings.json и перезапустите приложение.",
     "Không thể tải cài đặt. Sửa settings.json và khởi động lại."
+  ],
+  "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.": [
+    "A identidade salva foi alterada em outro cliente. Mantenha esta janela aberta para recuperar a substituição pendente.",
+    "Сохранённые данные устройства изменены в другом клиенте. Не закрывайте это окно, чтобы восстановить ожидающую сохранения замену.",
+    "Danh tính đã lưu đã được thay đổi trong một ứng dụng khách khác. Giữ cửa sổ này mở để khôi phục danh tính thay thế đang chờ."
   ],
   "This profile already has an identity; use another data directory to import a different one": [
     "Este perfil já tem uma identidade; use outro diretório de dados para importar uma diferente",
@@ -3834,6 +3874,11 @@
     "Время разрешения DNS истекло",
     "Hết thời gian phân giải DNS"
   ],
+  "DNS resolver worker limit reached": [
+    "Limite de trabalhadores de resolução DNS atingido",
+    "Достигнут предел потоков разрешения DNS",
+    "Đã đạt giới hạn luồng phân giải DNS"
+  ],
   "resolve TCP endpoint": [
     "resolver destino TCP",
     "разрешение адреса TCP",
@@ -4228,5 +4273,255 @@
     "Este endereço não está bloqueado",
     "Этот адрес не заблокирован",
     "Địa chỉ này không bị chặn"
+  ],
+  "Theme": [
+    "Tema",
+    "Тема",
+    "Giao diện"
+  ],
+  "Dark": [
+    "Escuro",
+    "Тёмная",
+    "Tối"
+  ],
+  "Light": [
+    "Claro",
+    "Светлая",
+    "Sáng"
+  ],
+  "The change applies immediately. Save to keep your preference.": [
+    "A alteração é aplicada imediatamente. Salve para manter a preferência.",
+    "Изменение применяется сразу. Сохраните настройки, чтобы сохранить выбор.",
+    "Thay đổi có hiệu lực ngay. Hãy lưu để giữ tùy chọn này."
+  ],
+  "Skip animation": [
+    "Pular animação",
+    "Пропустить анимацию",
+    "Bỏ qua hoạt ảnh"
+  ],
+  "Welcome to OpenRad": [
+    "Bem-vindo ao OpenRad",
+    "Добро пожаловать в OpenRad",
+    "Chào mừng đến với OpenRad"
+  ],
+  "Choose your preferences before getting started.": [
+    "Escolha suas preferências antes de começar.",
+    "Выберите предпочтения перед началом работы.",
+    "Chọn tùy chọn của bạn trước khi bắt đầu."
+  ],
+  "Appearance": [
+    "Aparência",
+    "Внешний вид",
+    "Giao diện"
+  ],
+  "Create OpenRad desktop shortcut": [
+    "Criar atalho OpenRad na área de trabalho",
+    "Создать ярлык OpenRad на рабочем столе",
+    "Tạo lối tắt OpenRad trên màn hình nền"
+  ],
+  "Get started": [
+    "Começar",
+    "Начать",
+    "Bắt đầu"
+  ],
+  "Desktop shortcut: {error}": [
+    "Atalho da área de trabalho: {error}",
+    "Ярлык рабочего стола: {error}",
+    "Lối tắt màn hình nền: {error}"
+  ],
+  "Enter the server's IPv4 address": [
+    "Digite o endereço IPv4 do servidor",
+    "Введите IPv4-адрес сервера",
+    "Nhập địa chỉ IPv4 của máy chủ"
+  ],
+  "Enter a server port from 1 to 65535": [
+    "Digite uma porta do servidor de 1 a 65535",
+    "Введите порт сервера от 1 до 65535",
+    "Nhập cổng máy chủ từ 1 đến 65535"
+  ],
+  "Server": [
+    "Servidor",
+    "Сервер",
+    "Máy chủ"
+  ],
+  "Using the official OpenRad server": [
+    "Usando o servidor oficial do OpenRad",
+    "Используется официальный сервер OpenRad",
+    "Đang dùng máy chủ OpenRad chính thức"
+  ],
+  "Using a custom server": [
+    "Usando um servidor personalizado",
+    "Используется собственный сервер",
+    "Đang dùng máy chủ tùy chỉnh"
+  ],
+  "Using custom server {address}": [
+    "Usando o servidor personalizado {address}",
+    "Используется собственный сервер {address}",
+    "Đang dùng máy chủ tùy chỉnh {address}"
+  ],
+  "Use a self-hosted OpenRad-compatible server. Each server keeps its own identity in this profile; switching back restores the previous one. Changing servers stops the VPN.": [
+    "Use um servidor próprio compatível com o OpenRad. Cada servidor mantém sua própria identidade neste perfil; ao voltar, a identidade anterior é restaurada. Trocar de servidor interrompe a VPN.",
+    "Используйте собственный сервер, совместимый с OpenRad. Для каждого сервера в этом профиле хранится своя идентификация; при возврате восстанавливается прежняя. Смена сервера останавливает VPN.",
+    "Dùng máy chủ tự lưu trữ tương thích với OpenRad. Mỗi máy chủ giữ danh tính riêng trong hồ sơ này; khi quay lại, danh tính trước đó được khôi phục. Đổi máy chủ sẽ dừng VPN."
+  ],
+  "Server IPv4 address": [
+    "Endereço IPv4 do servidor",
+    "IPv4-адрес сервера",
+    "Địa chỉ IPv4 của máy chủ"
+  ],
+  "Port": [
+    "Porta",
+    "Порт",
+    "Cổng"
+  ],
+  "Modulus file": [
+    "Arquivo de módulo",
+    "Файл модуля",
+    "Tệp modulus"
+  ],
+  "The server writes modulus.bin next to its database. Leave this empty when returning to a server used before.": [
+    "O servidor grava modulus.bin ao lado do banco de dados. Deixe em branco ao voltar para um servidor já usado.",
+    "Сервер сохраняет modulus.bin рядом со своей базой данных. Оставьте поле пустым при возврате к уже использованному серверу.",
+    "Máy chủ ghi modulus.bin cạnh cơ sở dữ liệu của nó. Để trống khi quay lại máy chủ đã dùng trước đó."
+  ],
+  "Use this server": [
+    "Usar este servidor",
+    "Использовать этот сервер",
+    "Dùng máy chủ này"
+  ],
+  "Use the official server": [
+    "Usar o servidor oficial",
+    "Использовать официальный сервер",
+    "Dùng máy chủ chính thức"
+  ],
+  "The server changed in another frontend. Keep this window open to recover the pending replacement.": [
+    "O servidor foi alterado em outro aplicativo. Mantenha esta janela aberta para recuperar a substituição pendente.",
+    "Сервер изменён в другом приложении. Оставьте это окно открытым для восстановления ожидающей замены.",
+    "Máy chủ đã được thay đổi trong ứng dụng khác. Giữ cửa sổ này mở để khôi phục danh tính thay thế đang chờ."
+  ],
+  "Finish saving the replacement identity before changing servers": [
+    "Conclua o salvamento da identidade substituta antes de trocar de servidor",
+    "Завершите сохранение новой идентификации перед сменой сервера",
+    "Hoàn tất lưu danh tính thay thế trước khi đổi máy chủ"
+  ],
+  "Stopping the VPN service before changing servers…": [
+    "Parando o serviço VPN antes de trocar de servidor…",
+    "Остановка службы VPN перед сменой сервера…",
+    "Đang dừng dịch vụ VPN trước khi đổi máy chủ…"
+  ],
+  "Custom server saved. Connect to use it.": [
+    "Servidor personalizado salvo. Conecte para usá-lo.",
+    "Собственный сервер сохранён. Подключитесь, чтобы использовать его.",
+    "Đã lưu máy chủ tùy chỉnh. Hãy kết nối để sử dụng."
+  ],
+  "Official server restored. Connect to use it.": [
+    "Servidor oficial restaurado. Conecte para usá-lo.",
+    "Официальный сервер восстановлен. Подключитесь, чтобы использовать его.",
+    "Đã khôi phục máy chủ chính thức. Hãy kết nối để sử dụng."
+  ],
+  "Could not change servers: {error}": [
+    "Não foi possível trocar de servidor: {error}",
+    "Не удалось сменить сервер: {error}",
+    "Không thể đổi máy chủ: {error}"
+  ],
+  "This profile uses a custom server. Change it with `openrad server set` instead of --host or --modulus": [
+    "Este perfil usa um servidor personalizado. Altere-o com `openrad server set` em vez de --host ou --modulus",
+    "Этот профиль использует собственный сервер. Измените его командой `openrad server set` вместо --host или --modulus",
+    "Hồ sơ này dùng máy chủ tùy chỉnh. Hãy đổi bằng `openrad server set` thay vì --host hoặc --modulus"
+  ],
+  "Stop the VPN service before changing servers: run `openrad stop`": [
+    "Pare o serviço VPN antes de trocar de servidor: execute `openrad stop`",
+    "Остановите службу VPN перед сменой сервера: выполните `openrad stop`",
+    "Hãy dừng dịch vụ VPN trước khi đổi máy chủ: chạy `openrad stop`"
+  ],
+  "Custom server saved. Its saved identity will be used; run `openrad start` to connect.": [
+    "Servidor personalizado salvo. A identidade salva dele será usada; execute `openrad start` para conectar.",
+    "Собственный сервер сохранён. Будет использована его сохранённая идентификация; выполните `openrad start` для подключения.",
+    "Đã lưu máy chủ tùy chỉnh. Danh tính đã lưu của máy chủ này sẽ được dùng; chạy `openrad start` để kết nối."
+  ],
+  "Custom server saved. Register on it with `openrad init --node-name NAME`, then run `openrad start`.": [
+    "Servidor personalizado salvo. Registre-se nele com `openrad init --node-name NOME` e depois execute `openrad start`.",
+    "Собственный сервер сохранён. Зарегистрируйтесь на нём командой `openrad init --node-name ИМЯ`, затем выполните `openrad start`.",
+    "Đã lưu máy chủ tùy chỉnh. Đăng ký trên máy chủ bằng `openrad init --node-name TÊN`, sau đó chạy `openrad start`."
+  ],
+  "Official server restored with its saved identity. Run `openrad start` to connect.": [
+    "Servidor oficial restaurado com a identidade salva. Execute `openrad start` para conectar.",
+    "Официальный сервер восстановлен с сохранённой идентификацией. Выполните `openrad start` для подключения.",
+    "Đã khôi phục máy chủ chính thức cùng danh tính đã lưu. Chạy `openrad start` để kết nối."
+  ],
+  "Official server restored. Run `openrad init --node-name NAME` to register.": [
+    "Servidor oficial restaurado. Execute `openrad init --node-name NOME` para se registrar.",
+    "Официальный сервер восстановлен. Выполните `openrad init --node-name ИМЯ` для регистрации.",
+    "Đã khôi phục máy chủ chính thức. Chạy `openrad init --node-name TÊN` để đăng ký."
+  ],
+  "Server: {address}": [
+    "Servidor: {address}",
+    "Сервер: {address}",
+    "Máy chủ: {address}"
+  ],
+  "Saved identity for this server: RID {rid}": [
+    "Identidade salva para este servidor: RID {rid}",
+    "Сохранённая идентификация для этого сервера: RID {rid}",
+    "Danh tính đã lưu cho máy chủ này: RID {rid}"
+  ],
+  "Could not read the modulus file {0}": [
+    "Não foi possível ler o arquivo de módulo {0}",
+    "Не удалось прочитать файл модуля {0}",
+    "Không thể đọc tệp modulus {0}"
+  ],
+  "The modulus file is not a valid OpenRad server modulus": [
+    "O arquivo não é um módulo válido de servidor OpenRad",
+    "Файл не является допустимым модулем сервера OpenRad",
+    "Tệp này không phải là modulus hợp lệ của máy chủ OpenRad"
+  ],
+  "Server settings at {0} are invalid. Delete the file to use the official server; saved identities are kept": [
+    "As configurações de servidor em {0} são inválidas. Exclua o arquivo para usar o servidor oficial; as identidades salvas são mantidas",
+    "Настройки сервера в {0} недействительны. Удалите файл, чтобы использовать официальный сервер; сохранённые идентификации останутся",
+    "Cài đặt máy chủ tại {0} không hợp lệ. Xóa tệp để dùng máy chủ chính thức; các danh tính đã lưu vẫn được giữ"
+  ],
+  "The custom server's modulus file is missing. Choose the server again with its modulus file": [
+    "O arquivo de módulo do servidor personalizado está ausente. Escolha o servidor novamente com o arquivo de módulo",
+    "Файл модуля собственного сервера отсутствует. Выберите сервер снова, указав файл модуля",
+    "Thiếu tệp modulus của máy chủ tùy chỉnh. Hãy chọn lại máy chủ cùng tệp modulus"
+  ],
+  "Server folder {0} is not a directory": [
+    "A pasta do servidor {0} não é um diretório",
+    "Папка сервера {0} не является каталогом",
+    "Thư mục máy chủ {0} không phải là thư mục"
+  ],
+  "Choose the server's modulus file": [
+    "Escolha o arquivo de módulo do servidor",
+    "Выберите файл модуля сервера",
+    "Hãy chọn tệp modulus của máy chủ"
+  ],
+  "Show or change the server this profile uses": [
+    "Mostrar ou alterar o servidor usado por este perfil",
+    "Показать или изменить сервер этого профиля",
+    "Hiển thị hoặc thay đổi máy chủ mà hồ sơ này dùng"
+  ],
+  "Show the server this profile uses": [
+    "Mostrar o servidor usado por este perfil",
+    "Показать сервер этого профиля",
+    "Hiển thị máy chủ mà hồ sơ này dùng"
+  ],
+  "Use a custom server. Each server keeps its own identity in this profile": [
+    "Usar um servidor personalizado. Cada servidor mantém sua própria identidade neste perfil",
+    "Использовать собственный сервер. Для каждого сервера в этом профиле хранится своя идентификация",
+    "Dùng máy chủ tùy chỉnh. Mỗi máy chủ giữ danh tính riêng trong hồ sơ này"
+  ],
+  "Server control port": [
+    "Porta de controle do servidor",
+    "Управляющий порт сервера",
+    "Cổng điều khiển của máy chủ"
+  ],
+  "Server public RSA modulus file (optional when switching back to a server used before)": [
+    "Arquivo do módulo RSA público do servidor (opcional ao voltar para um servidor já usado)",
+    "Файл открытого RSA-модуля сервера (необязателен при возврате к уже использованному серверу)",
+    "Tệp modulus RSA công khai của máy chủ (không bắt buộc khi quay lại máy chủ đã dùng)"
+  ],
+  "Go back to the official OpenRad server": [
+    "Voltar para o servidor oficial do OpenRad",
+    "Вернуться на официальный сервер OpenRad",
+    "Quay lại máy chủ OpenRad chính thức"
   ]
 }

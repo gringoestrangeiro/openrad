@@ -31,7 +31,7 @@ import radproto as p
 from radvpn import Engine, Framed, MTU, PeerChannel, Profile, Tap, WakeQueue, ensure_identity, has_net_admin, poll_readable, private_json
 
 
-VERSION = '2.2.0'
+VERSION = '2.3.0'
 __version__ = VERSION
 MAGIC = b'ORAD'
 HEADER = struct.Struct('!4sBBHIQI16s')
@@ -95,6 +95,7 @@ class UDPServer:
         self.sock.bind(('127.0.0.1', port))
         self.endpoint = self.sock.getsockname()
         self.clients, self.cache = {}, OrderedDict()
+        self._cache_prune_at = math.inf
         self.frames, self.replies = WakeQueue(512), WakeQueue(64)
         self.event_sequence = 0
         self.path = profile.path / 'api.json'
@@ -116,15 +117,15 @@ class UDPServer:
             self.engine.count('api_send_dropped')
             return False
 
-    def complete(self, key, result):
+    def complete(self, key, generation, result):
         try:
-            self.replies.put_nowait((key, result))
+            self.replies.put_nowait((key, generation, result))
         except queue.Full:
             self.engine.count('api_reply_dropped')
 
-    def _reply(self, key, value):
+    def _reply(self, key, value, *, generation=None):
         record = self.cache.get(key)
-        if record is None:
+        if record is None or generation is not None and record['generation'] is not generation:
             return
         try:
             data = encode_message(record['opcode'] | RESPONSE, key[1], self.token, json_bytes(value),
@@ -177,7 +178,9 @@ class UDPServer:
             self.send(address, encode_message(opcode | RESPONSE, request, self.token,
                 json_bytes(dict(ok=False, error='request cache is full; wait before retrying')), flags=ERROR))
             return
-        self.cache[key] = dict(fingerprint=fingerprint, opcode=opcode, reply=None, time=now)
+        generation = object()
+        self.cache[key] = dict(fingerprint=fingerprint, opcode=opcode, reply=None, time=now, generation=generation)
+        self._cache_prune_at = min(self._cache_prune_at, now + (90 if opcode == COMMAND else 10))
         if address in self.clients:
             self.clients[address]['time'] = now
         self.engine.count('api_requests')
@@ -209,7 +212,9 @@ class UDPServer:
                 self.engine.count('api_packet_tx')
             elif opcode == COMMAND:
                 body = json_object(payload)
-                self.engine.command(body, lambda result: self.complete(key, result))
+                # IDs may be reused after cache expiry while an older command
+                # is still queued. Bind its callback to this cache generation.
+                self.engine.command(body, lambda result: self.complete(key, generation, result))
                 return
             elif opcode == BYE:
                 self.clients.pop(address, None)
@@ -267,10 +272,10 @@ class UDPServer:
                 self.request(data, address)
         for _ in range(64):
             try:
-                key, result = self.replies.get_nowait()
+                key, generation, result = self.replies.get_nowait()
             except queue.Empty:
                 break
-            self._reply(key, result)
+            self._reply(key, result, generation=generation)
         for _ in range(64):
             try:
                 rid, frame = self.frames.get_nowait()
@@ -279,10 +284,16 @@ class UDPServer:
             self.deliver(rid, frame)
         now = time.monotonic()
         self.clients = {a: c for a, c in self.clients.items() if now - c['time'] < CLIENT_TTL}
-        for key, record in tuple(self.cache.items()):
-            lifetime = 90 if record['opcode'] == COMMAND else 10
-            if now - record['time'] > lifetime:
-                del self.cache[key]
+        if now > self._cache_prune_at:
+            # Replies may extend a record's lifetime. An earlier lower bound
+            # only causes an extra sweep; no record can expire before it.
+            self._cache_prune_at = math.inf
+            for key, record in tuple(self.cache.items()):
+                expires = record['time'] + (90 if record['opcode'] == COMMAND else 10)
+                if now > expires:
+                    del self.cache[key]
+                else:
+                    self._cache_prune_at = min(self._cache_prune_at, expires)
 
     def close(self):
         self.engine.remove_frame_listener(self.incoming)
@@ -405,8 +416,12 @@ class LocalClient:
         while True:
             if self.events:
                 return self.events.popleft()
+            left = until - time.monotonic()
+            if left <= 0:
+                raise TimeoutError('localhost UDP receive timed out')
             if time.monotonic() - self.last_touch > 50:
-                self.status()  # Refresh subscription while preserving RX events.
+                # Subscription refresh shares the caller's receive deadline.
+                self.request(STATUS, timeout=min(3, left))
                 if self.events:
                     return self.events.popleft()
             left = until - time.monotonic()
@@ -1315,7 +1330,8 @@ def self_test():
                 engine = Engine(ident, Profile(folder), max_peers=400)
                 engine.membership.networks['a'] = dict(name='fixture')
                 for rid in range(2, 202):
-                    engine.membership.peers[rid] = dict(rid=rid, server='127.0.0.1', state=1, network_ids=['a'])
+                    engine.membership.peers[rid] = dict(rid=rid, vip=f'26.0.0.{rid}',
+                        server='127.0.0.1', state=1, network_ids=['a'])
                 calls = []
                 def alive():
                     calls.append(1)

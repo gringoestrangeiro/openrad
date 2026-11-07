@@ -3,7 +3,13 @@ use openrad::i18n::Language;
 
 fn literals(source: &str) -> Vec<String> {
     let mut result = Vec::new();
-    let mut source = source.split("\n#[cfg(test)]\nmod ").next().unwrap();
+    // Source files checked out with CRLF on Windows must exclude unit-test
+    // fixtures exactly as LF files do on Linux CI.
+    let normalized_newlines = source.replace("\r\n", "\n");
+    let mut source = normalized_newlines
+        .split("\n#[cfg(test)]\nmod ")
+        .next()
+        .unwrap();
     while let Some(start) = source.find('"') {
         source = &source[start + 1..];
         let mut escaped = false;
@@ -142,6 +148,7 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         "VPN stop request failed; attempt={attempts}; error={error}",
         "VPN service stopped; attempts={attempts}",
         "Identity save retry; attempt={attempt}; error={error}",
+        "Windows startup task skipped; the desktop is not installed under Program Files",
         "Recovered stale VPN service endpoint",
     ];
     let mut missing = Vec::new();

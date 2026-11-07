@@ -2,6 +2,7 @@
 """Verify remapped Fabric JAR and exact Minecraft version without running Minecraft."""
 import json
 import pathlib
+import re
 import struct
 import sys
 import zipfile
@@ -19,13 +20,35 @@ def verify(jar: pathlib.Path, expected_minecraft: str, expected_version: str) ->
             raise ValueError(f"Missing release classes/metadata: {sorted(missing)}")
         metadata = json.loads(z.read("fabric.mod.json"))
         actual_target = metadata.get("depends", {}).get("minecraft")
-        if actual_target != expected_minecraft:
+        # A release JAR merged from byte-identical patch builds lists every
+        # covered patch (tools/minecraft_release_jars.py); no ranges or wildcards.
+        targets = actual_target if isinstance(actual_target, list) else [actual_target]
+        exact = all(isinstance(t, str) and re.fullmatch(r"\d+(?:\.\d+){1,2}", t) for t in targets)
+        if expected_minecraft not in targets or not exact:
             raise ValueError(f"JAR targets {actual_target!r}, expected {expected_minecraft!r}")
         if metadata.get("version") != expected_version:
             raise ValueError(f"Wrong mod version: {metadata.get('version')!r}")
         if metadata.get("environment") != "client":
             raise ValueError("Not a client-only mod")
+        entrypoint = "io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod"
+        if entrypoint not in metadata.get("entrypoints", {}).get("client", []):
+            raise ValueError("Missing OpenRad client entrypoint registration")
+        if "openrad-client.mixins.json" not in metadata.get("mixins", []):
+            raise ValueError("Missing OpenRad mixin configuration registration")
         mixins = json.loads(z.read("openrad-client.mixins.json"))
+        # Merely checking classes named by a possibly empty list would certify
+        # a JAR whose VPN connection/UI injections are never registered.
+        routing = "ConnectionRoutingMixin" if expected_minecraft == "1.21.11" or expected_minecraft.startswith("26.") else "ConnectionMixin"
+        expected_mixins = {routing, "LegacyStatusPingerMixin", "MultiplayerScreenMixin"}
+        if expected_minecraft.startswith("26."):
+            expected_mixins.add("ScreenWidgetInvoker")
+        declared_mixins = mixins.get("client", [])
+        if not isinstance(declared_mixins, list) or not expected_mixins.issubset(declared_mixins):
+            raise ValueError("Missing required OpenRad client mixin registrations")
+        if mixins.get("package") != "io.github.gringoestrangeiro.openradclient.fabric.mixin":
+            raise ValueError("Unexpected OpenRad mixin package")
+        if mixins.get("required") is not True or mixins.get("injectors", {}).get("defaultRequire") != 1:
+            raise ValueError("OpenRad mixin injections must be required")
         for name in mixins.get("client", []):
             class_path = mixins["package"].replace(".", "/") + "/" + name + ".class"
             if class_path not in files:

@@ -40,12 +40,8 @@ jobs:
           trap 'rm -f "$keyfile" "$props" "$official"' EXIT
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keyfile"
           chmod 600 "$keyfile"
-          {
-            printf 'storeFile=%s\n' "$keyfile"
-            printf 'storePassword=%s\n' "$RELEASE_STORE_PASSWORD"
-            printf 'keyAlias=%s\n' "$RELEASE_KEY_ALIAS"
-            printf 'keyPassword=%s\n' "$RELEASE_KEY_PASSWORD"
-          } > "$props"
+          python3 ../../scripts/test-android-signing-properties.py
+          python3 ../../scripts/write-android-signing-properties.py "$props" "$keyfile"
           chmod 600 "$props"
           version_name="$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' app/build.gradle.kts)"
           version_code="$(sed -n 's/^ *versionCode = \([0-9]*\)$/\1/p' app/build.gradle.kts)"

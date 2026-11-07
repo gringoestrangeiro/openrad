@@ -128,6 +128,7 @@
     <string name="leave_done">Left %1$s</string>
     <string name="delete_done">Deleted %1$s for everyone</string>
     <string name="settings_saved">Settings saved</string>
+    <string name="preferences_save_failed">Could not save preferences. Previous values were kept.</string>
     <string name="rename_reconnecting">Device name saved. Reconnecting with the same identity…</string>
     <string name="config_limit">At most %1$d configurations can be saved.</string>
     <string name="config_saved">Configuration saved: %1$s</string>

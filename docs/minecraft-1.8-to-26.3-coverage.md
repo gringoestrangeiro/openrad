@@ -66,7 +66,9 @@ python -m unittest discover -s tests -p test_minecraft_version_coverage.py -v
 python tools/minecraft_version_coverage.py --output docs/minecraft-java-releases-1.8-to-26.3.json
 ```
 
-Os builds Java 17 têm o sufixo `-java17-experimental.jar`. Arquivos JAR,
+Os JARs por patch levam só a versão do Minecraft no nome (sem sufixo de Java);
+`tools/minecraft_release_jars.py` junta, por versão principal, os patches cujos builds
+são idênticos byte a byte para a release. Arquivos JAR,
 relatórios e SHA256 são salvos em `clients/mod/release` e
 `clients/plugin/release` no PC Windows. Arquivos de Java 21 antigos
 continuam preservados, mas não devem ser instalados como mods Java 17.

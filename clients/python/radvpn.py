@@ -263,14 +263,20 @@ class Control:
 
 def ensure_identity(profile, name, *, import_path=None, host=p.DEFAULT_HOST, port=p.DEFAULT_PORT, modulus=p.SERVER_MODULUS, stop=None):
     path = profile.path / 'identity.json'
+    intent = profile.path / 'registration.pending'
     if path.exists():
         if import_path:
             raise ValueError('this profile already has an identity')
-        return p.Identity.load(path)
+        identity = p.Identity.load(path)
+        intent.unlink(missing_ok=True)
+        return identity
     if import_path:
         identity = p.Identity.load(Path(import_path))
         save_identity(path, identity)
+        intent.unlink(missing_ok=True)
         return identity
+    if os.path.lexists(intent):
+        raise ValueError('registration outcome unknown: preserve registration.pending and recover identity before another registration')
     p.build_login(name, 0, purpose=3)
     bootstrap_rid, _ = p.bootstrap_session(modulus)
     visited, deadline = set(), time.monotonic() + 60
@@ -285,15 +291,29 @@ def ensure_identity(profile, name, *, import_path=None, host=p.DEFAULT_HOST, por
             control = Control(stream, crypto)
             # Only an authenticated redirect may restart registration. An
             # ambiguous failure after this Login is never retried automatically.
-            control.send(p.build_login(name, 0, purpose=3))
+            login = p.build_login(name, 0, purpose=3)
+            # Persist uncertainty before any registering bytes can reach the service.
+            fd = os.open(intent, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'w') as out:
+                out.write('Registration may have reached the service; recover the issued identity before registering again.\n')
+                out.flush()
+                os.fsync(out.fileno())
+            directory_fd = os.open(profile.path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            control.send(login)
             receiver = p.Provisioning()
             for _ in range(16):
                 _, identity = receiver.receive(control.receive(deadline))
                 if identity:
                     save_identity(path, identity)
+                    intent.unlink()
                     return identity
             raise ValueError('registration did not return an identity')
         except p.ServerRedirect as exc:
+            intent.unlink(missing_ok=True)
             host = exc.host
         finally:
             stream.close()
@@ -645,6 +665,9 @@ class PeerWorker:
                 self.channel = self.accept()
             else:
                 self.channel, coord = self.outgoing()
+            with self.engine.lock:
+                if not self.engine._worker_current(self):
+                    raise ConnectionError('peer binding changed during setup')
             self.transport, self.state = self.channel.transport, 'connected'
             self.engine.report('peer_connected', rid=self.peer['rid'], transport=self.transport,
                                incoming=bool(self.incoming))
@@ -664,6 +687,10 @@ class PeerWorker:
                         frame = self.tx.get_nowait()
                     except queue.Empty:
                         break
+                    with self.engine.lock:
+                        if not self.engine._worker_current(self):
+                            self.stop.set()
+                            break
                     self.channel.send(p.encode_frame(frame))
                     self.tx_packets += 1
                     self.engine.count('peer_tx')
@@ -816,10 +843,19 @@ class Engine:
             finally:
                 self._schedule_capacity = None
 
+    def _worker_current(self, worker):
+        """Check the authenticated binding and worker generation while holding lock."""
+        rid = worker.peer['rid']
+        current = self.membership.peers.get(rid)
+        return (self.workers.get(rid) is worker and not worker.stop.is_set()
+            and self.membership.permits(rid, self.selected) and current is not None
+            and current['vip'] == worker.peer['vip']
+            and current['server'] == worker.peer['server'])
+
     def _schedule_peers(self, now, eligible):
         self.desired = {rid: until for rid, until in self.desired.items() if now < until and rid in eligible}
         for rid, worker in list(self.workers.items()):
-            if rid not in eligible:
+            if rid not in eligible or not self._worker_current(worker):
                 worker.stop.set()
                 if not worker.thread.is_alive():
                     del self.workers[rid]
@@ -1033,8 +1069,14 @@ class Engine:
                             finally:
                                 body.pop('password', None)
                     if active and now >= active['until']:
-                        active['callback'](dict(ok=False, error='network operation timed out'))
+                        reconnect = active['kind'] == 'network'
+                        callback = active['callback']
                         active = None
+                        callback(dict(ok=False, error='network operation timed out'))
+                        # Private-join SH replies may omit correlation IDs. Do
+                        # not let a late reply advance the next network command.
+                        if reconnect:
+                            raise ConnectionError('network operation timed out; reconnecting control session')
                     self.schedule()
                     if not control.stream.ready(.05):
                         continue
@@ -1130,6 +1172,7 @@ class Engine:
             eligible = self.membership.eligible(self.selected) if not rid else None
             candidates = self.workers.items() if not rid else ((rid, self.workers[rid]),) if rid in self.workers else ()
             ready = [w for key, w in candidates if w.state == 'connected' and not w.stop.is_set()
+                and self._worker_current(w)
                 and (key in eligible if eligible is not None else self.membership.permits(key, self.selected))
                 and (group is not None or w.peer['vip'] == target)]
             if not ready:
@@ -1156,7 +1199,7 @@ class Engine:
             candidates = self.workers.items() if not rid else ((rid, self.workers[rid]),) if rid in self.workers else ()
             for key, worker in candidates:
                 permitted = key in eligible if eligible is not None else self.membership.permits(key, self.selected)
-                if not permitted or worker.state != 'connected' or worker.stop.is_set():
+                if not permitted or worker.state != 'connected' or not self._worker_current(worker):
                     continue
                 if not valid_frame(frame, self.identity.ipv4, p.mac_for_ip(self.identity.ipv4), worker.peer['vip'], worker.channel.mac):
                     continue
@@ -1173,7 +1216,7 @@ class Engine:
     def incoming_frame(self, worker, frame):
         identity = self.identity
         with self.lock:
-            permitted = self.membership.permits(worker.peer['rid'], self.selected)
+            permitted = self._worker_current(worker)
             listeners = (self.on_frame, *self.frame_listeners)
         if not permitted or not valid_frame(frame, worker.peer['vip'], worker.channel.mac, identity.ipv4, p.mac_for_ip(identity.ipv4)):
             self.count('invalid_rx')

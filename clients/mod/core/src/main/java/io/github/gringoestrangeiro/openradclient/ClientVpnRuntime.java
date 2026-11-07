@@ -262,6 +262,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
             if (failure instanceof AttachmentClosed || failure instanceof EOFException
                     || failure instanceof java.net.SocketException)
                 throw (IOException) failure;
+            // Selector-only profiles have nothing to join without the catalog: reconnect with
+            // backoff instead of reporting CONNECTED with zero networks and never retrying.
+            if (config.networks().isEmpty() && !config.minecraftSelectors().isEmpty())
+                throw new IOException("Minecraft catalog unavailable", failure);
             catalog = new CatalogSnapshot("FAILED", previous.entries(), Set.copyOf(config.networks()),
                     List.of("Minecraft catalog unavailable (" + failure.getClass().getSimpleName() + "); exact network names remain active"));
             return Set.copyOf(config.networks());
@@ -333,11 +337,15 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 session.send(op(4));
                 heartbeat = now + Duration.ofSeconds(10).toNanos();
             }
-            if (session.ready(Duration.ofMillis(100))) {
+            // Wake for a due scan/snapshot instead of always waiting the full 100 ms.
+            long wait = Math.max(1_000_000L, Math.min(100_000_000L, Math.min(nextPeerScan, snapshot) - now));
+            if (session.ready(Duration.ofNanos(wait))) {
                 handle(session.receive(), membership, peerService);
                 lastControl = System.nanoTime();
-                snapshot = 0;
-                nextPeerScan = 0;
+                // Coalesce bursts of membership records into one scan/snapshot.
+                long soon = lastControl + Duration.ofMillis(10).toNanos();
+                snapshot = Math.min(snapshot, soon);
+                nextPeerScan = Math.min(nextPeerScan, soon);
             }
             if (System.nanoTime() >= nextPeerScan) {
                 peerService.tick(membership);

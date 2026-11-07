@@ -2,21 +2,24 @@
 
 ## Monorepo map (read this first)
 
-Five clients share one wire format. Work in the client's own directory and
-read its own guide:
+Five clients and one coordination server share one wire format. Work in the
+component's own directory and read its own guide:
 
-- **Rust (stable, canonical, v2.2.0):** `src/`, `desktop/`, `tests/`,
+- **Rust (stable, canonical, v2.3.0):** `src/`, `desktop/`, `tests/`,
   `locales/`, `docs/`, `scripts/`, `packaging/` — rules below in this file.
 - **Android (beta):** `clients/android/` — read
   [`clients/android/AGENTS.md`](clients/android/AGENTS.md) before touching it.
-- **Python (research, 2.2.0):** `clients/python/` — read
+- **Python (research, 2.3.0):** `clients/python/` — read
   [`clients/python/AGENTS.md`](clients/python/AGENTS.md) before touching it.
-- **Java Paper plugin (alpha, 2.2.0):** `clients/plugin/` — read
+- **Java Paper plugin (alpha, 2.3.0):** `clients/plugin/` — read
   [`clients/plugin/README.md`](clients/plugin/README.md) before touching it.
-- **Fabric client mod (alpha, 2.2.0):** `clients/mod/` — read
+- **Fabric client mod (alpha, 2.3.0):** `clients/mod/` — read
   [`clients/mod/README.md`](clients/mod/README.md) before touching it. 1.21.x
   builds from `clients/mod/` (JDK 21); 26.x builds from `clients/mod/modern/`
   (JDK 25). One JAR per Minecraft version.
+- **Go coordination server (alpha, 2.3.0):** `server/` — read
+  [`server/README.md`](server/README.md) before touching it. Self-hosted,
+  protocol-compatible replacement for the official server; pure Go, no cgo.
 
 | Area | Command (run in that directory) |
 | --- | --- |
@@ -26,6 +29,7 @@ read its own guide:
 | `clients/plugin/` | `./gradlew clean check` (JDK 21; Windows: `.\gradlew.bat clean check`) |
 | `clients/mod/` | `./gradlew -PopenradMinecraftVersion=1.21.1 :core:test :fabric:build :fabric:test` (JDK 21) |
 | `clients/mod/modern/` | `./gradlew -PopenradMinecraftVersion=26.3 build` (JDK 25) |
+| `server/` | `gofmt -l .`, `go vet ./...`, `go test ./...`, `python3 scripts/e2e_python.py` (Go per `go.mod`) |
 | Repo root (sync) | `python3 scripts/check-sync.py` |
 
 The Paper plugin build produces `clients/plugin/build/libs/OpenRadPlugin.jar`;
@@ -35,6 +39,13 @@ ported to the plugin's Java engine as well, even though it has no fixture mirror
 The mod's `clients/mod/core/src/main/java/.../openradplugin/` classes are
 byte-identical copies of the plugin's; change the plugin and copy the file
 (`scripts/check-sync.py` fails on any divergence).
+
+The server's Go tests read `tests/fixtures/` in place (no mirror), so a fixture
+change must keep `go test ./...` in `server/` green. Protocol behavior the
+server brokers (registration, membership, peer coordination, relay) must stay
+compatible with every client; `server/scripts/e2e_python.py` exercises it with
+two Python clients. The server's database holds its RSA private key: never
+commit databases or `modulus.bin` files.
 
 Sync rule: `tests/fixtures/*.json` and `locales/messages.json` are owned by
 the Rust client. Any wire-format, fixture, or locale change must update the
@@ -98,9 +109,19 @@ PowerShell setup/recovery tests mock Windows cmdlets. Wine installer-flow tests 
 
 Use focused imperative subjects with `fix:`, `docs:`, or `release:` prefixes. PRs describe the problem and resulting behavior, link issues, report validation, and include screenshots for UI changes. Update affected guides and preserve the user's authorized scope.
 
-For a release, compare against a freshly fetched remote, account for every changed/new file, synchronize both Cargo package versions and `Cargo.lock`, and update `README.md`, `CHANGELOG.md`, and `docs/releases/VERSION.md`. Keep a file-by-file inventory for broad releases. Record Windows support limitations even when the release uses a stable version tag.
+For a release, compare against a freshly fetched remote, account for every changed/new file, synchronize both Cargo package versions and `Cargo.lock`, and update `README.md`, `CHANGELOG.md`, and `docs/releases/VERSION.md`. Keep a file-by-file inventory for broad releases.
 
-Build fresh binaries for both platforms from the release source. Prefer the established Debian 12/Rust 1.95 Linux builder to retain its glibc baseline. Use `scripts/package-linux.py` with truthful build provenance and the builder's standard-library notice; use `scripts/package-windows-installer.py` with NSIS/7-Zip and pinned driver inputs. Include release guides, screenshots, dependency notices, build/import metadata, corresponding driver source, and SHA-256 checksums. Verify binary versions, archive checksums, and extracted installer payloads before publishing. Never label unexecuted native-platform checks as passed.
+Keep `README.md` short and current: it describes only the latest release (one
+line naming the version, linking its `docs/releases/VERSION.md` and
+`CHANGELOG.md`). Never accumulate per-version changelogs, "new in X.Y"
+sections, or links to older release notes/inventories in the README; version
+history belongs in `CHANGELOG.md` and `docs/releases/` only. When releasing,
+replace the previous version's README references instead of appending. Record Windows support limitations even when the release uses a stable version tag.
+
+Build fresh binaries for both platforms from the release source. The server
+ships as separate archives built by `scripts/package-server.py` (Linux and
+experimental Windows x64, both cross-built with CGO disabled; the Windows
+binary is not executed by the builder). Prefer the established Debian 12/Rust 1.95 Linux builder to retain its glibc baseline. Use `scripts/package-linux.py` with truthful build provenance and the builder's standard-library notice; use `scripts/package-windows-installer.py` with NSIS/7-Zip and pinned driver inputs. Include release guides, screenshots, dependency notices, build/import metadata, corresponding driver source, and SHA-256 checksums. Verify binary versions, archive checksums, and extracted installer payloads before publishing. Never label unexecuted native-platform checks as passed.
 
 ## Security & Local Configuration
 

@@ -219,6 +219,33 @@ pub fn runtime_adapter_guid(name: &str) -> Result<String> {
     Ok(matches.remove(0).guid)
 }
 
+/// Setup-worker checkpoints in `setup-worker-startup.log`; each is persisted
+/// before the next SetupAPI call, so a fault still shows the step in progress.
+fn step(message: std::fmt::Arguments<'_>) {
+    crate::early_log::event(format_args!("Setup step: {message}"));
+}
+/// TAP-Windows6 adapters only; other network adapters are counted, not named.
+fn log_inventory(adapters: &[Adapter]) {
+    let tap: Vec<_> = adapters
+        .iter()
+        .filter(|adapter| adapter.component_id.eq_ignore_ascii_case("tap0901"))
+        .map(|adapter| {
+            format!(
+                "{} guid={} driver={} enabled={}",
+                adapter.name,
+                adapter.guid,
+                adapter.driver_version.map(|n| n.to_string()).join("."),
+                adapter.enabled
+            )
+        })
+        .collect();
+    step(format_args!(
+        "{} network adapters; TAP-Windows6: [{}]",
+        adapters.len(),
+        tap.join("; ")
+    ));
+}
+
 fn state(directory: &Path) -> Result<Option<AdapterState>> {
     crate::file_io::read_optional_bounded(&directory.join(STATE), 4096)?
         .map(|data| serde_json::from_slice(&data).map_err(Into::into))
@@ -442,16 +469,20 @@ fn name_and_enable(guid: &str) -> Result<()> {
 pub fn check(directory: &Path, manifest_path: &Path) -> Result<i32> {
     let manifest = Manifest::read(manifest_path)?;
     if !manifest.matches(directory)? {
+        step(format_args!(
+            "installed files differ from this setup; installation needed"
+        ));
         return Ok(10);
     }
     let adapters = inventory()?;
+    log_inventory(&adapters);
     let state = state(directory)?;
     let selected = setup::select_adapter(&adapters, state.as_ref())?;
-    Ok(if setup::ready(true, &adapters, &selected) {
-        0
-    } else {
-        10
-    })
+    let ready = setup::ready(true, &adapters, &selected);
+    step(format_args!(
+        "installed files match; adapter selection={selected:?}; ready={ready}"
+    ));
+    Ok(if ready { 0 } else { 10 })
 }
 pub fn prepare_radmin() -> Result<i32> {
     crate::windows_radmin::prepare_installation()?;
@@ -466,18 +497,28 @@ pub fn configure(directory: &Path) -> Result<i32> {
         "An installed file failed its integrity check{}. Do not click Ignore on file-write errors during setup; run `openrad stop`, close OpenRad Desktop, re-run setup as administrator, and if it still fails re-download the installer and verify SHA256SUMS",
         mismatch.map(|path| format!(": {path}")).unwrap_or_default()
     );
+    step(format_args!("installed files passed the integrity check"));
     // Also cover direct worker invocation and a Radmin restart while the
     // installer was copying files. Never create/repair TAP before this succeeds.
     prepare_radmin()?;
+    step(format_args!("Radmin VPN prepared"));
     let adapters = inventory()?;
+    log_inventory(&adapters);
     let previous = state(directory)?;
     let selected = setup::select_adapter(&adapters, previous.as_ref())?;
+    step(format_args!(
+        "adapter selection={selected:?}; recorded state={previous:?}"
+    ));
     let mut new = None;
     let mut reboot = false;
     let (guid, created_by_setup) = match selected {
         Selection::Existing(index) => {
             let adapter = &adapters[index];
             if adapter.driver_version < setup::MIN_DRIVER_VERSION {
+                step(format_args!(
+                    "updating the TAP-Windows6 driver on {}",
+                    adapter.guid
+                ));
                 let inf = wide_path(&directory.join("driver/OemVista.inf"));
                 check_bool(unsafe {
                     SetupCopyOEMInfW(
@@ -502,6 +543,9 @@ pub fn configure(directory: &Path) -> Result<i32> {
             (adapter.guid.clone(), owned)
         }
         Selection::Create => {
+            step(format_args!(
+                "staging the bundled TAP-Windows6 driver package"
+            ));
             let inf = wide_path(&directory.join("driver/OemVista.inf"));
             check_bool(unsafe {
                 SetupCopyOEMInfW(
@@ -516,37 +560,57 @@ pub fn configure(directory: &Path) -> Result<i32> {
                 )
             })
             .context("Windows rejected the bundled signed TAP-Windows6 package")?;
+            step(format_args!("creating the OpenRad TAP-Windows6 device"));
             let device = create_device()?;
+            step(format_args!("installing the driver on the new device"));
             reboot |= install_device(&device.set, &device.device)?;
             let guid = adapter_guid(&device.set, &device.device)?;
+            step(format_args!(
+                "created adapter guid={guid}; restart={reboot}"
+            ));
             new = Some(device);
             (guid, true)
         }
     };
+    step(format_args!("naming and enabling adapter {guid}"));
     name_and_enable(&guid)?;
     let state = AdapterState {
         guid,
         created_by_setup,
     };
-    std::fs::write(directory.join(STATE), serde_json::to_vec_pretty(&state)?)?;
+    crate::file_io::atomic_write(&directory.join(STATE), &serde_json::to_vec_pretty(&state)?)
+        .context("Cannot persist TAP adapter ownership state")?;
     if let Some(device) = &mut new {
         device.keep = true;
     }
     let adapters = inventory()?;
+    log_inventory(&adapters);
     let selected = setup::select_adapter(&adapters, Some(&state))?;
+    let ready = setup::ready(true, &adapters, &selected);
+    step(format_args!(
+        "adapter state saved; ready={ready}; restart={reboot}"
+    ));
     ensure!(
-        reboot || setup::ready(true, &adapters, &selected),
+        reboot || ready,
         "The TAP adapter is not ready yet. Restart Windows and run setup again"
     );
     Ok(if reboot { 3010 } else { 0 })
 }
 pub fn remove_adapter(directory: &Path) -> Result<i32> {
     let Some(state) = state(directory)?.filter(|s| s.created_by_setup) else {
+        step(format_args!(
+            "no adapter created by setup is recorded; nothing to remove"
+        ));
         return Ok(0);
     };
     let Some((set, device)) = find_device(&state.guid)? else {
+        step(format_args!(
+            "recorded adapter {} is already absent",
+            state.guid
+        ));
         return Ok(0);
     };
+    step(format_args!("removing recorded adapter {}", state.guid));
     // Exact recorded device only. Retain shared TAP driver packages and profiles.
     Ok(if remove_device(&set, &device)? {
         3010

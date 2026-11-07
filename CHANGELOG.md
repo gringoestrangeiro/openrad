@@ -1,5 +1,90 @@
 # Changelog
 
+## 2.3.0 — 2026-11-07
+
+Servidor de coordenacao Go auto-hospedado e escolha de servidor personalizado no desktop e no CLI;
+desktop com primeira execucao guiada, tema neutro indigo e listas virtualizadas; VPN do Windows ao
+entrar na sessao; cadastro interrompido que nao gera um segundo aparelho; IP real `26.x.x.x` dos
+jogadores no Paper; e JARs Minecraft nomeados so pela versao do jogo, um por versao principal.
+Inclui o restante do PR #18 que chegou depois do corte da v2.2.0. **Sem alteracoes no wire format
+nem na identidade VPN.** Windows segue experimental e Minecraft alpha; veja as
+[notas da 2.3.0](docs/releases/2.3.0.md) para pacotes, validacao e limitacoes.
+
+- **Desktop:** primeira execucao com animacao do logo (pulavel), configuracao rapida com tema
+  claro/escuro, conexao automatica e atalho opcional na area de trabalho no Windows; a conexao
+  automatica espera o fim dessa configuracao. Traducoes da primeira execucao em todos os idiomas.
+- **Desktop (visual):** paleta neutra clara/escura com destaque indigo (verde so para estado
+  saudavel); botoes, campos, menus e selos com um estilo compartilhado; navegacao por icones na
+  barra lateral, sem a barra de trilha e sem botoes duplicados em Minhas redes.
+- **Identidade/cadastro:** um cadastro interrompido fica marcado como pendente (Rust, Android,
+  Python) e nao gera um segundo aparelho ao reconectar/reiniciar; substituicoes pendentes ficam
+  protegidas no desligamento; importacoes e edicoes offline do desktop/CLI exigem a posse do perfil.
+- **Servico Rust:** o pedido de parada sobrevive a publicacao de sessao; anexos de controle que
+  expiraram sao retirados antes do proximo comando de rede; workers DNS do coordenador sao limitados
+  apos timeout.
+- **Android:** callbacks de rede presos ao engine atual; o servico VPN destruido para o engine que
+  possui; sockets param quando a protecao da VPN e recusada; comandos terminam mesmo com falha de
+  escrita no controle; assinatura local protege toda saida contra colisao com as entradas;
+  checksum da distribuicao Gradle fixado.
+- **Python:** cadastro ambiguo preservado entre reinicios; workers retirados quando as associacoes
+  autenticadas mudam; CI roda as suites acelerada e stdlib.
+- **Windows:** estado de posse do TAP publicado atomicamente; recuperacao exercitada via bootstrap
+  por stdin limitado.
+- **Paper/Fabric:** senhas novas de rede privada publicam uma chave de segredo nova antes de trocar
+  a referencia no YAML, preservando a senha anterior se a escrita falhar e sem sobrescrever chaves
+  existentes em `secrets.properties`; `PeerConnector` (plugin e copia do mod) limita a resolucao
+  DNS a quatro workers daemon globais, sem fila — a resolucao nativa continua sem cancelamento
+  garantido; politica offline aplicada a redes publicas explicitas; desmarcar uma rede Minecraft
+  limpa as duas referencias salvas; JARs Fabric sem registros obrigatorios do cliente sao rejeitados;
+  a matriz de CI Minecraft roda so as versoes afetadas.
+- **Paper:** jogadores que entram pela VPN do plugin aparecem no servidor com o proprio IP
+  `26.x.x.x` em vez de `127.0.0.1` (bans/limites por IP, logs e outros plugins);
+  `bridge.forward-player-address: false` restaura o comportamento anterior. Outras conexoes nao
+  sao alteradas.
+- **Pacotes Minecraft:** os nomes dos JARs trazem so a versao do Minecraft (sem `-javaN`). O CI
+  continua compilando e testando cada patch; `tools/minecraft_release_jars.py` junta patches da mesma
+  versao principal somente quando os builds sao identicos byte a byte, fora os metadados de versao.
+  Resultado: 12 JARs Fabric e 9 Paper (antes 33 e 21). Um JAR Fabric combinado lista cada patch
+  coberto em `depends.minecraft`, entao o Fabric Loader continua recusando um patch nao testado.
+- **Android:** `versionCode` 8 (a 2.3.0 ainda tinha o 7 da 2.2.0 e nao instalaria como
+  atualizacao); o workflow do APK sem assinatura e `sign-android-local.ps1` esperam a 2.3.0.
+- **Dependencias:** `ctutils` atualizado para o patch de mascara em tempo constante.
+- **Desktop (desempenho):** listas de peers, e listas de Descobrir/Entrada automatica com mais de
+  100 itens, constroem so as linhas visiveis; redimensionar a janela ou a barra lateral nao refaz
+  mais o layout de todas as linhas (com 5000 peers, o pior quadro caiu de ~126 ms para ~6 ms e o
+  quadro normal de ~5 ms para ~1,3 ms em medicao headless). Indicadores de carregamento animam a
+  30 fps em vez de redesenhar a janela a cada quadro da tela enquanto conecta, busca ou entra em
+  redes; a busca pendente nao faz mais polling a cada 20 ms. Menus "Gerenciar" abertos continuam
+  abertos quando a linha sai da tela.
+- **Windows (inicio com a sessao):** o servico VPN pode iniciar ao entrar no Windows, sem abrir o
+  desktop, por uma tarefa agendada por usuario; ligado por padrao em perfis novos e registrado so
+  depois de a identidade ser salva, respeitando quem desligou. Salvar outras preferencias nao
+  depende mais do Agendador de Tarefas, a tarefa e removida na desinstalacao e uma instalacao
+  danificada continua desinstalavel.
+- **Windows (instalador):** `setup.log` persistente (UTF-16LE) em `%LOCALAPPDATA%\OpenRad\logs`
+  registra cada etapa, codigo de saida do worker e resultado; o worker de setup grava suas etapas
+  SetupAPI e o inventario de adaptadores TAP em `setup-worker-startup.log`.
+- **Servidor personalizado (desktop e CLI):** Configuracoes → Servidor importa o arquivo de modulo
+  RSA, recebe IPv4 e porta e passa a usar esse servidor; "Usar o servidor oficial" volta. O CLI tem
+  `openrad server [show]`, `server set --host IPV4 [--port N] [--modulus ARQUIVO]` e `server reset`.
+  A porta vale para cadastro, sessao de anexo e coordenador de peers (antes fixa em 17301). Cada
+  servidor guarda sua propria identidade no perfil (`servers/IPV4-PORTA/`, arquivo privado ou
+  cofre de credenciais, como antes); trocar de servidor so muda a selecao (`server.json`), nunca
+  apaga nem recadastra uma identidade, e voltar restaura a anterior. O desktop cadastra uma
+  identidade nova no primeiro Conectar; no CLI use `openrad init`. O modulo e validado (87–1024
+  bytes) antes de salvar. **Sem alteracoes no wire format.**
+- **Servidor de coordenacao (`server/`, alpha):** servidor proprio em Go, compativel com o
+  protocolo, para usar com o "Servidor personalizado" acima: cadastro, sessao de anexo, redes
+  publicas e privadas (senha, aprovacao, capacidade), administracao, presenca, coordenacao de
+  peers, relay e UES; estado em SQLite puro Go (sem cgo). O banco guarda a chave RSA privada e e
+  criado so para o dono (`0600`); o local padrao fica no diretorio de estado do usuario
+  (`OPENRAD_SERVER_DB`/`--db` mudam). Sem enderecos fixos: o endereco anunciado vem de
+  `--public-ip` ou do endereco local de cada conexao. Testes Go leem `tests/fixtures/` direto;
+  `server/scripts/e2e_python.py` exercita dois clientes Python. Releases passam a incluir
+  `openrad-server-vX-linux-x86_64.tar.gz` e `openrad-server-vX-windows-x86_64.zip`
+  (`scripts/package-server.py`); o binario Windows e experimental, compilado de forma cruzada e
+  ainda nao validado em Windows nativo. CI: `server.yml` e job `server` no release candidate.
+
 ## 2.2.0 — 2026-11-01
 
 Correcao do aviso de versao no desktop e sua acessibilidade; fechamento robusto

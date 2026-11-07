@@ -1,19 +1,20 @@
-# OpenRad Plugin 2.2.0 (alpha)
+# OpenRad Plugin 2.3.0 (alpha)
 
-> **Download:** [release 2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0), um JAR por alvo:
-> `OpenRadPlugin-2.2.0-paper-1.21-java21.jar` para Paper 1.21.x (Java 21),
-> `-26.1.1-java25`, `-26.1.2-java25`, `-26.2-java25` ou `-26.3-java25` para Paper 26.x (Java 25),
-> e alvos experimentais de `-1.17-java16` até `-1.20.6-java21`.
+> **Download:** [release 2.3.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.0), um JAR por versão principal do Paper,
+> dividida só onde os patches precisam de builds diferentes. O nome traz apenas a versão do Minecraft:
+> `OpenRadPlugin-2.3.0-paper-1.21.jar` para Paper 1.21.x (Java 21), `-26.1.1-26.3` para Paper 26.1.1 a 26.3 (Java 25)
+> e alvos experimentais `-1.17-1.17.1`, `-1.18`, `-1.18.1-1.18.2`, `-1.19-1.19.2`, `-1.19.3-1.19.4`, `-1.20.1-1.20.4` e `-1.20.5-1.20.6`.
+> Cada patch continua compilado e testado separadamente no CI; patches só compartilham um JAR quando os builds são idênticos byte a byte.
 
-**Novidades da 2.2.0:** [force relay](#force-relay) no `config.yml` e no comando `/orb`, builds de Paper 1.17 a 26.3 e correção do `config.yml` que crescia a cada comando nos alvos 1.17, 1.17.1 e 1.18. Compilar um alvo não comprova gameplay nessa versão. Consulte as [notas da 2.2.0](../../docs/releases/2.2.0.md).
+**Novidades da 2.3.0:** jogadores que entram pela VPN aparecem no Paper com o próprio IP `26.x.x.x` ([`bridge.forward-player-address`](#configuração-manual-opcional)), uma nova senha de rede privada é gravada antes de trocar a referência no YAML e a resolução DNS de peers é limitada. Compilar um alvo não comprova gameplay nessa versão. Consulte as [notas da 2.3.0](../../docs/releases/2.3.0.md).
 
-Plugin Java 21 para servidores **Paper 1.21.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
+Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
 **Estado: alpha.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).
 
 ## Início rápido (3 passos)
 
-1. Baixe o JAR da sua versão do Paper na [release 2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
+1. Baixe o JAR da sua versão do Paper na [release 2.3.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
 2. No **console** do servidor, entre na sua rede Radmin:
 
    ```text
@@ -57,6 +58,7 @@ Tudo acima também pode ser feito editando os arquivos em `plugins/OpenRadPlugin
 2. Coloque `build/libs/OpenRadPlugin.jar` em `plugins/` e inicie o servidor. O plugin gera `config.yml` e `secrets.properties`, inicialmente com a VPN desativada.
 3. Adicione suas redes em `vpn.networks`. Para rede privada, referencie uma chave de `secrets.properties`; não coloque a senha no YAML público.
 4. O backend é `127.0.0.1` na porta do próprio Paper (`bridge.backend-port: 0` = automático). Defina um número só se o Minecraft escutar em outra porta local.
+   Mesmo assim, o Paper vê cada jogador da VPN com o próprio IP `26.x.x.x` (não `127.0.0.1`): bans por IP, limites por IP, logs e plugins usam o endereço Radmin do jogador. Use `bridge.forward-player-address: false` para voltar a `127.0.0.1`. Exige Paper 1.17.1+ (`ChannelInitializeListener`); se indisponível, o plugin avisa no log e mantém `127.0.0.1`.
 5. Defina `bridge.enabled: true` e execute `/orb reload` como administrador. A sessão inicial registra uma identidade exclusiva, salva a credencial com acesso restrito ao proprietário e conecta às redes configuradas.
 6. Consulte `/orb status`. O endereço `26.x.x.x` pertence à interface virtual interna do plugin. Jogadores da mesma rede usam esse IP e `bridge.listen-virtual-port`.
 
@@ -85,7 +87,7 @@ minecraft-network=your-network-password
 
 Para rede pública, use `secret: ""`. A lista de redes precisa existir no serviço; o plugin não cria automaticamente redes a partir de nomes na configuração. Redes pendentes de aprovação administrativa não recebem acesso. Uma lista de RIDs permitidos vazia libera membros autenticados das redes configuradas; a lista de bloqueio tem precedência. IDs sem sinal devem ser escritos entre aspas no YAML.
 
-O backend é fixado pelo administrador, não pelo peer. O Paper enxerga a origem como loopback, não como o IP virtual do jogador. `online-mode` e o protocolo Minecraft não são alterados. Não habilite IP forwarding de proxies esperando que o plugin forneça o IP real.
+O backend é fixado pelo administrador, não pelo peer. Com `bridge.forward-player-address: true` (padrão), o Paper recebe o IP virtual do jogador; veja os requisitos acima. `online-mode` e o protocolo Minecraft não são alterados. Não é necessário habilitar IP forwarding de proxies.
 
 ## Force relay
 
