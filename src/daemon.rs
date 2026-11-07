@@ -29,11 +29,12 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    path::PathBuf,
+    net::Ipv4Addr,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender, SyncSender},
-        Arc, Mutex, MutexGuard, PoisonError,
+        Arc, Mutex, MutexGuard, PoisonError, RwLock,
     },
     thread,
     time::{Duration, Instant},
@@ -46,9 +47,62 @@ const COMMAND_QUEUE_LIMIT: usize = 128;
 #[cfg(unix)]
 const SOCKET: &str = "control.sock";
 
+/// A self-hosted, protocol-compatible server chosen instead of the official one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomServer {
+    pub host: Ipv4Addr,
+    pub port: u16,
+}
+impl CustomServer {
+    pub fn new(host: Ipv4Addr, port: u16) -> Result<Self> {
+        let server = Self { host, port };
+        server.validate()?;
+        Ok(server)
+    }
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.host.is_unspecified() && !self.host.is_broadcast() && !self.host.is_multicast(),
+            "Enter the server's IPv4 address"
+        );
+        ensure!(self.port != 0, "Enter a server port from 1 to 65535");
+        Ok(())
+    }
+    /// Directory name of this server's identity slot inside the profile.
+    fn slot(&self) -> String {
+        format!("{}-{}", self.host, self.port)
+    }
+    pub fn address(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+}
+
+/// Where new sessions go: registration host, control port and RSA modulus.
+pub struct ServerEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub modulus: Vec<u8>,
+}
+
+const SERVER_FILE: &str = "server.json";
+
+/// Read and validate a public modulus file before it is trusted for sessions.
+pub fn read_modulus_file(path: &Path) -> Result<Vec<u8>> {
+    let bytes = crate::file_io::read_bounded(path, 4096)
+        .with_context(|| format!("Could not read the modulus file {}", path.display()))?;
+    ensure!(!bytes.is_empty(), "public modulus size is invalid");
+    crate::crypto::validate_modulus(&bytes)
+        .context("The modulus file is not a valid OpenRad server modulus")?;
+    Ok(bytes.to_vec())
+}
+
 #[derive(Clone)]
 pub struct DataDir {
     pub path: PathBuf,
+    /// The active server, cached at open and refreshed whenever the profile
+    /// lock is taken, so identity reads and writes made under that lock always
+    /// target the current server's identity slot.
+    server: Arc<RwLock<Option<CustomServer>>>,
 }
 impl DataDir {
     pub fn open(override_path: Option<PathBuf>) -> Result<Self> {
@@ -110,7 +164,119 @@ impl DataDir {
             "data directory path is too long for a Unix socket"
         );
         crate::output::secure_directory(&path)?;
-        Ok(Self { path })
+        let dir = Self {
+            path,
+            server: Arc::default(),
+        };
+        dir.reload_server()?;
+        Ok(dir)
+    }
+    fn read_server(&self) -> Result<Option<CustomServer>> {
+        let path = self.path.join(SERVER_FILE);
+        let Some(bytes) = crate::file_io::read_optional_bounded(&path, 4096)? else {
+            return Ok(None);
+        };
+        let server = serde_json::from_slice::<CustomServer>(&bytes)
+            .map_err(anyhow::Error::from)
+            .and_then(|server| server.validate().map(|()| server))
+            .with_context(|| {
+                format!(
+                    "Server settings at {} are invalid. Delete the file to use the official server; saved identities are kept",
+                    path.display()
+                )
+            })?;
+        Ok(Some(server))
+    }
+    fn reload_server(&self) -> Result<()> {
+        let server = self.read_server()?;
+        *self.server.write().unwrap_or_else(PoisonError::into_inner) = server;
+        Ok(())
+    }
+    /// The custom server this profile uses, or None for the official server.
+    pub fn server(&self) -> Option<CustomServer> {
+        self.server
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    /// Identities are only valid on the server that issued them, so each
+    /// server keeps its own identity slot. The official server uses the
+    /// profile root (unchanged from earlier releases); a custom server uses
+    /// `servers/HOST-PORT`, with the same file or credential-store storage.
+    pub fn identity_root(&self) -> PathBuf {
+        match self.server() {
+            None => self.path.clone(),
+            Some(server) => self.path.join("servers").join(server.slot()),
+        }
+    }
+    /// Resolve the active server and point this process's control sessions
+    /// at its port. Call before provisioning or starting the service.
+    pub fn use_server(&self) -> Result<ServerEndpoint> {
+        let endpoint = match self.server() {
+            None => ServerEndpoint {
+                host: crate::DEFAULT_BOOTSTRAP_HOST.into(),
+                port: crate::DEFAULT_CONTROL_PORT,
+                modulus: self.load_modulus()?,
+            },
+            Some(server) => {
+                let modulus = crate::file_io::read_optional_bounded(&self.modulus(), 4096)?
+                    .context("The custom server's modulus file is missing. Choose the server again with its modulus file")?;
+                crate::crypto::validate_modulus(&modulus)?;
+                ServerEndpoint {
+                    host: server.host.to_string(),
+                    port: server.port,
+                    modulus: modulus.to_vec(),
+                }
+            }
+        };
+        crate::set_control_port(endpoint.port);
+        Ok(endpoint)
+    }
+    /// Switch to a custom server, or back to the official one with None.
+    /// Hold the profile lock and the stopped-service lock. Only the server
+    /// selection changes; every server's identity stays in its own slot, so
+    /// switching back restores the previous identity untouched. A custom
+    /// server needs a modulus the first time; later switches may reuse it.
+    pub fn set_server(&self, change: Option<(CustomServer, Option<Vec<u8>>)>) -> Result<()> {
+        let Some((server, modulus)) = change else {
+            match fs::remove_file(self.path.join(SERVER_FILE)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            return self.reload_server();
+        };
+        server.validate()?;
+        let slot = self.path.join("servers").join(server.slot());
+        for directory in [self.path.join("servers"), slot.clone()] {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.recursive(false).create(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let meta = fs::symlink_metadata(&directory)?;
+            ensure!(
+                meta.is_dir(),
+                "Server folder {} is not a directory",
+                directory.display()
+            );
+            crate::output::secure_directory(&directory)?;
+        }
+        match modulus {
+            Some(modulus) => {
+                crate::crypto::validate_modulus(&modulus)?;
+                atomic_save(&slot.join("modulus.bin"), &modulus)?;
+            }
+            None => ensure!(
+                crate::file_io::read_optional_bounded(&slot.join("modulus.bin"), 4096)?.is_some(),
+                "Choose the server's modulus file"
+            ),
+        }
+        atomic_save(&self.path.join(SERVER_FILE), &serde_json::to_vec(&server)?)?;
+        self.reload_server()
     }
     #[cfg(unix)]
     pub fn socket(&self) -> PathBuf {
@@ -127,7 +293,7 @@ impl DataDir {
         }
     }
     pub fn identity(&self) -> PathBuf {
-        self.path.join("profile/identity.json")
+        self.identity_root().join("profile/identity.json")
     }
     /// A private-profile marker, broken link or inaccessible file must not
     /// switch storage backends or authorize a second device registration. An
@@ -137,7 +303,7 @@ impl DataDir {
         match fs::symlink_metadata(self.identity()) {
             Ok(_) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match fs::symlink_metadata(self.path.join("profile")) {
+                match fs::symlink_metadata(self.identity_root().join("profile")) {
                     Ok(_) => true,
                     Err(error) => error.kind() != std::io::ErrorKind::NotFound,
                 }
@@ -145,8 +311,14 @@ impl DataDir {
             Err(error) => error.kind() != std::io::ErrorKind::NotFound,
         }
     }
+    /// The official slot keeps the legacy `init --modulus` override inside
+    /// `profile/`. A custom server's modulus sits beside its slot's `profile/`
+    /// so that it never selects private-file identity storage by itself.
     pub fn modulus(&self) -> PathBuf {
-        self.path.join("profile/modulus.bin")
+        match self.server() {
+            None => self.path.join("profile/modulus.bin"),
+            Some(_) => self.identity_root().join("modulus.bin"),
+        }
     }
     fn lock(&self) -> Result<File> {
         let mut options = OpenOptions::new();
@@ -209,7 +381,7 @@ impl DataDir {
     pub fn entry(&self) -> Result<keyring::Entry> {
         Ok(keyring::Entry::new(
             "org.openrad.desktop",
-            &self.path.to_string_lossy(),
+            &self.identity_root().to_string_lossy(),
         )?)
     }
     pub fn save_identity(&self, identity: &Identity) -> Result<()> {
@@ -225,6 +397,7 @@ impl DataDir {
     pub fn profile_lock(&self) -> Result<File> {
         let file = self.profile_lock_file()?;
         file.lock()?;
+        self.reload_server()?;
         Ok(file)
     }
     /// Desktop operations must fail visibly instead of waiting indefinitely
@@ -233,6 +406,7 @@ impl DataDir {
         let file = self.profile_lock_file()?;
         file.try_lock()
             .context("Another frontend is changing this identity. Try again shortly.")?;
+        self.reload_server()?;
         Ok(file)
     }
     fn profile_lock_file(&self) -> Result<File> {
@@ -1559,7 +1733,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
     let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
-    let modulus = dir.load_modulus()?;
+    let modulus = dir.use_server()?.modulus;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let socket = dir.socket();
@@ -1659,7 +1833,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
     let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
-    let modulus = dir.load_modulus()?;
+    let modulus = dir.use_server()?.modulus;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let mut listener = windows_pipe::Listener::bind(&dir.path)?;
@@ -2276,6 +2450,87 @@ mod tests {
             .file_type()
             .is_symlink());
         fs::remove_dir_all(directory.path).unwrap();
+    }
+    #[test]
+    fn switching_servers_keeps_each_servers_identity_and_validates_input() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-server-switch-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let identity = |rid: u64| {
+            Identity::from_secret(format!(r#"{{"format":"openrad-identity-v1","rid":{rid},"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}}"#).as_bytes()).unwrap()
+        };
+        let directory = DataDir::open(Some(path.clone())).unwrap();
+        fs::create_dir(directory.path.join("profile")).unwrap();
+        directory.save_identity(&identity(1)).unwrap();
+        let official = directory.identity();
+
+        assert!(CustomServer::new(Ipv4Addr::UNSPECIFIED, 18301).is_err());
+        assert!(CustomServer::new(Ipv4Addr::BROADCAST, 18301).is_err());
+        assert!(CustomServer::new(Ipv4Addr::new(192, 0, 2, 10), 0).is_err());
+        let server = CustomServer::new(Ipv4Addr::new(192, 0, 2, 10), 18301).unwrap();
+        // A first switch needs a valid modulus; nothing is saved otherwise.
+        assert!(directory.set_server(Some((server.clone(), None))).is_err());
+        assert!(directory
+            .set_server(Some((server.clone(), Some(vec![1, 2, 3]))))
+            .is_err());
+        assert!(directory.server().is_none());
+        assert!(!directory.path.join(SERVER_FILE).exists());
+        let modulus_file = directory.path.join("synthetic-modulus.bin");
+        fs::write(&modulus_file, []).unwrap();
+        assert!(read_modulus_file(&modulus_file).is_err());
+        fs::write(&modulus_file, crate::SERVER_MODULUS).unwrap();
+
+        directory
+            .set_server(Some((
+                server.clone(),
+                Some(read_modulus_file(&modulus_file).unwrap()),
+            )))
+            .unwrap();
+        assert_eq!(directory.server(), Some(server.clone()));
+        assert_eq!(
+            directory.identity_root(),
+            directory.path.join("servers/192.0.2.10-18301")
+        );
+        // The new server has no identity yet; the official one is untouched.
+        assert!(!directory.identity_file_present());
+        assert_ne!(directory.identity(), official);
+        assert_eq!(Identity::load(&official).unwrap().rid, 1);
+        let endpoint = directory.use_server().unwrap();
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port, crate::control_port()),
+            ("192.0.2.10", 18301, 18301)
+        );
+        assert_eq!(endpoint.modulus, crate::SERVER_MODULUS);
+        crate::set_control_port(0);
+        fs::create_dir(directory.identity_root().join("profile")).unwrap();
+        directory.save_identity(&identity(2)).unwrap();
+
+        // Back to the official server, and to the custom one without a modulus.
+        directory.set_server(None).unwrap();
+        assert!(directory.server().is_none());
+        assert_eq!(directory.load_identity().unwrap().rid, 1);
+        assert_eq!(
+            directory.use_server().unwrap().port,
+            crate::DEFAULT_CONTROL_PORT
+        );
+        directory.set_server(Some((server.clone(), None))).unwrap();
+        assert_eq!(directory.load_identity().unwrap().rid, 2);
+        crate::set_control_port(0);
+
+        // Another frontend's switch is seen when the profile lock is taken.
+        let other = DataDir::open(Some(path.clone())).unwrap();
+        other.set_server(None).unwrap();
+        assert_eq!(directory.server(), Some(server));
+        drop(directory.try_profile_lock().unwrap());
+        assert!(directory.server().is_none());
+
+        // Corrupt server settings fail visibly instead of using another slot.
+        fs::write(directory.path.join(SERVER_FILE), b"{").unwrap();
+        assert!(DataDir::open(Some(path.clone())).is_err());
+        assert!(directory.profile_lock().is_err());
+        fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn private_control_commands_preserve_the_wire_format_and_validate_passwords() {

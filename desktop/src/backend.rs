@@ -1,6 +1,7 @@
 use crate::storage::{self, Paths, Settings};
 use anyhow::{ensure, Context, Result};
 use openrad::{
+    daemon::CustomServer,
     i18n::LanguagePreference,
     output::ReportDirectory,
     protocol::Identity,
@@ -19,7 +20,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const MODULUS: &[u8] = openrad::SERVER_MODULUS;
 /// How often the desktop returns freed heap pages to the operating system.
 #[cfg(unix)]
 const MEMORY_TRIM_INTERVAL: Duration = Duration::from_secs(30);
@@ -51,14 +51,24 @@ impl Phase {
 #[derive(Clone)]
 pub enum Notice {
     Phase(Phase, String),
-    Identity { rid: u64, name: String },
+    Identity {
+        rid: u64,
+        name: String,
+    },
+    /// The active server has no saved identity yet.
+    NoIdentity,
+    /// The server this profile uses; None is the official server.
+    Server(Option<CustomServer>),
     Settings(Settings),
     Engine(runtime::Update),
     Stopped,
     CloseBlocked(String),
     ReplacementPending(bool),
     Release(openrad::releases::Release),
-    SearchFailed { query: String, message: String },
+    SearchFailed {
+        query: String,
+        message: String,
+    },
     NodeName(String),
     RelayPreference(bool),
     BroadcastPreference(runtime::BroadcastSelection),
@@ -68,12 +78,24 @@ pub enum Action {
     Connect,
     Disconnect,
     ResetIdentity,
+    /// Switch to a custom server, or back to the official one with None.
+    SetServer(Option<ServerChoice>),
     Save(Settings),
-    BroadcastPeers { targets: Vec<String>, exclude: bool },
+    BroadcastPeers {
+        targets: Vec<String>,
+        exclude: bool,
+    },
     StealthBlock(openrad::daemon::BlockChange),
     Import(PathBuf),
     Engine(runtime::Command),
     Shutdown,
+}
+/// A custom server entered in Settings. The modulus file may be omitted when
+/// switching back to a server whose modulus this profile already holds.
+pub struct ServerChoice {
+    pub host: std::net::Ipv4Addr,
+    pub port: u16,
+    pub modulus: Option<PathBuf>,
 }
 /// Coalesce consecutive state snapshots while preserving phase/operation order.
 #[derive(Clone, Default)]
@@ -209,6 +231,7 @@ impl Backend {
                 self.cancel.connection.store(true, Ordering::Relaxed);
                 self.cancel.replacement.store(false, Ordering::Relaxed);
             }
+            Action::SetServer(_) => self.cancel.connection.store(true, Ordering::Relaxed),
             Action::Disconnect | Action::Shutdown => {
                 self.cancel.connection.store(true, Ordering::Relaxed);
                 self.cancel.replacement.store(true, Ordering::Relaxed);
@@ -318,9 +341,9 @@ fn manager(
             identity = Some(dir.load_identity()?);
         } else if !service_running {
             identity = if import.is_some() {
-                storage::load_for_import(&paths.entry()?)?
+                storage::load_for_import(&paths.entry(&dir)?)?
             } else {
-                storage::load(&paths.entry()?)?
+                storage::load(&paths.entry(&dir)?)?
             };
         }
         if let Some(path) = import {
@@ -340,6 +363,8 @@ fn manager(
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendIdentityReady);
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendReady);
     let mut persisted = identity.is_some();
+    let mut current_server = dir.server();
+    report(Notice::Server(current_server.clone()));
     report(Notice::Settings(settings.clone()));
     report(Notice::BroadcastPreference(broadcast_selection.clone()));
     report(Notice::BlockList(blocked.clone()));
@@ -413,22 +438,31 @@ fn manager(
                     return Ok(());
                 }
                 let profile_lock = dir.try_profile_lock()?;
+                // The lock refreshed the server; the CLI may have switched it.
+                sync_server(
+                    &dir,
+                    &mut current_server,
+                    &mut identity,
+                    &mut persisted,
+                    &report,
+                )?;
                 if dir.identity_file_present() {
                     identity = Some(dir.load_identity()?);
                 } else if identity.is_none() {
-                    identity = storage::load(&paths.entry()?)?;
+                    identity = storage::load(&paths.entry(&dir)?)?;
                 }
                 if identity.is_none() {
                     report(Notice::Phase(
                         Phase::Provisioning,
                         "Preparing your private device identity…".into(),
                     ));
-                    let vault = paths.entry()?;
+                    let vault = paths.entry(&dir)?;
+                    let endpoint = dir.use_server()?;
                     identity = Some(storage::provision_once(&vault, |commit| {
                         Session::provision_controlled(
-                            MODULUS,
+                            &endpoint.modulus,
                             &settings.node_name,
-                            openrad::DEFAULT_BOOTSTRAP_HOST,
+                            &endpoint.host,
                             &ReportDirectory::disabled(),
                             commit,
                             Some(cancel.connection.clone()),
@@ -443,7 +477,7 @@ fn manager(
                     if dir.identity_file_present() {
                         persisted = true;
                     } else {
-                        storage::save_initial(&paths.entry()?, identity.as_ref().unwrap())?;
+                        storage::save_initial(&paths.entry(&dir)?, identity.as_ref().unwrap())?;
                         persisted = true;
                     }
                 }
@@ -600,7 +634,7 @@ fn manager(
                 }
                 if let Some(id) = identity.as_ref().filter(|_| !persisted) {
                     if let Err(error) = paths
-                        .entry()
+                        .entry(&dir)
                         .and_then(|vault| commit_shutdown_initial_identity(&dir, &vault, id))
                     {
                         report(Notice::CloseBlocked(error.to_string()));
@@ -633,20 +667,35 @@ fn manager(
                     service_running = false;
                     let _service_lock = dir.stopped_lock()?;
                     if !replacement.is_pending() {
+                        sync_server(
+                            &dir,
+                            &mut current_server,
+                            &mut identity,
+                            &mut persisted,
+                            &report,
+                        )?;
                         identity = Some(
                             dir.load_identity()
                                 .context("Loading the saved identity before reset")?,
+                        );
+                    } else {
+                        // A pending replacement belongs to the server it was
+                        // issued by; never save it into another server's slot.
+                        ensure!(
+                            dir.server() == current_server,
+                            "The server changed in another frontend. Keep this window open to recover the pending replacement."
                         );
                     }
                     report(Notice::Phase(
                         Phase::Resetting,
                         "Creating your replacement identity…".into(),
                     ));
+                    let endpoint = dir.use_server()?;
                     replacement.prepare(|| {
                         Session::provision_controlled(
-                            MODULUS,
+                            &endpoint.modulus,
                             &settings.node_name,
-                            openrad::DEFAULT_BOOTSTRAP_HOST,
+                            &endpoint.host,
                             &ReportDirectory::disabled(),
                             &mut || Ok(()),
                             Some(cancel.replacement.clone()),
@@ -671,7 +720,7 @@ fn manager(
                     } else {
                         commit_replacement(
                             &mut replacement,
-                            &paths.entry()?,
+                            &paths.entry(&dir)?,
                             &mut identity,
                             &report,
                         )?;
@@ -708,6 +757,82 @@ fn manager(
                     crate::startup_log::event(format_args!(
                         "Identity reset completed; elapsed_ms={}",
                         started.elapsed().as_millis()
+                    ));
+                }
+                operation(result);
+                next_status = Instant::now();
+            }
+            Ok(Action::SetServer(choice)) => {
+                connect = false;
+                reset_failed = false;
+                last_phase = None;
+                let custom = choice.is_some();
+                let result = (|| -> Result<()> {
+                    ensure!(
+                        !replacement.is_pending(),
+                        "Finish saving the replacement identity before changing servers"
+                    );
+                    ensure!(
+                        persisted || identity.is_none(),
+                        "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+                    );
+                    // Validate everything before stopping the VPN.
+                    let change = choice
+                        .map(|choice| -> Result<_> {
+                            Ok((
+                                CustomServer::new(choice.host, choice.port)?,
+                                choice
+                                    .modulus
+                                    .as_deref()
+                                    .map(openrad::daemon::read_modulus_file)
+                                    .transpose()?,
+                            ))
+                        })
+                        .transpose()?;
+                    let _profile_lock = dir.try_profile_lock()?;
+                    report(Notice::Phase(
+                        Phase::Disconnecting,
+                        "Stopping the VPN service before changing servers…".into(),
+                    ));
+                    stop_service(&dir)?;
+                    service_running = false;
+                    let _service_lock = dir.stopped_lock()?;
+                    // Only the selection changes. Every server keeps its own
+                    // identity slot, so the previous identity stays saved.
+                    dir.set_server(change)?;
+                    current_server = dir.server();
+                    identity = if dir.identity_file_present() {
+                        dir.load_identity().ok()
+                    } else {
+                        storage::load(&paths.entry(&dir)?).ok().flatten()
+                    };
+                    persisted = identity.is_some();
+                    report(Notice::Server(current_server.clone()));
+                    report(match &identity {
+                        Some(id) => Notice::Identity {
+                            rid: id.rid,
+                            name: id.node_name.clone(),
+                        },
+                        None => Notice::NoIdentity,
+                    });
+                    report(Notice::Engine(runtime::Update::State(
+                        runtime::Snapshot::default(),
+                    )));
+                    report(Notice::Phase(
+                        Phase::Disconnected,
+                        if custom {
+                            "Custom server saved. Connect to use it."
+                        } else {
+                            "Official server restored. Connect to use it."
+                        }
+                        .into(),
+                    ));
+                    Ok(())
+                })();
+                if let Err(error) = &result {
+                    report(Notice::Phase(
+                        Phase::Error,
+                        format!("Could not change servers: {error:#}"),
                     ));
                 }
                 operation(result);
@@ -927,6 +1052,32 @@ fn manager(
     }
 }
 
+/// Follow a server switch made by another frontend. The cached identity
+/// belongs to the previous server's slot and must be reloaded, but an issued
+/// identity that is not saved yet is never dropped.
+fn sync_server(
+    dir: &openrad::daemon::DataDir,
+    current: &mut Option<CustomServer>,
+    identity: &mut Option<Identity>,
+    persisted: &mut bool,
+    report: &Report,
+) -> Result<()> {
+    let server = dir.server();
+    if server == *current {
+        return Ok(());
+    }
+    ensure!(
+        *persisted || identity.is_none(),
+        "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+    );
+    *current = server.clone();
+    *identity = None;
+    *persisted = false;
+    report(Notice::Server(server));
+    report(Notice::NoIdentity);
+    Ok(())
+}
+
 /// Import only while this frontend exclusively owns the stopped profile.
 /// Reload under the locks: a cached identity/status may predate a CLI reset.
 fn import_identity(
@@ -939,7 +1090,7 @@ fn import_identity(
     let current = if dir.identity_file_present() {
         Some(dir.load_identity()?)
     } else {
-        storage::load_for_import(&paths.entry()?)?
+        storage::load_for_import(&paths.entry(dir)?)?
     };
     ensure!(
         current.as_ref().is_none_or(|id| id.rid == imported.rid),
@@ -948,7 +1099,7 @@ fn import_identity(
     if dir.identity_file_present() {
         dir.save_identity(&imported)?;
     } else {
-        storage::save(&paths.entry()?, &imported)?;
+        storage::save(&paths.entry(dir)?, &imported)?;
     }
     Ok(imported)
 }
@@ -1001,7 +1152,7 @@ fn commit_shutdown_replacement(
     let saved = if dir.identity_file_present() {
         Some(dir.load_identity()?)
     } else {
-        storage::load_for_import(&paths.entry()?)?
+        storage::load_for_import(&paths.entry(dir)?)?
     };
     let unchanged = match (saved.as_ref(), identity.as_ref()) {
         (None, None) => true,
@@ -1016,7 +1167,7 @@ fn commit_shutdown_replacement(
     if dir.identity_file_present() {
         replacement.commit(&ProfileVault(dir.clone()), identity)
     } else {
-        replacement.commit(&paths.entry()?, identity)
+        replacement.commit(&paths.entry(dir)?, identity)
     }
 }
 
@@ -1723,6 +1874,110 @@ mod tests {
             drop(lock);
             std::fs::remove_dir_all(directory).unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_servers_restores_each_servers_identity_without_deleting_any() {
+        use openrad::daemon::DataDir;
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-server-{}-{}",
+            std::process::id(),
+            rand_suffix()
+        ));
+        let paths = Paths::new(Some(directory.clone())).unwrap();
+        paths
+            .save_settings(&Settings {
+                auto_connect: false,
+                ..Settings::default()
+            })
+            .unwrap();
+        let identity = |rid: u64| {
+            Identity::from_secret(format!(r#"{{"format":"openrad-identity-v1","rid":{rid},"vip":"26.0.0.5","node_name":"synthetic","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}}"#).as_bytes()).unwrap()
+        };
+        identity(123)
+            .save(&ReportDirectory::new(&directory.join("profile")).unwrap())
+            .unwrap();
+        let slot = directory.join("servers/192.0.2.10-18301");
+        std::fs::create_dir_all(&slot).unwrap();
+        identity(456)
+            .save(&ReportDirectory::new(&slot.join("profile")).unwrap())
+            .unwrap();
+        let modulus = directory.join("synthetic-modulus.bin");
+        std::fs::write(&modulus, openrad::SERVER_MODULUS).unwrap();
+        let (backend, actions) = Backend::recording_fixture();
+        let cancel = backend.cancel.clone();
+        let (publish, notices) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            manager(
+                paths,
+                None,
+                None,
+                runtime::Options::default(),
+                actions,
+                cancel,
+                Arc::new(move |notice| {
+                    publish.send(notice).unwrap();
+                }),
+            )
+        });
+        let choice = |modulus: Option<PathBuf>| ServerChoice {
+            host: std::net::Ipv4Addr::new(192, 0, 2, 10),
+            port: 18301,
+            modulus,
+        };
+        // Wait for the result of one switch: the server, its identity and phase.
+        let switched = |expected_server: Option<u16>, expected_rid: Option<u64>| {
+            let (mut server, mut rid) = (None, None);
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                assert!(Instant::now() < until, "server switch must finish promptly");
+                match notices.recv_timeout(Duration::from_millis(500)) {
+                    Ok(Notice::Server(value)) => server = Some(value.map(|s| s.port)),
+                    Ok(Notice::Identity { rid: value, .. }) => rid = Some(Some(value)),
+                    Ok(Notice::NoIdentity) => rid = Some(None),
+                    Ok(Notice::Phase(Phase::Error, message)) => return Err(message),
+                    Ok(Notice::Phase(Phase::Disconnected, message))
+                        if message.contains("server") =>
+                    {
+                        assert_eq!(server, Some(expected_server));
+                        assert_eq!(rid, Some(expected_rid));
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+        };
+        backend.send(Action::SetServer(Some(choice(Some(modulus.clone())))));
+        switched(Some(18301), Some(456)).unwrap();
+        backend.send(Action::SetServer(None));
+        switched(None, Some(123)).unwrap();
+        // The saved modulus is reused; an invalid one is refused before saving.
+        backend.send(Action::SetServer(Some(choice(None))));
+        switched(Some(18301), Some(456)).unwrap();
+        std::fs::write(&modulus, [1, 2, 3]).unwrap();
+        backend.send(Action::SetServer(None));
+        switched(None, Some(123)).unwrap();
+        backend.send(Action::SetServer(Some(choice(Some(modulus)))));
+        assert!(switched(None, None)
+            .unwrap_err()
+            .contains("Could not change servers"));
+        let dir = DataDir::open(Some(directory.clone())).unwrap();
+        assert!(dir.server().is_none());
+        assert_eq!(dir.load_identity().unwrap().rid, 123);
+        assert_eq!(
+            Identity::load(&slot.join("profile/identity.json"))
+                .unwrap()
+                .rid,
+            456
+        );
+        backend.send(Action::Shutdown);
+        while !matches!(
+            notices.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Notice::Stopped
+        ) {}
+        worker.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]

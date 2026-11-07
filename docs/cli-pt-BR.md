@@ -315,6 +315,28 @@ o problema de driver ou autorização. Uma operação de rede que expirou pode
 ter chegado ao servidor; confira `status` e `networks` após a reconexão antes
 de repetir uma alteração cujo resultado ficou incerto.
 
+## Servidor personalizado
+
+Um servidor próprio que fale o protocolo do OpenRad pode substituir o
+oficial. Informe o IPv4, a porta de controle e o arquivo do módulo RSA público
+(por exemplo, o `modulus.bin` que o `openrad-server` grava ao lado do banco):
+
+```sh
+openrad stop
+openrad server set --host 192.0.2.10 --port 18301 --modulus modulus.bin
+openrad init --node-name meu-dispositivo   # só na primeira vez neste servidor
+openrad start
+openrad server reset                       # volta ao servidor oficial
+```
+
+A porta (padrão 17301) vale para cadastro, sessão anexada e coordenador de
+peers. O módulo precisa ter 87–1024 bytes e é validado antes de salvar. Pare o
+serviço antes de trocar de servidor. Cada servidor guarda a própria identidade
+no perfil (`servers/IPV4-PORTA/` para servidores personalizados); trocar só
+muda a seleção em `server.json`, nunca apaga nem recadastra uma identidade, e
+voltar restaura a anterior. `--modulus` pode ser omitido ao voltar a um
+servidor já usado neste perfil.
+
 ## Referência rápida de comandos
 
 Os argumentos em maiúsculas são marcadores para os valores que você fornece.
@@ -345,6 +367,9 @@ Os argumentos em maiúsculas são marcadores para os valores que você fornece.
 | `unblock IP_VPN` | Remover um bloqueio furtivo. |
 | `blocked` | Listar endereços com bloqueio furtivo. |
 | `force-relay true\|false` | Ativar ou desativar o uso exclusivo de relay. |
+| `server [show]` | Mostrar o servidor usado pelo perfil e se há identidade salva nele. |
+| `server set --host IPV4 [--port PORTA] [--modulus ARQUIVO]` | Usar um servidor próprio compatível com o protocolo. |
+| `server reset` | Voltar ao servidor oficial e à identidade salva dele. |
 
 Aliases disponíveis: `provision` para `init`, `public-networks` para `search`,
 `create-network` para `create` e `delete-network` para `delete`.

@@ -235,8 +235,9 @@ impl Paths {
         );
         atomic_private_json(&self.directory, "network-preferences", &bytes)
     }
-    pub fn entry(&self) -> Result<keyring::Entry> {
-        keyring::Entry::new("org.openrad.desktop", &self.directory.to_string_lossy())
+    /// The credential-store record of the active server's identity slot.
+    pub fn entry(&self, dir: &openrad::daemon::DataDir) -> Result<keyring::Entry> {
+        keyring::Entry::new("org.openrad.desktop", &dir.identity_root().to_string_lossy())
             .map_err(|_| anyhow::anyhow!(if cfg!(windows) {
                 "Windows Credential Manager is unavailable. Check your Windows account's credential store, then restart OpenRad."
             } else {

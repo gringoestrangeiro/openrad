@@ -1,5 +1,5 @@
 use crate::{
-    backend::{Action, Backend, Notice, Phase},
+    backend::{Action, Backend, Notice, Phase, ServerChoice},
     network_ui::{
         role_label, DeleteConfirmation, FormEvent, MemberConfirmation, Mode, NetworkForm,
     },
@@ -811,6 +811,11 @@ pub struct App {
     toast: Option<(String, bool, Instant)>,
     activity: VecDeque<Activity>,
     import_path: String,
+    /// The active custom server; None is the official server.
+    server: Option<openrad::daemon::CustomServer>,
+    server_host: String,
+    server_port: String,
+    server_modulus: String,
     download: VecDeque<f32>,
     upload: VecDeque<f32>,
     last_sample: Instant,
@@ -926,6 +931,10 @@ impl App {
             toast: None,
             activity: VecDeque::new(),
             import_path: String::new(),
+            server: None,
+            server_host: String::new(),
+            server_port: String::new(),
+            server_modulus: String::new(),
             confirm_reset: false,
             #[cfg(windows)]
             confirm_uninstall: false,
@@ -1011,6 +1020,23 @@ impl App {
                         self.selected_network = None;
                     }
                     self.identity = Some((rid, name));
+                }
+                Notice::NoIdentity => {
+                    if self.identity.is_some() {
+                        self.interrupt_join();
+                        self.join_passwords.clear();
+                        self.snapshot.replace(Snapshot::default());
+                        self.selected_network = None;
+                    }
+                    self.identity = None;
+                }
+                Notice::Server(server) => {
+                    if let Some(server) = &server {
+                        self.server_host = server.host.to_string();
+                        self.server_port = server.port.to_string();
+                        self.server_modulus.clear();
+                    }
+                    self.server = server;
                 }
                 Notice::NodeName(name) => {
                     if self.settings.node_name == self.saved_settings.node_name {
@@ -3553,6 +3579,8 @@ impl App {
             });
         });
         ui.add_space(16.);
+        self.server_settings(ui);
+        ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             section_title(ui, language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" }));
@@ -3589,6 +3617,116 @@ impl App {
                 }
             });
         }
+    }
+    /// Parse the custom server fields; an empty port means the default port.
+    fn server_choice(&self) -> Result<ServerChoice, &'static str> {
+        let host = self
+            .server_host
+            .trim()
+            .parse::<std::net::Ipv4Addr>()
+            .ok()
+            .filter(|host| !host.is_unspecified() && !host.is_broadcast() && !host.is_multicast())
+            .ok_or("Enter the server's IPv4 address")?;
+        let port = match self.server_port.trim() {
+            "" => openrad::DEFAULT_CONTROL_PORT,
+            port => port
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .ok_or("Enter a server port from 1 to 65535")?,
+        };
+        let modulus = self.server_modulus.trim();
+        Ok(ServerChoice {
+            host,
+            port,
+            modulus: (!modulus.is_empty()).then(|| PathBuf::from(modulus)),
+        })
+    }
+    /// Choose a self-hosted server: import its modulus, enter its address and
+    /// port. Each server keeps its own identity, so switching never deletes one.
+    fn server_settings(&mut self, ui: &mut egui::Ui) {
+        let language = self.language();
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            section_title(ui, language.text("Server"));
+            match &self.server {
+                None => ui.label(language.text("Using the official OpenRad server")),
+                Some(server) => ui.label(language.format(
+                    "Using custom server {address}",
+                    &[("address", &server.address())],
+                )),
+            };
+            ui.label(
+                RichText::new(language.text(
+                    "Use a self-hosted OpenRad-compatible server. Each server keeps its own identity in this profile; switching back restores the previous one. Changing servers stops the VPN.",
+                ))
+                .size(12.)
+                .color(muted()),
+            );
+            ui.add_space(12.);
+            let field = (ui.available_width() - 16.).clamp(160., 420.);
+            ui.label(language.text("Server IPv4 address"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_host)
+                    .hint_text("192.168.1.10")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(field),
+            );
+            ui.label(language.text("Port"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_port)
+                    .hint_text("17301")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(120.),
+            );
+            ui.label(language.text("Modulus file"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_modulus)
+                    .hint_text("/path/to/modulus.bin")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(field),
+            );
+            ui.label(
+                RichText::new(language.text(
+                    "The server writes modulus.bin next to its database. Leave this empty when returning to a server used before.",
+                ))
+                .size(11.)
+                .color(muted()),
+            );
+            let choice = self.server_choice();
+            if let (Err(error), false) = (&choice, self.server_host.trim().is_empty()) {
+                ui.label(RichText::new(language.text(error)).size(11.).color(red()));
+            }
+            let can_change = !self.closing
+                && !self.replacement_pending
+                && matches!(
+                    self.phase,
+                    Phase::Connected | Phase::Disconnected | Phase::Error
+                );
+            ui.add_space(8.);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        can_change && choice.is_ok(),
+                        primary(language.text("Use this server")),
+                    )
+                    .clicked()
+                {
+                    if let Ok(choice) = choice {
+                        self.backend.send(Action::SetServer(Some(choice)));
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        can_change && self.server.is_some(),
+                        egui::Button::new(language.text("Use the official server")),
+                    )
+                    .clicked()
+                {
+                    self.backend.send(Action::SetServer(None));
+                }
+            });
+        });
     }
     fn update_notice(&mut self, ui: &mut egui::Ui) {
         let Some(release) = self.release.clone() else {
@@ -7134,6 +7272,206 @@ mod tests {
                 }
                 std::fs::write(directory.join(format!("{name}-{width}.ppm")), ppm).unwrap();
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "renders synthetic server settings with a Vulkan CPU driver"]
+    fn capture_server_settings_without_profiles_credentials_or_a_display() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        app.server = Some(
+            openrad::daemon::CustomServer::new(std::net::Ipv4Addr::new(192, 0, 2, 10), 18301)
+                .unwrap(),
+        );
+        app.server_host = "192.0.2.10".into();
+        app.server_port = "18301".into();
+        app.server_modulus = "/synthetic/modulus.bin".into();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reports/server-settings");
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, preference) in [
+            ("en", LanguagePreference::English),
+            ("pt", LanguagePreference::Portuguese),
+            ("ru", LanguagePreference::Russian),
+            ("vi", LanguagePreference::Vietnamese),
+        ] {
+            app.settings.language = preference;
+            for width in [448, 832] {
+                let height = 620;
+                let ctx = egui::Context::default();
+                configure(&ctx);
+                let mut textures = egui::TexturesDelta::default();
+                let mut final_output = None;
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width as f32, height as f32),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.server_settings(ui),
+                    );
+                    textures.append(std::mem::take(&mut output.textures_delta));
+                    final_output = Some(output);
+                }
+                let mut output = final_output.unwrap();
+                output.textures_delta = textures;
+                let pixels =
+                    crate::graphics::software_test::render_offscreen(&ctx, output, width, height);
+                let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
+                for pixel in pixels.as_chunks::<4>().0 {
+                    ppm.extend(&pixel[..3]);
+                }
+                std::fs::write(directory.join(format!("{name}-{width}.ppm")), ppm).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn server_settings_validate_input_and_request_switches_in_every_language() {
+        fn frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(780., 1200.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.server_settings(ui),
+            );
+            output.textures_delta.clear();
+            output
+        }
+        // Click a button by label; returns false when it is absent or disabled.
+        fn click(ctx: &egui::Context, app: &mut App, label: &str) -> bool {
+            frame(ctx, app, vec![]);
+            let output = frame(ctx, app, vec![]);
+            let Some((_, node)) = output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .into_iter()
+                .find(|(_, node)| {
+                    node.role() == egui::accesskit::Role::Button && node.label() == Some(label)
+                })
+            else {
+                return false;
+            };
+            if node.is_disabled() {
+                return false;
+            }
+            let bounds = node.bounds().unwrap();
+            let pos = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.) as f32,
+                ((bounds.y0 + bounds.y1) / 2.) as f32,
+            );
+            for pressed in [true, false] {
+                frame(
+                    ctx,
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            true
+        }
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            let (backend, actions) = Backend::recording_fixture();
+            app.backend = backend;
+            app.settings.language = preference;
+            let language = app.language();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output).contains(
+                &language
+                    .text("Using the official OpenRad server")
+                    .to_owned()
+            ));
+
+            // Invalid input shows a localized error and cannot be submitted.
+            app.server_host = "192.168.15.300".into();
+            frame(&ctx, app, vec![]);
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output)
+                .contains(&language.text("Enter the server's IPv4 address").to_owned()));
+            assert!(!click(&ctx, app, language.text("Use this server")));
+            app.server_host = "192.168.15.8".into();
+            app.server_port = "70000".into();
+            assert!(!click(&ctx, app, language.text("Use this server")));
+            assert!(actions.try_recv().is_err());
+            // The official server button needs a custom server to return from.
+            assert!(!click(&ctx, app, language.text("Use the official server")));
+
+            app.server_port = "18301".into();
+            app.server_modulus = "/synthetic/modulus.bin".into();
+            assert!(click(&ctx, app, language.text("Use this server")));
+            match actions.try_recv().unwrap() {
+                Action::SetServer(Some(choice)) => {
+                    assert_eq!(choice.host, std::net::Ipv4Addr::new(192, 168, 15, 8));
+                    assert_eq!(choice.port, 18301);
+                    assert_eq!(
+                        choice.modulus,
+                        Some(PathBuf::from("/synthetic/modulus.bin"))
+                    );
+                }
+                _ => panic!("expected a custom server switch"),
+            }
+            // An empty port means the default; an empty modulus reuses the saved one.
+            app.server_port.clear();
+            app.server_modulus.clear();
+            assert_eq!(
+                app.server_choice()
+                    .ok()
+                    .map(|choice| (choice.port, choice.modulus)),
+                Some((openrad::DEFAULT_CONTROL_PORT, None))
+            );
+
+            app.backend.notices.send(Notice::Server(Some(
+                openrad::daemon::CustomServer::new(std::net::Ipv4Addr::new(192, 168, 15, 8), 18301)
+                    .unwrap(),
+            )));
+            app.backend.notices.send(Notice::NoIdentity);
+            app.identity = Some((123, "synthetic".into()));
+            app.consume(&ctx);
+            assert_eq!(app.identity, None);
+            assert_eq!(app.server_port, "18301");
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output).contains(&language.format(
+                "Using custom server {address}",
+                &[("address", "192.168.15.8:18301")]
+            )));
+            // Switching is unavailable while another identity operation runs.
+            app.phase = Phase::Resetting;
+            assert!(!click(&ctx, app, language.text("Use the official server")));
+            app.phase = Phase::Disconnected;
+            assert!(click(&ctx, app, language.text("Use the official server")));
+            assert!(matches!(
+                actions.try_recv().unwrap(),
+                Action::SetServer(None)
+            ));
         }
     }
 

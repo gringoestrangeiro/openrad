@@ -58,11 +58,16 @@ enum Command {
         #[arg(long, conflicts_with = "node_name")]
         identity: Option<PathBuf>,
         /// Registration server override, for controlled deployments.
-        #[arg(long, default_value = openrad::DEFAULT_BOOTSTRAP_HOST)]
-        host: String,
+        #[arg(long)]
+        host: Option<String>,
         /// Public RSA modulus override, for controlled deployments.
         #[arg(long)]
         modulus: Option<PathBuf>,
+    },
+    /// Show or change the server this profile uses.
+    Server {
+        #[command(subcommand)]
+        action: Option<ServerAction>,
     },
     /// Start the VPN service in the background.
     Start {
@@ -173,10 +178,31 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ServerAction {
+    /// Show the server this profile uses.
+    Show,
+    /// Use a custom server. Each server keeps its own identity in this profile.
+    Set {
+        /// Server IPv4 address.
+        #[arg(long)]
+        host: Ipv4Addr,
+        /// Server control port.
+        #[arg(long, default_value_t = openrad::DEFAULT_CONTROL_PORT)]
+        port: u16,
+        /// Server public RSA modulus file (optional when switching back to a server used before).
+        #[arg(long)]
+        modulus: Option<PathBuf>,
+    },
+    /// Go back to the official OpenRad server.
+    Reset,
+}
+
 impl Command {
     fn kind(&self) -> &'static str {
         match self {
             Self::Init { .. } => "init",
+            Self::Server { .. } => "server",
             Self::Start { .. } => "start",
             Self::Status => "status",
             Self::Stop => "stop",
@@ -236,10 +262,16 @@ fn initialize(
     dir: &daemon::DataDir,
     name: Option<String>,
     source: Option<PathBuf>,
-    host: String,
+    host: Option<String>,
     modulus_path: Option<PathBuf>,
 ) -> Result<daemon::Reply> {
     let _profile_lock = dir.profile_lock()?;
+    // A custom server supplies its own host, port and modulus.
+    let custom = dir.server();
+    ensure!(
+        custom.is_none() || (host.is_none() && modulus_path.is_none()),
+        "This profile uses a custom server. Change it with `openrad server set` instead of --host or --modulus"
+    );
     ensure!(
         !dir.identity_file_present()
             && daemon::request(dir, &daemon::Request::Status).is_err()
@@ -258,7 +290,12 @@ fn initialize(
     } else {
         None
     };
-    let reports = ReportDirectory::new(&dir.path.join("profile"))?;
+    let endpoint = if source.is_none() {
+        Some(dir.use_server()?)
+    } else {
+        None
+    };
+    let reports = ReportDirectory::new(&dir.identity_root().join("profile"))?;
     if let Some(modulus) = &modulus {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -267,16 +304,17 @@ fn initialize(
         let mut file = options.open(dir.modulus())?;
         file.write_all(modulus)?;
     }
-    let identity = match source {
-        Some(path) => {
+    let identity = match (source, endpoint) {
+        (Some(path), _) => {
             let id = openrad::protocol::Identity::load(&path)?;
             id.save(&reports)?;
             id
         }
-        None => Session::provision(
-            modulus.as_deref().unwrap_or(openrad::SERVER_MODULUS),
+        (None, None) => unreachable!(),
+        (None, Some(endpoint)) => Session::provision(
+            modulus.as_deref().unwrap_or(&endpoint.modulus),
             name.as_deref().context("--node-name is required")?,
-            &host,
+            host.as_deref().unwrap_or(&endpoint.host),
             &reports,
         )?,
     };
@@ -285,6 +323,73 @@ fn initialize(
         message: "Identity saved. Run `openrad start` to connect.".into(),
         data: json!({"rid":identity.rid,"vip":identity.vip,"identity":dir.identity()}),
     })
+}
+
+#[cfg(any(unix, windows))]
+fn server_reply(dir: &daemon::DataDir, message: &str) -> daemon::Reply {
+    let server = dir.server();
+    let identity = dir.load_identity().ok();
+    daemon::Reply {
+        ok: true,
+        message: message.into(),
+        data: json!({
+            "server": server.as_ref().map_or_else(
+                || format!("{}:{}", openrad::DEFAULT_BOOTSTRAP_HOST, openrad::DEFAULT_CONTROL_PORT),
+                daemon::CustomServer::address,
+            ),
+            "custom": server.is_some(),
+            "rid": identity.as_ref().map(|identity| identity.rid),
+        }),
+    }
+}
+
+/// Switching servers changes only the selection: each server's identity stays
+/// in its own slot of this profile, so nothing is deleted or re-registered.
+#[cfg(any(unix, windows))]
+fn change_server(dir: &daemon::DataDir, action: ServerAction) -> Result<daemon::Reply> {
+    let change = match action {
+        ServerAction::Show => {
+            return Ok(server_reply(
+                dir,
+                if dir.server().is_some() {
+                    "Using a custom server"
+                } else {
+                    "Using the official OpenRad server"
+                },
+            ))
+        }
+        ServerAction::Set {
+            host,
+            port,
+            modulus,
+        } => Some((
+            daemon::CustomServer::new(host, port)?,
+            modulus
+                .as_deref()
+                .map(daemon::read_modulus_file)
+                .transpose()?,
+        )),
+        ServerAction::Reset => None,
+    };
+    let _profile_lock = dir.profile_lock()?;
+    ensure!(
+        !dir.endpoint_exists(),
+        "Stop the VPN service before changing servers: run `openrad stop`"
+    );
+    let _service_lock = dir
+        .stopped_lock()
+        .context("Stop the VPN service before changing servers: run `openrad stop`")?;
+    dir.set_server(change)?;
+    let has_identity = dir.load_identity().is_ok();
+    Ok(server_reply(
+        dir,
+        match (dir.server().is_some(), has_identity) {
+            (true, true) => "Custom server saved. Its saved identity will be used; run `openrad start` to connect.",
+            (true, false) => "Custom server saved. Register on it with `openrad init --node-name NAME`, then run `openrad start`.",
+            (false, true) => "Official server restored with its saved identity. Run `openrad start` to connect.",
+            (false, false) => "Official server restored. Run `openrad init --node-name NAME` to register.",
+        },
+    ))
 }
 
 #[cfg(any(unix, windows))]
@@ -300,6 +405,7 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
             host,
             modulus,
         } => initialize(&dir, node_name, identity, host, modulus)?,
+        Command::Server { action } => change_server(&dir, action.unwrap_or(ServerAction::Show))?,
         Command::Start { no_tap } => {
             let started = daemon::spawn(&dir, no_tap)?;
             let status = daemon::request(&dir, &Request::Status)?;
@@ -633,6 +739,15 @@ fn human_reply(reply: &daemon::Reply, language: Language) -> String {
                     &[("0", &data["cursor"].to_string())],
                 ));
             }
+        } else if let Some(server) = data.get("server").and_then(Value::as_str) {
+            lines.push(language.message(&reply.message));
+            lines.push(language.format("Server: {address}", &[("address", server)]));
+            if let Some(rid) = data["rid"].as_u64() {
+                lines.push(language.format(
+                    "Saved identity for this server: RID {rid}",
+                    &[("rid", &rid.to_string())],
+                ));
+            }
         } else if data.contains_key("identity") {
             lines.push(language.message(&reply.message));
             lines.push(language.format(
@@ -734,6 +849,37 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Delete { yes: true, .. }
+        ));
+    }
+    #[test]
+    fn server_commands_parse_with_the_default_port_and_require_a_host() {
+        assert!(Cli::try_parse_from(["openrad", "server", "set", "--port", "18301"]).is_err());
+        assert!(
+            Cli::try_parse_from(["openrad", "server", "set", "--host", "server.example"]).is_err()
+        );
+        assert!(matches!(
+            Cli::try_parse_from(["openrad", "server", "set", "--host", "192.0.2.10"])
+                .unwrap()
+                .command,
+            Command::Server {
+                action: Some(ServerAction::Set {
+                    port: openrad::DEFAULT_CONTROL_PORT,
+                    modulus: None,
+                    ..
+                })
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["openrad", "server"]).unwrap().command,
+            Command::Server { action: None }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["openrad", "server", "reset"])
+                .unwrap()
+                .command,
+            Command::Server {
+                action: Some(ServerAction::Reset)
+            }
         ));
     }
     #[test]

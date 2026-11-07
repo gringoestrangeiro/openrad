@@ -217,6 +217,12 @@ Registration is not retried automatically once its login may have reached the se
 
 New identities do not inherit the previous identity's memberships. Resetting is not a way to recover access to a lost identity.
 
+## Custom server
+
+**Settings → Server** points the desktop at a self-hosted, protocol-compatible server. Enter the server's IPv4 address, its control port (empty means 17301) and the path to its raw public RSA modulus file, such as the `modulus.bin` that `openrad-server` writes next to its database, then choose **Use this server**. **Use the official server** switches back. Invalid addresses, ports or modulus files are refused before anything changes.
+
+Changing servers stops the running VPN session. Identities are only valid on the server that issued them, so each server keeps its own identity in the profile: the official server keeps the existing credential-store entry (or `profile/identity.json`), and a custom server uses a separate slot under `servers/IPV4-PORT/` with the same storage rules. Switching only changes the saved selection; it never deletes an identity, and switching back restores the previous one with its memberships. The first **Connect** on a new server registers a device identity there. The modulus path can be left empty when returning to a server this profile used before. The CLI shares the selection and identities (`openrad server`, see [CLI](cli.md#custom-server)).
+
 ## Profiles and imports
 
 The default profile directory comes from the platform's application-data location. `--data-dir PATH` selects an independent profile. The canonical profile path identifies the corresponding credential-store entry, so moving a profile directory does not automatically move its saved identity.

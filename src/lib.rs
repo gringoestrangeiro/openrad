@@ -48,4 +48,6 @@ pub mod windows_security;
 #[path = "platform/windows_setup.rs"]
 pub mod windows_setup;
 
-pub use config::{DEFAULT_BOOTSTRAP_HOST, SERVER_MODULUS};
+pub use config::{
+    control_port, set_control_port, DEFAULT_BOOTSTRAP_HOST, DEFAULT_CONTROL_PORT, SERVER_MODULUS,
+};

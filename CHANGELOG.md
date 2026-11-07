@@ -44,6 +44,15 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
 - **Windows (instalador):** `setup.log` persistente (UTF-16LE) em `%LOCALAPPDATA%\OpenRad\logs`
   registra cada etapa, codigo de saida do worker e resultado; o worker de setup grava suas etapas
   SetupAPI e o inventario de adaptadores TAP em `setup-worker-startup.log`.
+- **Servidor personalizado (desktop e CLI):** Configuracoes → Servidor importa o arquivo de modulo
+  RSA, recebe IPv4 e porta e passa a usar esse servidor; "Usar o servidor oficial" volta. O CLI tem
+  `openrad server [show]`, `server set --host IPV4 [--port N] [--modulus ARQUIVO]` e `server reset`.
+  A porta vale para cadastro, sessao de anexo e coordenador de peers (antes fixa em 17301). Cada
+  servidor guarda sua propria identidade no perfil (`servers/IPV4-PORTA/`, arquivo privado ou
+  cofre de credenciais, como antes); trocar de servidor so muda a selecao (`server.json`), nunca
+  apaga nem recadastra uma identidade, e voltar restaura a anterior. O desktop cadastra uma
+  identidade nova no primeiro Conectar; no CLI use `openrad init`. O modulo e validado (87–1024
+  bytes) antes de salvar. **Sem alteracoes no wire format.**
 
 ## 2.2.0 — 2026-11-01
 

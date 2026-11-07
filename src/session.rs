@@ -1132,7 +1132,8 @@ impl Session {
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
         let (rsa, secret) = rsa_session(modulus, purpose)?;
-        let mut stream = Framed::connect_with_stop(host, 17301, duration, stop)?;
+        let mut stream =
+            Framed::connect_with_stop(host, crate::config::control_port(), duration, stop)?;
         stream.send(&[3, 0, 0, 0])?;
         stream.send(&rsa)?;
         ensure!(stream.receive(4)? == [3, 0, 0, 0], "RSession echo mismatch");
