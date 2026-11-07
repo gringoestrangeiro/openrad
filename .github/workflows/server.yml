@@ -1,0 +1,52 @@
+name: server
+
+on:
+  push:
+    paths:
+      - 'server/**'
+      - 'tests/fixtures/**'
+      - 'clients/python/**'
+      - 'scripts/package-server.py'
+      - '.github/workflows/server.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'tests/fixtures/**'
+      - 'clients/python/**'
+      - 'scripts/package-server.py'
+      - '.github/workflows/server.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Vet (Linux and Windows)
+        run: |
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+      - name: Unit tests against tests/fixtures
+        run: go test ./...
+      - name: Cross-build Windows x64
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$RUNNER_TEMP/openrad-server.exe" .
+      - name: End-to-end with two Python clients
+        run: python3 scripts/e2e_python.py
+      - name: Package Linux and Windows archives
+        working-directory: .
+        run: python3 scripts/package-server.py --build-date "$(git log -1 --format=%cs)"

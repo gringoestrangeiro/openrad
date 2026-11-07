@@ -5,7 +5,7 @@
 OpenRad is an open-source Rust reimplementation of Radmin VPN. It provides a
 virtual Ethernet interface, a native desktop client, a headless command-line
 client, and a Paper server plugin for joining networks and communicating with
-peers.
+peers, plus a self-hosted coordination server that can replace the official one.
 
 OpenRad is an unofficial community project and is not affiliated with Radmin or
 Famatech. Linux is the established platform. Windows x64 support is experimental
@@ -14,7 +14,8 @@ development has not started.
 
 ## Clients
 
-This repository is a monorepo with five clients sharing one wire format:
+This repository is a monorepo with five clients and a coordination server
+sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
@@ -23,6 +24,7 @@ This repository is a monorepo with five clients sharing one wire format:
 | Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.3.0 |
 | Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.0 |
 | Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.0 |
+| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | alpha | 2.3.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -47,6 +49,9 @@ python3 -m venv .venv && .venv/bin/python -m pip install .
 ./gradlew clean check
 # Windows: .\gradlew.bat clean check
 # produces build/libs/OpenRadPlugin.jar
+
+# Coordination server (from server/, requires the Go version in go.mod)
+go build -o openrad-server . && go test ./...
 ```
 
 ## Features
@@ -96,6 +101,10 @@ Android beta, and the Minecraft builds alpha.
 - **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
   `OpenRadClientMod-2.3.0-fabric-<version>.jar`, matching your game version, in the Fabric
   profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README.md).
+- **Self-hosted server (alpha):** Extract `openrad-server-v2.3.0-linux-x86_64.tar.gz`
+  (or the experimental `openrad-server-v2.3.0-windows-x86_64.zip`, not yet validated on
+  native Windows) and run `openrad-server serve`. Point the desktop (**Settings → Server**)
+  or CLI (`openrad server set`) at it with its `modulus.bin`; see the [server guide](server/README.md).
 
 ## Quick start
 
@@ -226,6 +235,7 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [CLI em português](docs/cli-pt-BR.md) | Guia completo do CLI, serviço e destino de broadcast |
 | [CLI usage](docs/cli.md) | Commands, persistent service, profiles, and network administration |
 | [Paper plugin](clients/plugin/README.md) | Minecraft server plugin: install, `/orb join` setup, commands, configuration, and validation scope |
+| [Coordination server](server/README.md) | Self-hosted server: run, ports, pointing clients at it, administration, and protocol coverage |
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history and older release notes |
@@ -255,6 +265,7 @@ The repository is organized as follows:
 | `tests/` | Integration tests and synthetic protocol fixtures |
 | `docs/` | Platform guides, architecture, and performance notes |
 | `locales/` | Complete four-language message catalog |
+| `server/` | Self-hosted Go coordination server and its end-to-end test |
 | `scripts/`, `packaging/` | Release archives, Windows installer, and packaging regressions |
 
 ## Security and local data

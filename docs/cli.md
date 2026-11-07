@@ -261,7 +261,7 @@ Use `--json` for scripts, for example `openrad --json status`. This includes a f
 
 ## Custom server
 
-A self-hosted server that speaks the OpenRad protocol can replace the official one. It needs the server's IPv4 address, its control port and its raw public RSA modulus file (for example the `modulus.bin` that `openrad-server` writes next to its database):
+A self-hosted server that speaks the OpenRad protocol can replace the official one. It needs the server's IPv4 address, its control port and its raw public RSA modulus file (for example the `modulus.bin` that this repository's [`openrad-server`](../server/README.md) writes next to its database):
 
 ```sh
 ./target/release/openrad stop

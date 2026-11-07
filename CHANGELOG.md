@@ -53,6 +53,17 @@ v2.2.0 e ainda nao foi publicado. **Sem alteracoes no wire format nem na identid
   apaga nem recadastra uma identidade, e voltar restaura a anterior. O desktop cadastra uma
   identidade nova no primeiro Conectar; no CLI use `openrad init`. O modulo e validado (87–1024
   bytes) antes de salvar. **Sem alteracoes no wire format.**
+- **Servidor de coordenacao (`server/`, alpha):** servidor proprio em Go, compativel com o
+  protocolo, para usar com o "Servidor personalizado" acima: cadastro, sessao de anexo, redes
+  publicas e privadas (senha, aprovacao, capacidade), administracao, presenca, coordenacao de
+  peers, relay e UES; estado em SQLite puro Go (sem cgo). O banco guarda a chave RSA privada e e
+  criado so para o dono (`0600`); o local padrao fica no diretorio de estado do usuario
+  (`OPENRAD_SERVER_DB`/`--db` mudam). Sem enderecos fixos: o endereco anunciado vem de
+  `--public-ip` ou do endereco local de cada conexao. Testes Go leem `tests/fixtures/` direto;
+  `server/scripts/e2e_python.py` exercita dois clientes Python. Releases passam a incluir
+  `openrad-server-vX-linux-x86_64.tar.gz` e `openrad-server-vX-windows-x86_64.zip`
+  (`scripts/package-server.py`); o binario Windows e experimental, compilado de forma cruzada e
+  ainda nao validado em Windows nativo. CI: `server.yml` e job `server` no release candidate.
 
 ## 2.2.0 — 2026-11-01
 

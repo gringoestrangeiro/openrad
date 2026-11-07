@@ -128,3 +128,41 @@ jobs:
             dist/openrad-${{ env.VERSION }}-windows-x86_64-setup.zip.sha256
           if-no-files-found: error
           retention-days: 14
+
+  server:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read release version
+        shell: bash
+        run: |
+          version="$(sed -n '0,/^version = "\(.*\)"$/s//\1/p' Cargo.toml)"
+          test -n "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Test server
+        working-directory: server
+        run: go test ./...
+      - name: Package Linux and Windows server archives
+        shell: bash
+        run: |
+          python3 scripts/package-server.py --build-date "$BUILD_DATE"
+          cd dist
+          sha256sum -c "openrad-server-v$VERSION-linux-x86_64.tar.gz.sha256"
+          sha256sum -c "openrad-server-v$VERSION-windows-x86_64.zip.sha256"
+      - name: Upload server candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrad-server-${{ env.VERSION }}-candidate
+          path: |
+            dist/openrad-server-v${{ env.VERSION }}-linux-x86_64.tar.gz
+            dist/openrad-server-v${{ env.VERSION }}-linux-x86_64.tar.gz.sha256
+            dist/openrad-server-v${{ env.VERSION }}-windows-x86_64.zip
+            dist/openrad-server-v${{ env.VERSION }}-windows-x86_64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

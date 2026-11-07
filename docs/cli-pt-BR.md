@@ -319,7 +319,7 @@ de repetir uma alteração cujo resultado ficou incerto.
 
 Um servidor próprio que fale o protocolo do OpenRad pode substituir o
 oficial. Informe o IPv4, a porta de controle e o arquivo do módulo RSA público
-(por exemplo, o `modulus.bin` que o `openrad-server` grava ao lado do banco):
+(por exemplo, o `modulus.bin` que o [`openrad-server`](../server/README.md) deste repositório grava ao lado do banco):
 
 ```sh
 openrad stop
