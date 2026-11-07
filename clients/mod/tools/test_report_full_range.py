@@ -14,7 +14,7 @@ spec.loader.exec_module(report)
 class ReleaseReportTest(unittest.TestCase):
     def fixture(self, directory, mutation=None):
         path = Path(directory) / 'synthetic.jar'
-        metadata = {'version': '2.2.0', 'environment': 'client',
+        metadata = {'version': '2.3.0', 'environment': 'client',
             'entrypoints': {'client': ['io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod']},
             'mixins': ['openrad-client.mixins.json'],
             'depends': {'minecraft': '1.21.1', 'java': '>=21'}}
@@ -41,12 +41,12 @@ class ReleaseReportTest(unittest.TestCase):
 
     def test_valid_release_is_verified(self):
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(report.check_mod(self.fixture(directory), '1.21.1', '2.2.0'), ('BUILD VERIFICADO', ''))
+            self.assertEqual(report.check_mod(self.fixture(directory), '1.21.1', '2.3.0'), ('BUILD VERIFICADO', ''))
 
     def test_inert_or_incompatible_release_is_not_verified(self):
         for mutation in ['entrypoint', 'mixin-reference', 'empty-mixins', 'optional', 'additional-bytecode']:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
-                self.assertEqual(report.check_mod(self.fixture(directory, mutation), '1.21.1', '2.2.0')[0], 'NÃO VALIDADO')
+                self.assertEqual(report.check_mod(self.fixture(directory, mutation), '1.21.1', '2.3.0')[0], 'NÃO VALIDADO')
 
 if __name__ == '__main__':
     unittest.main()

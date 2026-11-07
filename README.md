@@ -18,11 +18,11 @@ This repository is a monorepo with five clients sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.2.0 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.2.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.2.0 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.2.0 |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.2.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.3.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.3.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.0 |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -79,22 +79,22 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-The current release is **[2.2.0](docs/releases/2.2.0.md)**; see the
+The current release is **[2.3.0](docs/releases/2.3.0.md)**; see the
 [changelog](CHANGELOG.md) for earlier versions. Windows is experimental,
 Android beta, and the Minecraft builds alpha.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
-- **Windows:** Run `OpenRad-Setup-2.2.0.exe` from the release package. It installs the
+- **Windows:** Run `OpenRad-Setup-2.3.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.2.0-android.apk` (Android 8.0 or newer).
+- **Android (beta):** Install `openrad-2.3.0-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
 - **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
-  `OpenRadPlugin-2.2.0-paper-<version>-java<N>.jar` for your Paper version in the server's
+  `OpenRadPlugin-2.3.0-paper-<version>-java<N>.jar` for your Paper version in the server's
   `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
 - **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
-  `OpenRadClientMod-2.2.0-fabric-<version>.jar`, matching your game version, in the Fabric
+  `OpenRadClientMod-2.3.0-fabric-<version>.jar`, matching your game version, in the Fabric
   profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README.md).
 
 ## Quick start
@@ -229,7 +229,7 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history and older release notes |
-| [Latest release (2.2.0)](docs/releases/2.2.0.md) | Changes, packages, upgrading, validation, and limitations |
+| [Latest release (2.3.0)](docs/releases/2.3.0.md) | Changes, packages, upgrading, validation, and limitations |
 
 ## Development
 

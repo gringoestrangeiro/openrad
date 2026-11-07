@@ -18,7 +18,7 @@ class VerifyVersionJarTest(unittest.TestCase):
         java = 25 if minecraft.startswith("26.") else 17
         major = java + 44
         with zipfile.ZipFile(jar, "w") as z:
-            metadata = {"version": "2.2.0", "environment": "client",
+            metadata = {"version": "2.3.0", "environment": "client",
                 "entrypoints": {"client": ["io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod"]},
                 "mixins": ["openrad-client.mixins.json"],
                 "depends": {"minecraft": minecraft, "java": f">={java}"}}
@@ -49,29 +49,29 @@ class VerifyVersionJarTest(unittest.TestCase):
 
     def test_accepts_matching_legacy_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
-            verifier.verify(self.fixture(directory), "1.18.2", "2.2.0")
+            verifier.verify(self.fixture(directory), "1.18.2", "2.3.0")
 
     def test_rejects_newer_mixin_compatibility(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "mixin Java compatibility"):
-                verifier.verify(self.fixture(directory, compatibility="JAVA_21"), "1.18.2", "2.2.0")
+                verifier.verify(self.fixture(directory, compatibility="JAVA_21"), "1.18.2", "2.3.0")
 
     def test_checks_additional_classes_not_only_entrypoints(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "bytecode major"):
-                verifier.verify(self.fixture(directory, extra_major=65), "1.18.2", "2.2.0")
+                verifier.verify(self.fixture(directory, extra_major=65), "1.18.2", "2.3.0")
 
     def test_rejects_inert_client_or_missing_injections(self):
         for mutation in ("entrypoint", "mixin-reference", "empty-mixins", "missing-routing", "optional-injections", "missing-class"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
                 with self.assertRaises(ValueError):
-                    verifier.verify(self.fixture(directory, mutation=mutation), "1.18.2", "2.2.0")
+                    verifier.verify(self.fixture(directory, mutation=mutation), "1.18.2", "2.3.0")
 
     def test_modern_adapter_requires_its_widget_invoker(self):
         with tempfile.TemporaryDirectory() as directory:
-            verifier.verify(self.fixture(directory, compatibility="JAVA_25", extra_major=69, minecraft="26.3"), "26.3", "2.2.0")
+            verifier.verify(self.fixture(directory, compatibility="JAVA_25", extra_major=69, minecraft="26.3"), "26.3", "2.3.0")
             with self.assertRaisesRegex(ValueError, "required OpenRad client mixin"):
-                verifier.verify(self.fixture(directory, compatibility="JAVA_25", extra_major=69, minecraft="26.3", mutation="missing-widget"), "26.3", "2.2.0")
+                verifier.verify(self.fixture(directory, compatibility="JAVA_25", extra_major=69, minecraft="26.3", mutation="missing-widget"), "26.3", "2.3.0")
 
 
 if __name__ == "__main__":

@@ -99,8 +99,8 @@ class MinecraftCIMatrixTests(unittest.TestCase):
                              r"\s+api: '" + re.escape(version) + r"\.build\.\+'\s+java: 25")
 
     def test_versioned_artifacts_and_checksum_uploaded(self):
-        self.assertIn("openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified", self.text)
-        self.assertIn("openrad-2.2.0-paper-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.0-fabric-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.0-paper-${{ matrix.minecraft }}-verified", self.text)
         self.assertIn("sha256sum", self.text)
         self.assertIn("if-no-files-found: error", self.text)
 

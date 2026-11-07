@@ -101,7 +101,7 @@ jobs:
       - name: Verify regular Fabric version, bytecode, mixins and metadata
         if: ${{ !startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod
-        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.2.0.jar "${{ matrix.minecraft }}" 2.2.0
+        run: python tools/verify-version-jar.py fabric/build/libs/fabric-2.3.0.jar "${{ matrix.minecraft }}" 2.3.0
       - name: Compile and test modern Fabric on Java 25
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         working-directory: clients/mod/modern
@@ -110,7 +110,7 @@ jobs:
       - name: Verify modern Fabric version, bytecode, mixins and metadata
         if: ${{ startsWith(matrix.minecraft, '26.') }}
         run: |
-          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.2.0
+          python3 clients/mod/tools/verify-version-jar.py             "clients/mod/modern/build/libs/OpenRadClientMod-2.3.0-modern-${{ matrix.minecraft }}.jar"             "${{ matrix.minecraft }}" 2.3.0
 
       - name: Stage version-specific verified Fabric JAR and checksum
         shell: bash
@@ -120,17 +120,17 @@ jobs:
           set -euo pipefail
           mkdir -p dist/minecraft/fabric
           if [[ "$MC" == 26.* ]]; then
-            source="clients/mod/modern/build/libs/OpenRadClientMod-2.2.0-modern-$MC.jar"
+            source="clients/mod/modern/build/libs/OpenRadClientMod-2.3.0-modern-$MC.jar"
           else
-            source="clients/mod/fabric/build/libs/fabric-2.2.0.jar"
+            source="clients/mod/fabric/build/libs/fabric-2.3.0.jar"
           fi
           test -s "$source"
-          output="dist/minecraft/fabric/OpenRadClientMod-2.2.0-fabric-$MC.jar"
+          output="dist/minecraft/fabric/OpenRadClientMod-2.3.0-fabric-$MC.jar"
           cp "$source" "$output"
-          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.2.0-fabric-$MC.jar" > SHA256SUMS)
+          (cd dist/minecraft/fabric && sha256sum "OpenRadClientMod-2.3.0-fabric-$MC.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.0-fabric-${{ matrix.minecraft }}-verified
           path: dist/minecraft/fabric/
           if-no-files-found: error
           retention-days: 14
@@ -263,11 +263,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/minecraft/paper
-          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar"
-          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.2.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
+          cp clients/plugin/build/libs/OpenRadPlugin.jar "dist/minecraft/paper/OpenRadPlugin-2.3.0-paper-$MC-java$JAVA.jar"
+          (cd dist/minecraft/paper && sha256sum "OpenRadPlugin-2.3.0-paper-$MC-java$JAVA.jar" > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.2.0-paper-${{ matrix.minecraft }}-verified
+          name: openrad-2.3.0-paper-${{ matrix.minecraft }}-verified
           path: dist/minecraft/paper/
           if-no-files-found: error
           retention-days: 14

@@ -27,7 +27,7 @@ class MinecraftBuildMatrixTests(unittest.TestCase):
             libs = root / 'fabric/build/libs'
             libs.mkdir(parents=True)
             mixin_package = 'io/github/gringoestrangeiro/openradclient/fabric/mixin/'
-            for version in ('2.2.0', '0.2.3-alpha'):
+            for version in ('2.3.0', '0.2.3-alpha'):
                 with zipfile.ZipFile(libs / f'fabric-{version}.jar', 'w') as jar:
                     jar.writestr('fabric.mod.json', json.dumps({'version': version, 'environment': 'client',
                         'entrypoints': {'client': ['io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod']},
@@ -44,7 +44,7 @@ class MinecraftBuildMatrixTests(unittest.TestCase):
             result = subprocess.run([shutil.which('pwsh') or shutil.which('powershell'), '-NoProfile', '-File',
                 str(root / 'build-matrix.ps1'), '-MinecraftVersions', '1.21.1'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue((root / 'release/OpenRadClientMod-2.2.0-fabric-1.21.1.jar').is_file(), result.stdout)
+            self.assertTrue((root / 'release/OpenRadClientMod-2.3.0-fabric-1.21.1.jar').is_file(), result.stdout)
             self.assertFalse((root / 'release/OpenRadClientMod-0.2.3-alpha-fabric-1.21.1.jar').exists())
 
 
