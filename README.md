@@ -7,8 +7,10 @@
 The Windows desktop also shows its native OpenRad logo animation on first launch, then
 offers a quick setup to choose a dark/light theme, configure auto-connection,
 and optionally create the **OpenRad** desktop shortcut. The theme can be
-changed at any time in **Settings > Workspace**. These choices are saved to
-the user's existing profile; no additional identity or VPN is created.
+changed at any time in **Settings > Workspace**. On Windows, **Settings > Connection**
+also offers an optional headless VPN startup at Windows sign-in, without opening
+the GUI; closing the GUI leaves the background VPN active. These choices are
+saved to the user's existing profile; no additional identity or VPN is created.
 
 
 OpenRad is an open-source Rust reimplementation of Radmin VPN. It provides a

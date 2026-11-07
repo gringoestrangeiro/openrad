@@ -8,6 +8,7 @@ on:
       - 'tools/**'
       - 'tests/test_minecraft_*.py'
       - 'packaging/windows/**'
+      - 'desktop/src/windows_startup.rs'
       - 'src/platform/windows_radmin.ps1'
       - 'docs/releases/**'
       - 'CHANGELOG.md'
@@ -19,6 +20,7 @@ on:
       - 'tools/**'
       - 'tests/test_minecraft_*.py'
       - 'packaging/windows/**'
+      - 'desktop/src/windows_startup.rs'
       - 'src/platform/windows_radmin.ps1'
       - 'docs/releases/**'
       - 'CHANGELOG.md'
@@ -61,6 +63,8 @@ jobs:
           python-version: '3.12'
       - name: Reject signing output collisions without accessing keys
         run: ./scripts/test-sign-android-paths.ps1
+      - name: Validate headless Windows logon tasks using mocked Task Scheduler
+        run: ./scripts/test-windows-startup.ps1
       - name: Exercise adapter setup with mocked OS commands
         run: ./packaging/windows/Test-SetupLogic.ps1
       - name: Exercise recovery with mocked OS commands

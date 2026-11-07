@@ -13,6 +13,8 @@ mod virtual_list;
 #[cfg(any(windows, test))]
 #[path = "platform/windows_launch.rs"]
 mod windows_launch;
+#[cfg(windows)]
+mod windows_startup;
 use clap::Parser;
 use openrad::i18n::{self, LanguagePreference};
 use std::{collections::BTreeSet, path::PathBuf};
@@ -38,6 +40,13 @@ struct Args {
     #[cfg(windows)]
     #[arg(long, hide = true)]
     diagnostic_child: bool,
+    /// Internal headless logon entrypoint: start the saved VPN without the GUI.
+    #[cfg(windows)]
+    #[arg(long, hide = true)]
+    background: bool,
+    #[cfg(windows)]
+    #[arg(long, hide = true)]
+    remove_startup_tasks: bool,
 }
 fn main() {
     startup_log::init();
@@ -48,12 +57,16 @@ fn main() {
     }
     let args: Vec<_> = std::env::args_os().collect();
     let language = i18n::language_for_args(&args, LanguagePreference::System);
+    #[cfg(windows)]
+    let background = args
+        .iter()
+        .any(|arg| arg == "--background" || arg == "--remove-startup-tasks");
     if let Err(e) = execute() {
         startup_log::fatal_error(&e);
         let message = language.message(&format!("{e:#}"));
         eprintln!("OpenRad: {}", message);
         #[cfg(windows)]
-        {
+        if !background {
             let location =
                 language.message(&format!("Startup log: {}", startup_log::path().display()));
             let message = format!("{message}\n\n{location}");
@@ -85,6 +98,12 @@ fn execute() -> anyhow::Result<()> {
             return Ok(());
         }
         crate::startup_log::checkpoint(crate::startup_log::Stage::Elevated);
+        if args.remove_startup_tasks {
+            return windows_startup::remove_tasks_for_install();
+        }
+        if args.background {
+            return start_background_vpn(args.data_dir);
+        }
         if !args.diagnostic_child {
             return windows_launch::supervise_desktop();
         }
@@ -120,4 +139,27 @@ fn execute() -> anyhow::Result<()> {
             .expect("desktop application must only be created once");
         Box::new(app::App::new(cc, paths, lock, identity, language, options))
     })
+}
+
+#[cfg(windows)]
+fn start_background_vpn(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    use anyhow::{ensure, Context};
+    use openrad::daemon::{self, DataDir, Request};
+
+    let paths = storage::Paths::new(data_dir)?;
+    let settings = paths.settings()?;
+    if !windows_startup::background_allowed(&settings) {
+        return Ok(());
+    }
+    let dir = DataDir::open(Some(paths.directory.clone()))?;
+    // The scheduled task never registers or replaces a device identity.
+    dir.load_identity()
+        .context("Cannot start OpenRad at login without a saved identity")?;
+    if daemon::request(&dir, &Request::Status).is_ok() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?.with_file_name("openrad.exe");
+    ensure!(exe.is_file(), "OpenRad CLI is missing: {}", exe.display());
+    daemon::spawn_with_executable(&dir, false, &exe)?;
+    Ok(())
 }

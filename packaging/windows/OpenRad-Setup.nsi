@@ -616,6 +616,17 @@ FunctionEnd
 Section "Uninstall"
     ${Log} "Uninstalling from $INSTDIR"
     Call un.StopOpenRadForRemove
+    ; Remove only the logon tasks targeting the installed desktop executable.
+    ; Never leave a high-privilege startup task referencing a deleted binary.
+    ClearErrors
+    ExecWait '"$INSTDIR\openrad-desktop.exe" --remove-startup-tasks' $0
+    ${If} ${Errors}
+        MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be checked. Installation files were retained."
+        Abort
+    ${ElseIf} $0 != 0
+        MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be removed. Installation files were retained."
+        Abort
+    ${EndIf}
     StrCpy $ErrorFile "$TEMP\openrad-uninstall-error.txt"
     Delete "$ErrorFile"
     ${Log} "Worker remove-adapter: removing the OpenRad TAP adapter"

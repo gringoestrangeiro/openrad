@@ -3137,6 +3137,20 @@ impl App {
                 &mut self.settings.auto_connect,
                 language.text("Connect when OpenRad launches"),
             );
+            #[cfg(windows)]
+            {
+                ui.checkbox(
+                    &mut self.settings.start_with_windows,
+                    language.text("Start VPN with Windows (without opening the interface)"),
+                );
+                ui.label(
+                    RichText::new(language.text(
+                        "Starts only the VPN in the background after Windows sign-in. Requires a saved identity and Windows Task Scheduler. Closing this window keeps the connection active."
+                    ))
+                    .size(11.)
+                    .color(muted()),
+                );
+            }
             ui.checkbox(
                 &mut self.settings.auto_reconnect,
                 language.text("Reconnect after a connection failure"),

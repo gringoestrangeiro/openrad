@@ -757,7 +757,35 @@ fn manager(
                             identity = Some(renamed);
                         }
                     }
-                    paths.save_settings(&next)?;
+                    #[cfg(windows)]
+                    let update_startup = next.start_with_windows
+                        || next.start_with_windows != settings.start_with_windows;
+                    #[cfg(windows)]
+                    if update_startup {
+                        if next.start_with_windows && !settings.start_with_windows {
+                            dir.load_identity().context(
+                                "Connect at least once to save your VPN identity before enabling Windows startup",
+                            )?;
+                        }
+                        crate::windows_startup::set_start_with_windows(
+                            &paths,
+                            next.start_with_windows,
+                        )?;
+                    }
+                    if let Err(error) = paths.save_settings(&next) {
+                        #[cfg(windows)]
+                        if update_startup {
+                            if let Err(rollback) = crate::windows_startup::set_start_with_windows(
+                                &paths,
+                                settings.start_with_windows,
+                            ) {
+                                return Err(anyhow::anyhow!(
+                                    "Settings were not saved: {error:#}. The Windows startup task could not be rolled back: {rollback:#}"
+                                ));
+                            }
+                        }
+                        return Err(error);
+                    }
                     settings = next.clone();
                     report(Notice::Settings(next));
                     if let Some(id) = &mut identity {

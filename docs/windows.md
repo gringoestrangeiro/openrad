@@ -122,7 +122,19 @@ and stop CLI background processes before repair, upgrade or uninstall. Use
 only an adapter created by this setup. The last option in Desktop Settings,
 **Uninstall OpenRad**, opens this same Windows uninstaller after a confirmation.
 The desktop closes gracefully; the uninstaller waits for the window to exit
-before continuing. Shared TAP driver packages, manually adopted adapters,
+before continuing. When using optional **Start VPN with Windows**, disable it
+in **Desktop Settings → Connection** and save to remove the per-user task at
+any time. The Windows uninstaller also removes OpenRad startup tasks that point
+to the installed desktop executable before deleting it. The background VPN remains active
+after closing the desktop; use **Disconnect** or `openrad stop` to stop it.
+This scheduled task starts the daemon after a Windows user signs in and does
+not show the graphical interface or trigger a new registration. For elevated
+automatic startup, OpenRad must be installed under the protected `Program Files`
+directory rather than a user-writable folder. An elevated desktop session is
+required once to create the task; the task itself uses the
+same interactive Windows account with highest available permissions. It does
+not create a machine-wide service or run before login.
+Shared TAP driver packages, manually adopted adapters,
 profile files, saved identities, connection logs and personal settings are
 retained, including when removal starts from Settings. Unknown files added to
 the application directory are retained as well.
