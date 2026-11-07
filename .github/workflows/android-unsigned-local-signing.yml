@@ -1,8 +1,8 @@
-name: android-2.2.0-unsigned-for-local-signing
+name: android-2.3.0-unsigned-for-local-signing
 
 on:
   push:
-    branches: ['release/2.2.0-candidates']
+    branches: ['2.3.0-dev']
     paths:
       - '.github/workflows/android-unsigned-local-signing.yml'
       - 'scripts/sign-android-local.ps1'
@@ -40,8 +40,8 @@ jobs:
           package="$("$aapt" dump badging "$unsigned" | head -n 1)"
           echo "$package"
           [[ "$package" == *"name='com.openrad.mobile'"* ]]
-          [[ "$package" == *"versionCode='7'"* ]]
-          [[ "$package" == *"versionName='2.2.0'"* ]]
+          [[ "$package" == *"versionCode='8'"* ]]
+          [[ "$package" == *"versionName='2.3.0'"* ]]
           if "$apksigner" verify "$unsigned" >/dev/null 2>&1; then
             echo 'Refusing to stage APK that was already signed'
             exit 1
@@ -53,17 +53,17 @@ jobs:
           set -euo pipefail
           mkdir -p dist/android-local-signing
           cp clients/android/app/build/outputs/apk/release/app-release-unsigned.apk \
-             dist/android-local-signing/openrad-2.2.0-android-UNSIGNED.apk
-          (cd dist/android-local-signing && sha256sum openrad-2.2.0-android-UNSIGNED.apk > SHA256SUMS)
+             dist/android-local-signing/openrad-2.3.0-android-UNSIGNED.apk
+          (cd dist/android-local-signing && sha256sum openrad-2.3.0-android-UNSIGNED.apk > SHA256SUMS)
           printf '%s\n' \
             'UNSIGNED ANDROID APK -- NOT INSTALLABLE, NOT A PRODUCTION RELEASE.' \
-            'This is only the unsigned com.openrad.mobile 2.2.0 binary.' \
+            'This is only the unsigned com.openrad.mobile 2.3.0 binary.' \
             'Only the original Android signing keystore can make an update-compatible APK.' \
             'Sign privately on the maintainer Windows PC with scripts/sign-android-local.ps1.' \
             "Source commit: $GITHUB_SHA" > dist/android-local-signing/README-FIRST.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: openrad-2.2.0-android-UNSIGNED-for-local-signing
+          name: openrad-2.3.0-android-UNSIGNED-for-local-signing
           path: dist/android-local-signing/
           if-no-files-found: error
           retention-days: 14
