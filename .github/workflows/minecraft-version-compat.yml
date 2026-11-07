@@ -16,7 +16,10 @@ on:
       - 'tests/test_minecraft_version_coverage.py'
       - 'tests/test_minecraft_ci_matrix.py'
       - '.github/workflows/minecraft-version-compat.yml'
-  # Candidate branches are validated by pull_request, not a duplicate push matrix.
+  # Release candidates are validated by pull_request. 2.3.0-dev is also
+  # validated on push as a standalone branch; while it has an open PR, the PR
+  # run additionally tests the merge result. That overlap is intentional: a
+  # concurrency group would cancel one of the two different validations.
   push:
     branches:
       - 'feature/minecraft-1.8-to-26.3-version-coverage'

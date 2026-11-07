@@ -42,6 +42,9 @@ def main():
         directory = Path(temporary)
         executable = directory / 'mutex-only.exe'
         script = directory / 'mutex-only.nsi'
+        # Written by the Section, so exit codes alone cannot hide a run that
+        # mutated (or failed to reach) the protected installation step.
+        marker = directory / 'section-ran.txt'
         script.write_text('''Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -58,14 +61,21 @@ Function .onInit
 !insertmacro OpenRadAcquireSetupMutex Quit
 FunctionEnd
 Section
+FileOpen $0 "''' + str(marker) + '''" w
+FileWrite $0 "ran"
+FileClose $0
 SectionEnd
 ''', encoding='utf-8')
         subprocess.run([args.makensis, '/V2', '/WX', str(script)], check=True)
 
         def check(label, expected):
+            marker.unlink(missing_ok=True)
             result = subprocess.run([str(executable), '/S'], timeout=15)
             if result.returncode != expected:
                 raise AssertionError(f'{label}: expected {expected}, got {result.returncode}')
+            if marker.exists() != (expected == 0):
+                state = 'ran' if marker.exists() else 'did not run'
+                raise AssertionError(f'{label}: protected section {state}')
             print(f'PASS: {label}', flush=True)
 
         check('uncontended mutex permits execution', 0)

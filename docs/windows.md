@@ -127,7 +127,9 @@ profiles: after first-use provisioning saves the VPN identity, OpenRad registers
 a background logon task, without opening its interface on subsequent logins.
 Disable it in **Desktop Settings → Connection** and save to remove the
 per-user task at any time. The Windows uninstaller also removes OpenRad startup tasks that point
-to the installed desktop executable before deleting it. The background VPN remains active
+to the installed desktop executable before deleting it; if that executable is
+already missing from a damaged installation, the uninstaller logs and skips this
+step (repair first, then uninstall, to remove the tasks). The background VPN remains active
 after closing the desktop; use **Disconnect** or `openrad stop` to stop it.
 This scheduled task starts the daemon after a Windows user signs in and does
 not show the graphical interface or trigger a new registration. For elevated

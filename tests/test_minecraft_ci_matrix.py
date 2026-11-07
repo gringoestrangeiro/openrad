@@ -43,8 +43,12 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         for event in ("pull_request", "push"):
             block = events.split(f"\n  {event}:\n", 1)[1]
             block = re.split(r"\n  [a-z_]+:", block, maxsplit=1)[0]
-            branches = block.split("    paths:", 1)[0]
-            self.assertIn("'2.3.0-dev'", branches, event)
+            # Only an inclusive branch filter may schedule the branch; an
+            # ignore filter naming it would silently disable the matrix.
+            self.assertNotIn("branches-ignore", block, event)
+            branches = re.search(r"\n    branches:(.*?)\n    [a-z]", "\n" + block, re.S)
+            self.assertIsNotNone(branches, event)
+            self.assertIn("'2.3.0-dev'", branches.group(1), event)
 
     def test_all_paper_targets_are_explicit_and_unique(self):
         self.assertEqual(len(self.paper), len(set(self.paper)))

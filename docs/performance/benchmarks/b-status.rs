@@ -68,6 +68,9 @@ fn main() {
     let arguments:Vec<_> = std::env::args().collect();
     let iterations:usize = arguments.get(1).map(|value|value.parse().unwrap()).unwrap_or(300);
     let mode = arguments.get(2).map(String::as_str).unwrap_or("stable");
+    // Percentiles index the samples; an unknown mode would be reported under its own label.
+    assert!(iterations > 0, "iterations must be at least 1");
+    assert!(matches!(mode, "stable" | "updated" | "clone"), "mode must be stable, updated or clone");
     for count in [0,10,100,1000,5000,10000] {
         let mut identity=Identity::bootstrap("Synthetic local","127.0.0.1").unwrap();
         identity.rid=123;

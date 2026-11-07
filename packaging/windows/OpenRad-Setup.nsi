@@ -618,14 +618,25 @@ Section "Uninstall"
     Call un.StopOpenRadForRemove
     ; Remove only the logon tasks targeting the installed desktop executable.
     ; Never leave a high-privilege startup task referencing a deleted binary.
-    ClearErrors
-    ExecWait '"$INSTDIR\openrad-desktop.exe" --remove-startup-tasks' $0
-    ${If} ${Errors}
-        MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be checked. Installation files were retained."
-        Abort
-    ${ElseIf} $0 != 0
-        MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be removed. Installation files were retained."
-        Abort
+    ; A damaged install without the desktop cannot run its task cleanup; skip
+    ; it rather than making removal impossible.
+    ${If} ${FileExists} "$INSTDIR\openrad-desktop.exe"
+        ${Log} "Removing Windows startup tasks with $INSTDIR\openrad-desktop.exe --remove-startup-tasks"
+        ClearErrors
+        ExecWait '"$INSTDIR\openrad-desktop.exe" --remove-startup-tasks' $0
+        ${If} ${Errors}
+            ${Log} "Dialog: the startup task cleanup could not start; files retained"
+            MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be checked. Installation files were retained."
+            Abort
+        ${EndIf}
+        ${Log} "Startup task cleanup exit code: $0"
+        ${If} $0 != 0
+            ${Log} "Dialog: the startup tasks could not be removed; files retained"
+            MessageBox MB_OK|MB_ICONSTOP "The OpenRad Windows startup tasks could not be removed. Installation files were retained."
+            Abort
+        ${EndIf}
+    ${Else}
+        ${Log} "Skipping startup task cleanup: $INSTDIR\openrad-desktop.exe is missing"
     ${EndIf}
     StrCpy $ErrorFile "$TEMP\openrad-uninstall-error.txt"
     Delete "$ErrorFile"

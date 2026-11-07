@@ -1,11 +1,11 @@
 # OpenRad 2.3.0 — otimização de performance (relatório parcial verificável)
 
-Data: 5 de novembro de 2026. Fonte: <local-user>\Downloads\openrad-audit\openrad.
-Branch: `2.3.0-dev`, HEAD `ba4fd57`. Este documento não é um atestado de release nem uma auditoria final dos oito escopos.
+Data: 5 de novembro de 2026. Base pública de referência: commit `ba4fd57` da branch `2.3.0-dev`.
+Este documento não é um atestado de release nem uma auditoria final dos oito escopos.
 
 ## Preservação e método
 
-- Antes desta rodada havia 19 correções locais da auditoria anterior. O snapshot auditado foi preservado em `work/optimization/baseline-source.zip`, e o inventário em `baseline-state.json`. Os hashes de partida foram verificados pelo trabalho anterior.
+- O "antes" medido é `ba4fd57` com 19 correções locais da auditoria anterior, ainda não publicadas naquele momento; elas entram neste pull request junto com as otimizações. Por isso, refazer o "antes" a partir de `ba4fd57` sozinho não reproduz exatamente os números abaixo. O snapshot local usado (`work/optimization/baseline-source.zip`, inventário `baseline-state.json`) não é público.
 - Não houve commit, push, merge, release, reset destrutivo ou alteração em VPN, adaptador, perfil ou credenciais reais.
 - O host de medição registrado era um Intel i7-11370H (4C/8T), ~16 GB RAM, Windows 11. Benchmark Rust com `rustc -O` e dependências debug já existentes; não substitui medição de build Release completo.
 - Os dados brutos de medição estão em `work/optimization/`, fora do repositório: `a/`, `b/`, `c/final/` e `g/`. O diretório `work` pertence à pasta de evidências da sessão Codex de 2026-11-05.

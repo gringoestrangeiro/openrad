@@ -158,7 +158,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     versions = ["baseline"] if args.baseline_only else ["baseline", "candidate"]
     deps = args.repo / "target/debug/deps"
-    libraries = desktop_dependencies(args.repo)
+    # --run-only reuses existing executables; it needs no Cargo build graph.
+    libraries = {} if args.run_only else desktop_dependencies(args.repo)
     env = dict(os.environ, CARGO_PKG_VERSION="2.2.0")
     commands = {}
     hashes = {}

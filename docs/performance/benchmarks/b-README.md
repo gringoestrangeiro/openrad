@@ -1,6 +1,7 @@
 # Daemon status serialization benchmark
 
-Run `python b-status.py SOURCE_OR_BASELINE_ZIP CARGO_DEPS OUTPUT_DIRECTORY`, then
+From the repository root, run
+`python docs/performance/benchmarks/b-status.py SOURCE_OR_BASELINE_ZIP CARGO_DEPS OUTPUT_DIRECTORY`, then
 `OUTPUT_DIRECTORY/b-status.exe 300 stable` and repeat with `updated` and `clone`.
 Requires Windows, Rust, Python, and existing compatible Cargo dependency rlibs.
 The build records the daemon SHA-256 and full compiler invocation. An archived
