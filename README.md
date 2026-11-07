@@ -1,9 +1,11 @@
 # OpenRad
 
+[![OpenRad animated logo](docs/assets/openrad-intro.gif)](docs/assets/openrad-intro.mp4)
+
 OpenRad is an open-source Rust reimplementation of Radmin VPN. It provides a
 virtual Ethernet interface, a native desktop client, a headless command-line
 client, and a Paper server plugin for joining networks and communicating with
-peers.
+peers, plus a self-hosted coordination server that can replace the official one.
 
 OpenRad is an unofficial community project and is not affiliated with Radmin or
 Famatech. Linux is the established platform. Windows x64 support is experimental
@@ -12,15 +14,17 @@ development has not started.
 
 ## Clients
 
-This repository is a monorepo with five clients sharing one wire format:
+This repository is a monorepo with five clients and a coordination server
+sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.2.0 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.2.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.2.0 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.2.0 |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.2.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
+| Android | [`clients/android/`](clients/android/README.md) | beta | 2.3.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.3.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.0 |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.0 |
+| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | alpha | 2.3.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -45,6 +49,9 @@ python3 -m venv .venv && .venv/bin/python -m pip install .
 ./gradlew clean check
 # Windows: .\gradlew.bat clean check
 # produces build/libs/OpenRadPlugin.jar
+
+# Coordination server (from server/, requires the Go version in go.mod)
+go build -o openrad-server . && go test ./...
 ```
 
 ## Features
@@ -60,16 +67,12 @@ python3 -m venv .venv && .venv/bin/python -m pip install .
 - English, Portuguese, Russian, and Vietnamese interfaces.
 - OS-backed credential storage for desktop identities.
 - Live network search, background release notices, and bounded identity-reset recovery.
+- Low memory use: about 41 MB idle on Windows 10 versus about 199 MB for the official
+  client in one user-reported comparison (76 peers); results vary.
 
 ![OpenRad 1.0.0 networks and peer RTT tests](docs/screenshots/1.0.0-networks.png)
 
 The screenshot uses synthetic networks and peers rendered on Linux.
-
-## Memory use on Windows
-
-In one user-reported Windows 10 idle comparison on the same network (76 peers,
-one joined network), the official client used about **199 MB** (GUI and service
-combined), while OpenRad used about **41 MB**. Results vary by system and workload.
 
 OpenRad interoperates with regular Radmin VPN for its supported functionality.
 Whether peers can establish a direct connection depends on their
@@ -81,33 +84,27 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-Version **[2.2.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0)** fixes the desktop **View release** notice (release URL shown
-in-window with *Open in browser* and *Copy*), keeps a received `Stop` effective when the IPC
-client closes early, rejects invalid Python API tokens before opening a socket, keeps at most
-one Android public search outstanding in the engine, adds Force Relay to the Paper plugin
-(`vpn.transports.force-relay`, `/orb force-relay`), and extends the Minecraft Fabric and Paper
-builds to 1.17–26.3. Wire format and VPN identity are unchanged.
-
-Windows stays experimental, Android beta, and the Minecraft builds alpha. A built Minecraft
-target does not prove it works in-game. Real Windows TAP/UAC use, physical Android devices,
-and multiplayer through the official Radmin client were not validated for this release; see
-the [2.2.0 notes](docs/releases/2.2.0.md) for validation and limitations and the
-[change inventory](docs/releases/2.2.0-changes.md) for every changed file.
+The current release is **[2.3.0](docs/releases/2.3.0.md)**; see the
+[changelog](CHANGELOG.md) for earlier versions. Windows is experimental,
+Android beta, and the Minecraft builds alpha.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
-- **Windows:** Run `OpenRad-Setup-2.2.0.exe` from the release package. It installs the
+- **Windows:** Run `OpenRad-Setup-2.3.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android (beta):** Install `openrad-2.2.0-android.apk` (Android 8.0 or newer).
-  It is signed with the same key as 2.0.1 and installs as an update.
+- **Android (beta):** Install `openrad-2.3.0-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
 - **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
-  `OpenRadPlugin-2.2.0-paper-<version>-java<N>.jar` for your Paper version in the server's
+  `OpenRadPlugin-2.3.0-paper-<version>-java<N>.jar` for your Paper version in the server's
   `plugins/` folder; see [Minecraft server plugin](#minecraft-server-plugin-paper).
 - **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
-  `OpenRadClientMod-2.2.0-fabric-<version>.jar`, matching your game version, in the Fabric
+  `OpenRadClientMod-2.3.0-fabric-<version>.jar`, matching your game version, in the Fabric
   profile's `mods/` folder with the Fabric API; see the [mod guide](clients/mod/README.md).
+- **Self-hosted server (alpha):** Extract `openrad-server-v2.3.0-linux-x86_64.tar.gz`
+  (or the experimental `openrad-server-v2.3.0-windows-x86_64.zip`, not yet validated on
+  native Windows) and run `openrad-server serve`. Point the desktop (**Settings → Server**)
+  or CLI (`openrad server set`) at it with its `modulus.bin`; see the [server guide](server/README.md).
 
 ## Quick start
 
@@ -148,7 +145,7 @@ profiles use `$XDG_STATE_HOME/openrad` (usually `~/.local/state/openrad`) on Lin
 and `%LOCALAPPDATA%\openrad` on Windows; existing desktop profiles are retained
 when the default CLI profile has not been initialized.
 
-Useful additions in 1.0.0:
+Other useful commands:
 
 ```sh
 ./openrad ping PEER_RID
@@ -173,50 +170,27 @@ and eligibility details.
 
 ## Minecraft server plugin (Paper)
 
-`OpenRadPlugin.jar` puts a **Paper 1.21.x** (Java 21) or **Paper 26.x** (Java 25) server directly on a Radmin
-VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad) join the
-server at the plugin's `26.x.x.x` address; the host needs no VPN client, TAP/TUN
-driver, root access or native libraries, so it also works on shared hosting.
-The plugin is **alpha**: full multiplayer gameplay through the official Radmin
-client has not been measured yet.
+`OpenRadPlugin.jar` puts a **Paper 1.17–1.21.x or 26.x** server directly on a
+Radmin VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad)
+join the server at the plugin's `26.x.x.x` address; the host needs no VPN
+client, TAP/TUN driver, root access or native libraries, so it also works on
+shared hosting. The plugin is **alpha**.
 
-1. Download the JAR for your Paper version from the [2.2.0 release](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.2.0):
-   `OpenRadPlugin-2.2.0-paper-1.21-java21.jar` for Paper 1.21.x, `-26.1.1-java25`,
-   `-26.1.2-java25`, `-26.2-java25` or `-26.3-java25` for Paper 26.x, or an older target down
-   to `-1.17-java16` (experimental). Or build it (JDK 21 for 1.21.x; JDK 25 for 26.x):
-
-   ```sh
-   cd clients/plugin
-   ./gradlew clean check                                   # Paper 1.21.x
-   ./gradlew -PopenradPaperApi=26.3.build.+ clean check    # Paper 26.3
-   # -> build/libs/OpenRadPlugin.jar
-   ```
-
-2. Copy `OpenRadPlugin.jar` into the server's `plugins/` folder and start the server.
-3. In the **server console**, join your network (quote names with spaces):
+1. Copy the JAR for your Paper version into the server's `plugins/` folder and
+   start the server.
+2. In the **server console**, join your network (quote names with spaces):
 
    ```text
    orb join "My Network" networkPassword     # private network
    orb join "My Public Network"              # public network, no password
-   orb public all-ptbr                       # or: public Minecraft networks from the catalog
    ```
 
-4. Run `orb status`. It prints the address players use, for example
-   `26.12.34.56`. Players join the same Radmin network and add that IP in
-   Minecraft (port 25565 is the default and can be omitted).
+3. Run `orb status` and give players the printed `26.x.x.x` address.
 
-The commands write `plugins/OpenRadPlugin/config.yml`, keep the password in the
-owner-only `secrets.properties` (never in the YAML), enable the VPN, and apply
-the change without restarting Paper. Passwords are refused when typed by a
-player, because Paper logs player commands. Other useful commands:
-`/orb help`, `/orb leave <network>`, `/orb enable|disable`, `/orb peers`,
-`/orb minecraft options`, `/orb reload`. All require `openradplugin.admin`
-(operators by default). The Minecraft backend is the server's own port on
-`127.0.0.1`; `online-mode` is not changed, and the plugin refuses public
-networks on `online-mode=false` servers unless explicitly acknowledged.
-
-See the [plugin guide (Portuguese)](clients/plugin/README.md) for manual
-configuration, ACLs, LAN advertisements, identity recovery and limits.
+Passwords are kept in the owner-only `secrets.properties`, never in the YAML,
+and are refused when typed by a player. See the
+[plugin guide (Portuguese)](clients/plugin/README.md) for building, commands,
+configuration, ACLs and limits.
 
 ## Build from source
 
@@ -261,19 +235,11 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [CLI em português](docs/cli-pt-BR.md) | Guia completo do CLI, serviço e destino de broadcast |
 | [CLI usage](docs/cli.md) | Commands, persistent service, profiles, and network administration |
 | [Paper plugin](clients/plugin/README.md) | Minecraft server plugin: install, `/orb join` setup, commands, configuration, and validation scope |
+| [Coordination server](server/README.md) | Self-hosted server: run, ports, pointing clients at it, administration, and protocol coverage |
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
-| [Changelog](CHANGELOG.md) | Version history |
-| [2.2.0 release](docs/releases/2.2.0.md) | Fixes, Paper Force Relay, packages, upgrading, validation, and limitations |
-| [2.2.0 change inventory](docs/releases/2.2.0-changes.md) | File-by-file account of all changes since v2.1.5 |
-| [2.1.5 release](docs/releases/2.1.5.md) | Stealth block, Fabric mod, multiversion plugin, RAM, packages, upgrading, validation, and limitations |
-| [2.1.5 change inventory](docs/releases/2.1.5-changes.md) | File-by-file account of all changes since v2.1.0 |
-| [2.1.0 release](docs/releases/2.1.0.md) | Paper plugin, presence fix, packages, upgrading, validation, and limitations |
-| [2.1.0 change inventory](docs/releases/2.1.0-changes.md) | File-by-file account of all changes since v2.0.1 |
-| [2.0.1 release](docs/releases/2.0.1.md) | Packages, upgrading, verification, and limitations |
-| [2.0.1 change inventory](docs/releases/2.0.1-changes.md) | File-by-file account of all changes since v2.0.0 |
-| [2.0.0 release](docs/releases/2.0.0.md) | Monorepo with Android and Python clients |
-| [2.0.0 change inventory](docs/releases/2.0.0-changes.md) | File-by-file account of all changes since v1.5.0 |
+| [Changelog](CHANGELOG.md) | Version history and older release notes |
+| [Latest release (2.3.0)](docs/releases/2.3.0.md) | Changes, packages, upgrading, validation, and limitations |
 
 ## Development
 
@@ -299,6 +265,7 @@ The repository is organized as follows:
 | `tests/` | Integration tests and synthetic protocol fixtures |
 | `docs/` | Platform guides, architecture, and performance notes |
 | `locales/` | Complete four-language message catalog |
+| `server/` | Self-hosted Go coordination server and its end-to-end test |
 | `scripts/`, `packaging/` | Release archives, Windows installer, and packaging regressions |
 
 ## Security and local data

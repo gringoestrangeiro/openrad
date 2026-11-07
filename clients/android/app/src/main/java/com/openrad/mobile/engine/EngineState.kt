@@ -91,16 +91,32 @@ enum class BlockDirection(val wire: String) {
 interface IdentityStore {
     fun load(): Identity?
     fun save(identity: Identity)
+    /** Must be durable before the registering Login can be sent. */
+    fun markRegistrationPending()
     fun clear()
 }
 
+class RegistrationPendingException : java.io.IOException(
+    "registration outcome unknown; recover the issued identity or explicitly reset it before registering again",
+)
+
 class MemoryIdentityStore(private var identity: Identity? = null) : IdentityStore {
-    override fun load() = identity
-    override fun save(identity: Identity) {
-        this.identity = identity
+    private var pending = false
+    @Synchronized override fun load(): Identity? {
+        if (identity == null && pending) throw RegistrationPendingException()
+        return identity
     }
-    override fun clear() {
+    @Synchronized override fun save(identity: Identity) {
+        this.identity = identity
+        pending = false
+    }
+    @Synchronized override fun markRegistrationPending() {
+        check(identity == null) { "an identity was saved while preparing registration" }
+        pending = true
+    }
+    @Synchronized override fun clear() {
         identity = null
+        pending = false
     }
 }
 

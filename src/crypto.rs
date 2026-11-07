@@ -467,15 +467,25 @@ impl ShServer {
     }
 }
 
-pub fn rsa_session(modulus: &[u8], purpose: u32) -> Result<(Vec<u8>, Vec<u8>)> {
+/// Check that a big-endian public modulus can bootstrap a service session:
+/// odd, larger than the public exponent and 87..=1024 bytes wide.
+pub fn validate_modulus(modulus: &[u8]) -> Result<()> {
     let n = number(modulus);
-    let e = BigUint::from(65537u32);
     ensure!(
-        [3, 4, 5].contains(&purpose) && n > e && n.bit(0),
+        n > BigUint::from(65537u32) && n.bit(0),
         "invalid RSA parameters"
     );
     let width = n.bits().div_ceil(8) as usize;
     ensure!((87..=1024).contains(&width), "unsupported RSA width");
+    Ok(())
+}
+
+pub fn rsa_session(modulus: &[u8], purpose: u32) -> Result<(Vec<u8>, Vec<u8>)> {
+    ensure!([3, 4, 5].contains(&purpose), "invalid RSA parameters");
+    validate_modulus(modulus)?;
+    let n = number(modulus);
+    let e = BigUint::from(65537u32);
+    let width = n.bits().div_ceil(8) as usize;
     let secret = random(64);
     let mut message = vec![];
     for v in [3u32, 0x4b, purpose] {

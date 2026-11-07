@@ -67,8 +67,14 @@ public final class OpenRadClientMod implements ClientModInitializer {
             Button button = Button.builder(Component.literal("OpenRad"), clicked -> openMenu(screen))
                     .bounds(width - 112, 5, 106, 20).build();
             ((io.github.gringoestrangeiro.openradclient.fabric.mixin.ScreenWidgetInvoker) screen).openrad$addRenderableWidget(button);
-            ScreenEvents.afterTick(screen).register(ignored -> button.setTooltip(Tooltip.create(
-                    OpenRadI18n.tr("openrad.menu.status", phase(controller.status().phase())))));
+            // Rebuild the tooltip only when the phase changes, not on every client tick.
+            String[] shown = {null};
+            ScreenEvents.afterTick(screen).register(ignored -> {
+                String current = controller.status().phase();
+                if (current.equals(shown[0])) return;
+                shown[0] = current;
+                button.setTooltip(Tooltip.create(OpenRadI18n.tr("openrad.menu.status", phase(current))));
+            });
         });
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> dispatcher.register(literal("openrad")
                 .executes(ctx -> show(ctx.getSource()))

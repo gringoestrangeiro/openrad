@@ -2,6 +2,7 @@ package io.github.gringoestrangeiro.openradplugin.runtime;
 
 import static io.github.gringoestrangeiro.openradplugin.protocol.Wire.*;
 
+import io.github.gringoestrangeiro.openradplugin.bridge.VirtualOrigins;
 import io.github.gringoestrangeiro.openradplugin.bridge.VirtualTcpBridge;
 import io.github.gringoestrangeiro.openradplugin.config.*;
 import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
@@ -434,7 +435,8 @@ public final class VpnRuntime implements AutoCloseable {
                             (rid, frame) -> {
                                 PeerWorker w = workers.get(rid);
                                 if (w != null && w.channel != null) w.frames.offer(frame);
-                            });
+                            },
+                            b.forwardPlayerAddress() ? VirtualOrigins.shared() : null);
             discoveryState = settings.lanDiscovery() ? "UNAVAILABLE" : "DISABLED";
             if (settings.lanDiscovery()) {
                 try {
@@ -765,6 +767,10 @@ public final class VpnRuntime implements AutoCloseable {
                         stack == null ? null : stack.snapshot());
     }
 
+    private static final Duration IDLE_POLL = Duration.ofMillis(20),
+            ACTIVE_POLL = Duration.ofMillis(2);
+    private static final long ACTIVE_WINDOW = Duration.ofMillis(250).toNanos();
+
     private final class PeerWorker implements Runnable, AutoCloseable {
         private final Identity identity;
         private final Inet4Address ownIp;
@@ -779,7 +785,8 @@ public final class VpnRuntime implements AutoCloseable {
         private final Set<String> allowedNetworks;
         private final Set<AutoCloseable> resources =
                 Collections.newSetFromMap(new IdentityHashMap<>());
-        private final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(64);
+        // Room for a full burst: up to 8 flows per peer, each with ~45 segments in flight.
+        private final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(256);
         private boolean closed;
         private volatile PeerChannel channel;
 
@@ -858,7 +865,8 @@ public final class VpnRuntime implements AutoCloseable {
                 long lastLan = 0;
                 PeerGrant grant = null; // fixed for this worker: peer, networks and MAC are final
                 long keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos(),
-                        lastPacket = System.nanoTime();
+                        lastPacket = System.nanoTime(),
+                        lastTraffic = 0;
                 while (!isClosed()
                         && !stopped.get()
                         && stillBound(
@@ -875,11 +883,14 @@ public final class VpnRuntime implements AutoCloseable {
                             lastLan = now;
                         }
                     }
-                    for (int i = 0; i < 32; i++) {
+                    // Drain until the queue is empty or the transport window is full; the bound
+                    // only keeps a flood from starving the receive side.
+                    for (int i = 0; i < 256; i++) {
                         byte[] frame = frames.peek();
                         if (frame == null) break;
                         if (!connected.sendFrame(frame)) break;
                         frames.remove();
+                        lastTraffic = now;
                     }
                     if (System.nanoTime() >= keepalive) {
                         if (connected.send(TunnelCodec.keepalive(seq + 1, false))) {
@@ -887,7 +898,11 @@ public final class VpnRuntime implements AutoCloseable {
                             keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos();
                         }
                     }
-                    if (connected.ready(Duration.ofMillis(20))) {
+                    // Bridge frames are only drained between reads: while traffic flows, poll
+                    // briefly so server-to-player data is not held for a whole 20 ms wait.
+                    boolean busy =
+                            !frames.isEmpty() || System.nanoTime() - lastTraffic < ACTIVE_WINDOW;
+                    if (connected.ready(busy ? ACTIVE_POLL : IDLE_POLL)) {
                         var packet = connected.receivePacket();
                         lastPacket = System.nanoTime();
                         if (packet instanceof TunnelCodec.Keepalive k) {
@@ -897,10 +912,14 @@ public final class VpnRuntime implements AutoCloseable {
                                 verified = k.sequence();
                         } else if (packet instanceof TunnelCodec.Frames f) {
                             if (stack == null) break;
-                            if (!Objects.equals(eligible.get(peer.rid()), peer)
-                                    || !Objects.equals(
-                                            authorizedNetworks.get(peer.rid()), allowedNetworks))
-                                break;
+                            // Same rule as the loop: a rename, a 1/5 presence refresh or an extra
+                            // shared network must not drop the peer's Minecraft connections.
+                            if (!stillBound(
+                                    peer,
+                                    eligible.get(peer.rid()),
+                                    allowedNetworks,
+                                    authorizedNetworks.get(peer.rid()))) break;
+                            lastTraffic = lastPacket;
                             if (grant == null)
                                 grant =
                                         new PeerGrant(
@@ -910,7 +929,11 @@ public final class VpnRuntime implements AutoCloseable {
                                                 ipInt(peer.vip()),
                                                 connected.peerMac());
                             // Freshly decoded arrays: ownership moves to the bridge queue.
-                            for (byte[] frame : f.ownedFrames()) stack.acceptOwned(grant, frame);
+                            for (byte[] frame : f.ownedFrames()) {
+                                // A revocation may race this batch; never admit after close.
+                                if (isClosed()) break;
+                                stack.acceptOwned(grant, frame);
+                            }
                         }
                     }
                     if (System.nanoTime() - lastPacket > Duration.ofSeconds(50).toNanos())

@@ -31,6 +31,8 @@ public final class OutboundTcpStack implements AutoCloseable {
     private static final byte[] EMPTY = new byte[0];
     private static final byte[] MSS_OPTION = {2, 4, 5, (byte) 0xb4};
     private static final int CAPACITY = 65536, WIRE_WINDOW = 65535, MAX_TIME_WAIT = 64;
+    /** The MSS this endpoint advertises (MSS_OPTION): the peer's largest segment. */
+    private static final int RECEIVE_MSS = 1460;
     private static final long SECOND = 1_000_000_000L;
     private final Inet4Address localVip;
     private final int localIp, maxConnections;
@@ -268,7 +270,13 @@ public final class OutboundTcpStack implements AutoCloseable {
     void tick() {
         long now = clock.getAsLong();
         for (Connection c : connections.values()) synchronized (c) {
-            c.tick(now);
+            // An exception escaping a scheduled task cancels every future tick (retransmissions,
+            // handshake and TIME_WAIT expiry); fail only the affected connection instead.
+            try {
+                c.tick(now);
+            } catch (RuntimeException e) {
+                c.fail(new IOException("OpenRad TCP timer failure", e), true);
+            }
         }
     }
 
@@ -337,6 +345,8 @@ public final class OutboundTcpStack implements AutoCloseable {
         private long windowSequence, windowAck, pendingFin = -1, lastProgress, closeAt;
         private volatile long timeWaitUntil;
         private long rto = SECOND, lastProbe;
+        /** Right edge of the receive window in the last emitted segment. */
+        private long advertisedRight;
         private int peerWindow, peerMss = 536, bufferedSend, unsentBytes, duplicateAcks;
         private int congestionWindow = 5360, slowStartThreshold = 65535;
         private double smoothedRtt, rttVariance;
@@ -477,11 +487,19 @@ public final class OutboundTcpStack implements AutoCloseable {
             if (pendingFin >= 0) right = Math.min(right, pendingFin);
             int from = (int) Math.min(bytes.length, Math.max(0, receiveNext - sequence));
             int end = (int) Math.min(bytes.length, Math.max(0, right - sequence));
-            for (int i = from; i < end; i++) {
+            for (int i = from; i < end; ) {
                 int index = (int) (sequence + i) & 65535;
-                if (!present.get(index)) {
-                    receiveRing[index] = bytes[i];
-                    present.set(index);
+                int run = Math.min(end - i, CAPACITY - index);
+                // Copy only the ranges not already present (duplicates keep the first bytes).
+                int clear = present.nextSetBit(index);
+                int stop = clear < 0 || clear >= index + run ? index + run : clear;
+                if (stop > index) {
+                    System.arraycopy(bytes, i, receiveRing, index, stop - index);
+                    present.set(index, stop);
+                    i += stop - index;
+                } else {
+                    int next = present.nextClearBit(index);
+                    i += Math.min(run, next - index);
                 }
             }
             long finSequence = sequence + bytes.length;
@@ -506,7 +524,8 @@ public final class OutboundTcpStack implements AutoCloseable {
 
         private void acknowledge(long acknowledgement, boolean duplicateCandidate) {
             if (acknowledgement == sendUna) {
-                if (duplicateCandidate && !flights.isEmpty() && ++duplicateAcks == 3) {
+                // Replies to zero-window probes repeat the ACK but are not loss signals.
+                if (duplicateCandidate && peerWindow != 0 && !flights.isEmpty() && ++duplicateAcks == 3) {
                     slowStartThreshold = Math.max(2 * peerMss, (int) (sendNext - sendUna) / 2);
                     congestionWindow = slowStartThreshold;
                     retransmit(flights.peekFirst(), false);
@@ -586,8 +605,10 @@ public final class OutboundTcpStack implements AutoCloseable {
         }
 
         private void emit(long sequence, long acknowledgement, int flags, byte[] options, byte[] data) {
+            int window = receiveWindow();
+            advertisedRight = acknowledgement + window;
             TcpSegment tcp = new TcpSegment(key.localPort, key.peerPort, wire(sequence), wire(acknowledgement),
-                    flags, receiveWindow(), options, data);
+                    flags, window, options, data);
             byte[] packet = new Ipv4Packet(localIp, key.peerIp, 64, tcp.encode(localIp, key.peerIp)).encode();
             enqueue(destination, new EthernetFrame(peerMac, localMac, EthernetFrame.IPV4, packet).encode());
         }
@@ -682,13 +703,21 @@ public final class OutboundTcpStack implements AutoCloseable {
                         long readableEnd = receivedFin ? pendingFin : receiveNext;
                         int count = (int) Math.min(length, Math.max(0, readableEnd - readSequence));
                         if (count > 0) {
-                            int previousWindow = receiveWindow();
-                            for (int i = 0; i < count; i++) {
-                                int index = (int) readSequence++ & 65535;
-                                target[offset + i] = receiveRing[index];
-                                present.clear(index);
+                            int first = (int) readSequence & 65535;
+                            int head = Math.min(count, CAPACITY - first);
+                            System.arraycopy(receiveRing, first, target, offset, head);
+                            present.clear(first, first + head);
+                            if (head < count) {
+                                System.arraycopy(receiveRing, 0, target, offset + head, count - head);
+                                present.clear(0, count - head);
                             }
-                            if (!disposed && !receivedFin && receiveWindow() > previousWindow) ack();
+                            readSequence += count;
+                            // Every data segment is already ACKed with the current window. A
+                            // read only needs its own update when the peer may be blocked by a
+                            // nearly closed window (receiver silly-window avoidance).
+                            if (!disposed && !receivedFin
+                                    && advertisedRight - receiveNext < 2 * RECEIVE_MSS
+                                    && readSequence + WIRE_WINDOW > advertisedRight) ack();
                             return count;
                         }
                         if (receivedFin && readSequence >= pendingFin) return -1;

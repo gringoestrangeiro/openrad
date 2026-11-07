@@ -22,7 +22,8 @@ public final class OpenRadNetworkPickerScreen extends Screen {
     private final OpenRadNetworkSelection choice;
     private final boolean languages;
     private int page;
-    private String signature = "";
+    /** Catalog identity last rendered; immutable entry lists compare without string building. */
+    private Object signature = "";
     private List<Item> items = List.of();
 
     OpenRadNetworkPickerScreen(OpenRadNetworkScreen parent, OpenRadController controller,
@@ -67,10 +68,9 @@ public final class OpenRadNetworkPickerScreen extends Screen {
         return List.copyOf(results);
     }
 
-    private String signature() {
+    private Object signature() {
         var catalog = controller.catalog();
-        return languages ? "languages" : catalog == null ? "empty"
-                : catalog.entries().toString();
+        return languages ? "languages" : catalog == null ? "empty" : catalog.entries();
     }
 
     private int rows() { return Math.max(1, (height - 121) / 23); }
@@ -130,7 +130,7 @@ public final class OpenRadNetworkPickerScreen extends Screen {
     }
 
     @Override public void tick() {
-        if (!signature().equals(signature)) rebuildWidgets();
+        if (!java.util.Objects.equals(signature(), signature)) rebuildWidgets();
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mx, int my, float dt) {

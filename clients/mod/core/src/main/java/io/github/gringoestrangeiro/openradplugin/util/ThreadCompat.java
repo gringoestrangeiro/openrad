@@ -38,18 +38,32 @@ public final class ThreadCompat {
         return thread;
     }
 
-    public static ThreadFactory virtualFactory(String prefix) {
+    /** Reflection resolved once: Thread.ofVirtual, OfVirtual.name(String, long), factory(). */
+    private static final Method OF_VIRTUAL, NAME, FACTORY;
+
+    static {
+        Method ofVirtual = null, name = null, factory = null;
         try {
             // Interface is public; do not reflect on the package-private
             // implementation of Thread.Builder.OfVirtual.
             Class<?> builderType = Class.forName("java.lang.Thread$Builder$OfVirtual");
-            Method start = Thread.class.getMethod("ofVirtual");
-            Object builder = start.invoke(null);
-            Object named = builderType.getMethod("name", String.class, long.class)
-                    .invoke(builder, prefix, 0L);
-            return (ThreadFactory) builderType.getMethod("factory").invoke(named);
-        } catch (ClassNotFoundException | NoSuchMethodException |
-                 IllegalAccessException | InvocationTargetException e) {
+            ofVirtual = Thread.class.getMethod("ofVirtual");
+            name = builderType.getMethod("name", String.class, long.class);
+            factory = builderType.getMethod("factory");
+        } catch (ClassNotFoundException | NoSuchMethodException e) {
+            ofVirtual = name = factory = null;
+        }
+        OF_VIRTUAL = ofVirtual;
+        NAME = name;
+        FACTORY = factory;
+    }
+
+    public static ThreadFactory virtualFactory(String prefix) {
+        if (OF_VIRTUAL == null) return platformFactory(prefix);
+        try {
+            Object named = NAME.invoke(OF_VIRTUAL.invoke(null), prefix, 0L);
+            return (ThreadFactory) FACTORY.invoke(named);
+        } catch (IllegalAccessException | InvocationTargetException e) {
             return platformFactory(prefix);
         }
     }

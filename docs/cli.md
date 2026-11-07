@@ -67,6 +67,9 @@ quotes. Administration commands use a member RID, not an IP address.
 | `unblock VPN_IP` | Remove a stealth block. |
 | `blocked` | List stealth-blocked addresses. |
 | `force-relay true\|false` | Save or clear relay-only transport policy. |
+| `server [show]` | Show the server this profile uses and whether it has a saved identity there. |
+| `server set --host IPV4 [--port PORT] [--modulus FILE]` | Use a self-hosted, protocol-compatible server. |
+| `server reset` | Go back to the official server and its saved identity. |
 
 Aliases: `provision` for `init`, `public-networks` for `search`,
 `create-network` for `create`, and `delete-network` for `delete`.
@@ -255,6 +258,22 @@ Names must match exactly; use the ID from `networks` when a name is ambiguous. T
 Use `--json` for scripts, for example `openrad --json status`. This includes a full connection snapshot. The local control endpoint, lock, and bounded rotating connection diagnostics belong to the private data directory. On Linux, startup errors are also written to `service.log` in that directory. On Windows, the detached daemon instead writes its startup diagnostics to `cli-daemon-startup.log` in the OpenRad log directory, without inheriting the CLI's output pipes. Connection diagnostics live under `diagnostics/`. These files can contain peer IDs, addresses, and network names, but should never contain passwords, session keys, or packet payloads.
 
 `init --host IPV4_ADDRESS --modulus FILE` remains available for controlled deployments with a different registration endpoint and raw public RSA modulus. An imported identity can also use `--modulus FILE`. The modulus is saved with the profile so later `start` commands use the same key.
+
+## Custom server
+
+A self-hosted server that speaks the OpenRad protocol can replace the official one. It needs the server's IPv4 address, its control port and its raw public RSA modulus file (for example the `modulus.bin` that this repository's [`openrad-server`](../server/README.md) writes next to its database):
+
+```sh
+./target/release/openrad stop
+./target/release/openrad server set --host 192.0.2.10 --port 18301 --modulus modulus.bin
+./target/release/openrad init --node-name my-device   # first time on this server only
+./target/release/openrad start
+./target/release/openrad server reset                 # back to the official server
+```
+
+The port (default 17301) applies to registration, the attached session and peer-coordinator sessions. The modulus must be 87–1024 bytes wide and is validated before anything is saved. The service must be stopped before changing servers.
+
+Identities are only valid on the server that issued them, so each server keeps its own identity in the profile: the official server uses the usual `profile/` (or credential-store entry), and a custom server uses `servers/IPV4-PORT/` with the same storage rules. Switching only changes the selection saved in `server.json`; it never deletes or re-registers an identity, and switching back restores the previous one. `--modulus` can be omitted when returning to a server this profile used before. While a custom server is selected, `init` registers there and refuses `--host` or `--modulus`. The desktop shares the same selection and identity slots.
 
 ## JSON and exit status
 

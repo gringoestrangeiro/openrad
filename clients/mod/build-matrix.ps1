@@ -5,7 +5,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 $approved = @('1.20.6','1.21','1.21.1','1.21.4')
-$version = '0.2.3-alpha'
+$versionMatches = [regex]::Matches((Get-Content -LiteralPath (Join-Path $root 'build.gradle.kts') -Raw), 'version\s*=\s*"([^"]+)"')
+if ($versionMatches.Count -ne 1) { throw 'Cannot identify the current mod version in build.gradle.kts' }
+$version = $versionMatches[0].Groups[1].Value
+New-Item -ItemType Directory -Force -Path (Join-Path $root 'release') | Out-Null
 foreach($target in $MinecraftVersions){
     if($target -notin $approved){
         throw "No validated profile for Fabric Minecraft $target. Validated: $($approved -join ', ')"

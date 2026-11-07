@@ -26,7 +26,7 @@ Identidade e senhas ficam separadas do YAML público, com permissão de propriet
 
 O marcador de registro persiste antes do envio que pode emitir credencial; resultado incerto impede outro registro automático. A identidade não é compartilhada com instalações existentes. Os testes live criaram seus próprios perfis e redes temporárias; nenhuma credencial do usuário foi importada.
 
-Um membro admitido pode alcançar o listener Minecraft e consumir os limites permitidos. A autenticação de jogador continua sendo responsabilidade do Minecraft/Paper (`online-mode=true`). O Paper enxerga loopback e não pode aplicar regras por IP virtual sem suporte adicional que este plugin não inventa. Acesso do administrador local aos arquivos/processo está fora da proteção oferecida pelo plugin.
+Um membro admitido pode alcançar o listener Minecraft e consumir os limites permitidos. A autenticação de jogador continua sendo responsabilidade do Minecraft/Paper (`online-mode=true`). Com `bridge.forward-player-address: true` (padrão, Paper 1.17.1+), o Paper vê o IP virtual do jogador e pode aplicar regras por esse IP; com `false` ou sem `ChannelInitializeListener`, enxerga loopback. Acesso do administrador local aos arquivos/processo está fora da proteção oferecida pelo plugin.
 
 ## Anúncios LAN
 

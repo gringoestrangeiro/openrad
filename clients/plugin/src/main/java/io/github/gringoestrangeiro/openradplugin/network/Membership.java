@@ -204,29 +204,33 @@ public final class Membership {
     }
 
     public List<Peer> eligible(Set<String> names, Set<Long> allowed, Set<Long> denied) {
-        Set<String> ids = new HashSet<>();
-        for (Network n : networks.values())
-            if (names.contains(n.name()) && !Integer.valueOf(0).equals(role(n.id(), ownRid)))
-                ids.add(n.id());
-        return peers.values().stream()
-                .filter(
-                        p ->
-                                p.rid() != ownRid
-                                        && p.server() != null
-                                        && (p.state() == 1 || p.state() == 5)
-                                        && !denied.contains(p.rid())
-                                        && (allowed.isEmpty() || allowed.contains(p.rid()))
-                                        && p.networks().stream()
-                                                .anyMatch(
-                                                        id ->
-                                                                ids.contains(id)
-                                                                        && !Integer.valueOf(0)
-                                                                                .equals(
-                                                                                        role(
-                                                                                                id,
-                                                                                                p
-                                                                                                        .rid()))))
-                .toList();
+        // Selected networks this identity may use (role 0 = blocked), with their role maps.
+        Map<String, Map<Long, Integer>> usable = new HashMap<>();
+        for (Network n : networks.values()) {
+            if (!names.contains(n.name())) continue;
+            Map<Long, Integer> rolesIn = roles.getOrDefault(n.id(), Map.of());
+            Integer own = rolesIn.get(ownRid);
+            if (own == null || own != 0) usable.put(n.id(), rolesIn);
+        }
+        if (usable.isEmpty()) return List.of();
+        List<Peer> result = new ArrayList<>();
+        for (Peer p : peers.values()) {
+            if (p.rid() == ownRid
+                    || p.server() == null
+                    || (p.state() != 1 && p.state() != 5)
+                    || denied.contains(p.rid())
+                    || (!allowed.isEmpty() && !allowed.contains(p.rid()))) continue;
+            for (String id : p.networks()) {
+                Map<Long, Integer> rolesIn = usable.get(id);
+                if (rolesIn == null) continue;
+                Integer role = rolesIn.get(p.rid());
+                if (role == null || role != 0) {
+                    result.add(p);
+                    break;
+                }
+            }
+        }
+        return List.copyOf(result);
     }
 
     public static Inet4Address ownVip(byte[] data) {

@@ -38,6 +38,18 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         self.assertEqual(set(self.fabric), EXPECTED_FABRIC)
         self.assertEqual(len(self.fabric), 33)
 
+    def test_current_development_branch_schedules_matrix(self):
+        events = self.text.split("\njobs:", 1)[0]
+        for event in ("pull_request", "push"):
+            block = events.split(f"\n  {event}:\n", 1)[1]
+            block = re.split(r"\n  [a-z_]+:", block, maxsplit=1)[0]
+            # Only an inclusive branch filter may schedule the branch; an
+            # ignore filter naming it would silently disable the matrix.
+            self.assertNotIn("branches-ignore", block, event)
+            branches = re.search(r"\n    branches:(.*?)\n    [a-z]", "\n" + block, re.S)
+            self.assertIsNotNone(branches, event)
+            self.assertIn("'2.3.0-dev'", branches.group(1), event)
+
     def test_all_paper_targets_are_explicit_and_unique(self):
         self.assertEqual(len(self.paper), len(set(self.paper)))
         self.assertEqual(set(self.paper), EXPECTED_PAPER)
@@ -87,8 +99,8 @@ class MinecraftCIMatrixTests(unittest.TestCase):
                              r"\s+api: '" + re.escape(version) + r"\.build\.\+'\s+java: 25")
 
     def test_versioned_artifacts_and_checksum_uploaded(self):
-        self.assertIn("openrad-2.2.0-fabric-${{ matrix.minecraft }}-verified", self.text)
-        self.assertIn("openrad-2.2.0-paper-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.0-fabric-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn("openrad-2.3.0-paper-${{ matrix.minecraft }}-verified", self.text)
         self.assertIn("sha256sum", self.text)
         self.assertIn("if-no-files-found: error", self.text)
 

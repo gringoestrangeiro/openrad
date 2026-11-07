@@ -20,7 +20,6 @@ import com.openrad.mobile.vpn.OpenRadVpnService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -34,8 +33,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicLong
 
@@ -50,6 +47,7 @@ class EngineRepository(
 ) : VpnRepository {
     private val app = context.applicationContext
     private val prefs = PreferencesStore(app)
+    private val preferenceWrites = PreferenceTransactions()
     private val ids = AtomicLong(1)
     private val rtt = MutableStateFlow<Map<Long, RttResult>>(emptyMap())
 
@@ -75,15 +73,15 @@ class EngineRepository(
     override val publicBusy: StateFlow<Boolean> = _publicBusy.asStateFlow()
     private val _publicHasMore = MutableStateFlow(false)
     override val publicHasMore: StateFlow<Boolean> = _publicHasMore.asStateFlow()
-    private var publicCursor = 0L
+    @Volatile private var publicCursor = 0L
     private val searchGeneration = AtomicLong()
 
     /**
-     * The engine cannot cancel a submitted search, so a cancelled caller must still hold the gate
-     * until its response (or the 20 s deadline) arrives. At most one search is then outstanding in
-     * the engine and a superseded query can never fill its bounded command queue.
+     * The engine cannot cancel a submitted search. The repository keeps the gate until its
+     * callback/deadline, while a cancelled UI caller returns immediately. At most one search is
+     * outstanding and superseded queries cannot fill the engine's bounded command queue.
      */
-    private val searchGate = Mutex()
+    private val searchGate = CommandGate(scope)
 
     override val snapshot: StateFlow<Snapshot> = combine(
         EngineHost.state, EngineHost.interfaceStatus, _favorites, rtt,
@@ -158,14 +156,12 @@ class EngineRepository(
         }
         _publicBusy.value = true
         val result = try {
-            searchGate.withLock {
-                // Superseded while waiting for the gate: never submit a stale search.
-                if (generation != searchGeneration.get()) return
-                withContext(NonCancellable) { await { e, done -> e.search(query.trim(), 0, done) } }
+            searchGate.await({ generation == searchGeneration.get() }) {
+                await { e, done -> e.search(query.trim(), 0, done) }
             }
         } finally {
             if (generation == searchGeneration.get()) _publicBusy.value = false
-        }
+        } ?: return
         // Responses to stale queries are discarded (300 ms debounce in the ViewModel).
         if (generation != searchGeneration.get()) return
         when (result) {
@@ -180,13 +176,19 @@ class EngineRepository(
     }
 
     override suspend fun loadMorePublic() {
+        if (_publicBusy.value) return
         val generation = searchGeneration.get()
         val cursor = publicCursor
         if (cursor == 0L) return
         _publicBusy.value = true
-        val result = await { e, done -> e.search(_publicQuery.value.trim(), cursor, done) }
+        val result = try {
+            searchGate.await({ generation == searchGeneration.get() && cursor == publicCursor }) {
+                await { e, done -> e.search(_publicQuery.value.trim(), cursor, done) }
+            }
+        } finally {
+            if (generation == searchGeneration.get()) _publicBusy.value = false
+        } ?: return
         if (generation != searchGeneration.get()) return
-        _publicBusy.value = false
         if (result is CommandResult.Listing) {
             val seen = catalog.value.map { it.first }.toSet()
             catalog.value = catalog.value + result.networks.filter { it.first !in seen }
@@ -260,17 +262,18 @@ class EngineRepository(
     }
 
     override suspend fun toggleFavorite(name: String) {
-        _favorites.update { if (name in it) it - name else it + name }
-        withContext(Dispatchers.IO) { prefs.saveFavorites(_favorites.value) }
+        preferenceWrites.update(_favorites, prefs::saveFavorites,
+            { if (name in it) it - name else it + name })
+            ?: push(app.getString(R.string.preferences_save_failed), true)
     }
 
     override suspend fun saveSettings(next: AppSettings) {
-        val previous = _settings.value
-        // A draft opened before a stealth-block edit must not restore the old list.
-        val normalized = next.copy(blocked = previous.blocked).normalized()
-        _settings.value = normalized
-        withContext(Dispatchers.IO) { prefs.saveSettings(normalized) }
-        EngineHost.updateConfig(OpenRadVpnService.engineConfig(normalized))
+        val change = preferenceWrites.update(_settings, prefs::saveSettings,
+            { current -> settingsFromDraft(next, current) },
+            { EngineHost.updateConfig(OpenRadVpnService.engineConfig(it)) })
+            ?: return push(app.getString(R.string.preferences_save_failed), true)
+        val previous = change.previous
+        val normalized = change.current
         push(app.getString(R.string.settings_saved))
         if (previous.outgoingBroadcasts != normalized.outgoingBroadcasts && engine() != null) {
             // Routes are fixed when the TUN is established; rebuild it with the new LAN routes.
@@ -285,41 +288,52 @@ class EngineRepository(
     }
 
     override suspend fun setStealthBlock(address: Int, direction: BlockDirection?) {
-        val current = _settings.value
         val text = com.openrad.mobile.engine.Ip.format(address)
         if (!BlockDirection.validAddress(address)) {
             push(app.getString(R.string.block_invalid), true)
             return
         }
-        if (direction != null && address !in current.blocked && current.blocked.size >= BlockDirection.MAX_ADDRESSES) {
-            push(app.getString(R.string.block_limit, BlockDirection.MAX_ADDRESSES), true)
+        var limited = false
+        val change = preferenceWrites.update(_settings, prefs::saveSettings, { current ->
+            if (direction != null && address !in current.blocked && current.blocked.size >= BlockDirection.MAX_ADDRESSES) {
+                limited = true
+                null
+            } else current.copy(
+                blocked = if (direction == null) current.blocked - address else current.blocked + (address to direction),
+            )
+        }, {
+            // Apply live settings in write order, without running network commands under the gate.
+            EngineHost.updateConfig(OpenRadVpnService.engineConfig(it))
+        })
+        if (change == null) {
+            if (limited) push(app.getString(R.string.block_limit, BlockDirection.MAX_ADDRESSES), true)
+            else push(app.getString(R.string.preferences_save_failed), true)
             return
         }
-        val next = current.copy(
-            blocked = if (direction == null) current.blocked - address else current.blocked + (address to direction),
-        )
-        _settings.value = next
-        withContext(Dispatchers.IO) { prefs.saveSettings(next) }
-        // Live: the running engine only recomputes per-channel flags; nothing reconnects.
-        EngineHost.updateConfig(OpenRadVpnService.engineConfig(next))
         push(app.getString(if (direction == null) R.string.block_removed else R.string.block_added, text))
     }
 
     override suspend fun saveJoinConfiguration(config: JoinConfiguration) {
         val trimmed = config.copy(networks = config.networks.distinctBy { it.name }.take(JoinConfiguration.MAX_NETWORKS))
-        val current = _joinConfigurations.value
-        if (current.none { it.name == trimmed.name } && current.size >= JoinConfiguration.MAX_CONFIGURATIONS) {
-            push(app.getString(R.string.config_limit, JoinConfiguration.MAX_CONFIGURATIONS), true)
+        var limited = false
+        val change = preferenceWrites.update(_joinConfigurations, prefs::saveConfigurations, { current ->
+            if (current.none { it.name == trimmed.name } && current.size >= JoinConfiguration.MAX_CONFIGURATIONS) {
+                limited = true
+                null
+            } else current.filterNot { it.name == trimmed.name } + trimmed
+        })
+        if (change == null) {
+            if (limited) push(app.getString(R.string.config_limit, JoinConfiguration.MAX_CONFIGURATIONS), true)
+            else push(app.getString(R.string.preferences_save_failed), true)
             return
         }
-        _joinConfigurations.value = current.filterNot { it.name == trimmed.name } + trimmed
-        withContext(Dispatchers.IO) { prefs.saveConfigurations(_joinConfigurations.value) }
         push(app.getString(R.string.config_saved, trimmed.name))
     }
 
     override suspend fun deleteJoinConfiguration(name: String) {
-        _joinConfigurations.update { cur -> cur.filterNot { it.name == name } }
-        withContext(Dispatchers.IO) { prefs.saveConfigurations(_joinConfigurations.value) }
+        preferenceWrites.update(_joinConfigurations, prefs::saveConfigurations,
+            { cur -> cur.filterNot { it.name == name } })
+            ?: push(app.getString(R.string.preferences_save_failed), true)
     }
 
     override suspend fun runBatchJoin(networks: List<JoinNetwork>, passwords: Map<String, CharArray>) {
@@ -382,6 +396,10 @@ class EngineRepository(
         const val BATCH_SPACING_MS = 50L
     }
 }
+
+/** Read the block list inside the transaction: an older settings draft must not overwrite it. */
+internal fun settingsFromDraft(draft: AppSettings, current: AppSettings): AppSettings =
+    draft.copy(blocked = current.blocked).normalized()
 
 /** Pure mapping from [EngineState] to the UI model (unit-tested). */
 object SnapshotMapper {

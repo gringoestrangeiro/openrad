@@ -30,12 +30,42 @@ enum Command {
         install_dir: PathBuf,
     },
 }
+impl Command {
+    /// Command name and install folder only; the setup log never needs more.
+    fn describe(&self) -> String {
+        match self {
+            Command::PrepareRadmin => "prepare-radmin".into(),
+            Command::Check { install_dir, .. } => {
+                format!("check; install_dir={}", install_dir.display())
+            }
+            Command::Configure { install_dir } => {
+                format!("configure; install_dir={}", install_dir.display())
+            }
+            Command::RemoveAdapter { install_dir } => {
+                format!("remove-adapter; install_dir={}", install_dir.display())
+            }
+        }
+    }
+}
 fn main() {
-    let args = Args::parse();
+    // Same folder as setup.log and the desktop/CLI startup logs, so one folder
+    // holds the whole install and first launch (docs/windows.md). The worker
+    // only bails elsewhere, so it creates no log folder there.
+    #[cfg(windows)]
+    openrad::early_log::init("setup-worker");
+    let args = Args::try_parse().unwrap_or_else(|error| {
+        openrad::early_log::event(format_args!("Setup worker arguments rejected: {error}"));
+        error.exit()
+    });
+    openrad::early_log::event(format_args!(
+        "Setup worker command={}",
+        args.command.describe()
+    ));
     let result = execute(args.command);
     let code = match result {
         Ok(code) => code,
         Err(error) => {
+            openrad::early_log::fatal_error(&error);
             if let Some(path) = args.error_file {
                 // NSIS FileReadUTF16LE displays paths/errors without losing Unicode.
                 let message = format!("{error:#}\r\n");
@@ -46,6 +76,7 @@ fn main() {
             1
         }
     };
+    openrad::early_log::event(format_args!("Setup worker exit code={code}"));
     std::process::exit(code);
 }
 #[cfg(windows)]

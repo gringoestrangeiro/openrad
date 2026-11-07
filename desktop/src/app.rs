@@ -1,11 +1,13 @@
 use crate::{
-    backend::{Action, Backend, Notice, Phase},
+    backend::{Action, Backend, Notice, Phase, ServerChoice},
     network_ui::{
         role_label, DeleteConfirmation, FormEvent, MemberConfirmation, Mode, NetworkForm,
     },
     storage::{
-        JoinNetwork, NetworkPreferences, Paths, PeerSort, Settings, StartPage, MAX_JOIN_NETWORKS,
+        JoinNetwork, NetworkPreferences, Paths, PeerSort, Settings, StartPage, ThemePreference,
+        MAX_JOIN_NETWORKS,
     },
+    virtual_list::VirtualRows,
 };
 use eframe::egui::{self, Align, Color32, FontId, RichText, Stroke, Vec2};
 use openrad::{
@@ -22,16 +24,111 @@ use std::{
     time::{Duration, Instant},
 };
 
-const BG: Color32 = Color32::from_rgb(13, 18, 25);
-const SURFACE: Color32 = Color32::from_rgb(20, 27, 37);
-const RAISED: Color32 = Color32::from_rgb(26, 35, 47);
-const BORDER: Color32 = Color32::from_rgb(39, 51, 65);
-const TEXT: Color32 = Color32::from_rgb(230, 237, 244);
-const MUTED: Color32 = Color32::from_rgb(141, 157, 176);
-const MINT: Color32 = Color32::from_rgb(98, 226, 181);
-const BLUE: Color32 = Color32::from_rgb(132, 164, 255);
-const AMBER: Color32 = Color32::from_rgb(244, 190, 100);
-const RED: Color32 = Color32::from_rgb(248, 130, 143);
+thread_local! {
+    static LIGHT_PALETTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+fn use_light_palette(enabled: bool) {
+    LIGHT_PALETTE.with(|flag| flag.set(enabled));
+}
+fn light_palette() -> bool {
+    LIGHT_PALETTE.with(|flag| flag.get())
+}
+
+/// One palette entry per theme: `(dark, light)`.
+fn pick(dark: Color32, light: Color32) -> Color32 {
+    if light_palette() {
+        light
+    } else {
+        dark
+    }
+}
+fn bg() -> Color32 {
+    pick(
+        Color32::from_rgb(11, 12, 16),
+        Color32::from_rgb(246, 247, 249),
+    )
+}
+fn surface() -> Color32 {
+    pick(
+        Color32::from_rgb(18, 19, 25),
+        Color32::from_rgb(255, 255, 255),
+    )
+}
+fn raised() -> Color32 {
+    pick(
+        Color32::from_rgb(28, 30, 38),
+        Color32::from_rgb(239, 240, 244),
+    )
+}
+fn hover() -> Color32 {
+    pick(
+        Color32::from_rgb(37, 40, 51),
+        Color32::from_rgb(228, 230, 236),
+    )
+}
+fn border() -> Color32 {
+    pick(
+        Color32::from_rgb(38, 40, 51),
+        Color32::from_rgb(224, 226, 233),
+    )
+}
+fn text() -> Color32 {
+    pick(
+        Color32::from_rgb(222, 225, 233),
+        Color32::from_rgb(28, 31, 41),
+    )
+}
+fn strong() -> Color32 {
+    pick(
+        Color32::from_rgb(246, 247, 251),
+        Color32::from_rgb(10, 11, 16),
+    )
+}
+fn muted() -> Color32 {
+    pick(
+        Color32::from_rgb(134, 140, 158),
+        Color32::from_rgb(104, 110, 128),
+    )
+}
+/// Interactive accent: selection, focus, links and primary actions.
+fn accent() -> Color32 {
+    pick(
+        Color32::from_rgb(139, 146, 255),
+        Color32::from_rgb(79, 70, 229),
+    )
+}
+/// Fill behind white text on primary buttons.
+fn accent_fill() -> Color32 {
+    pick(
+        Color32::from_rgb(99, 102, 241),
+        Color32::from_rgb(79, 70, 229),
+    )
+}
+/// Healthy state only (connected peers, active interface); never decoration.
+fn success() -> Color32 {
+    pick(
+        Color32::from_rgb(74, 222, 128),
+        Color32::from_rgb(22, 150, 74),
+    )
+}
+fn blue() -> Color32 {
+    pick(
+        Color32::from_rgb(96, 165, 250),
+        Color32::from_rgb(37, 99, 235),
+    )
+}
+fn amber() -> Color32 {
+    pick(
+        Color32::from_rgb(251, 191, 36),
+        Color32::from_rgb(180, 110, 6),
+    )
+}
+fn red() -> Color32 {
+    pick(
+        Color32::from_rgb(248, 113, 113),
+        Color32::from_rgb(214, 40, 40),
+    )
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
@@ -86,6 +183,8 @@ enum PingState {
 }
 
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How often a due search re-checks while another request is in flight.
+const SEARCH_RETRY: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 struct JoinRun {
@@ -168,38 +267,129 @@ impl PeerSelection {
             && self.show_offline == settings.show_offline_peers
     }
 }
+
+/// UI-owned snapshots invalidate presentation caches on every mutable access,
+/// including direct field edits. Read-only draws keep their revision. Ordinary
+/// Snapshot callers have no revision and retain content-based cache validation.
+trait SnapshotSource {
+    fn snapshot(&self) -> &Snapshot;
+    fn source_revision(&self) -> Option<u64> {
+        None
+    }
+}
+impl SnapshotSource for Snapshot {
+    fn snapshot(&self) -> &Snapshot {
+        self
+    }
+}
+struct UiSnapshot {
+    value: Snapshot,
+    revision: u64,
+    peer_counts: std::cell::Cell<Option<(usize, usize)>>,
+}
+fn next_snapshot_revision() -> u64 {
+    // Distinguish newly created sources as well as edits of an existing source.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+impl Default for UiSnapshot {
+    fn default() -> Self {
+        Snapshot::default().into()
+    }
+}
+impl From<Snapshot> for UiSnapshot {
+    fn from(value: Snapshot) -> Self {
+        Self {
+            value,
+            revision: next_snapshot_revision(),
+            peer_counts: std::cell::Cell::new(None),
+        }
+    }
+}
+impl UiSnapshot {
+    fn invalidate(&mut self) {
+        self.revision = next_snapshot_revision();
+        self.peer_counts.set(None);
+    }
+    fn replace(&mut self, value: Snapshot) {
+        self.invalidate();
+        self.value = value;
+    }
+    fn peer_counts(&self) -> (usize, usize) {
+        if let Some(counts) = self.peer_counts.get() {
+            return counts;
+        }
+        let mut counts = (0, 0);
+        for peer in self.value.peers.values() {
+            counts.0 += usize::from(peer.status == PeerState::Connected);
+            counts.1 += usize::from(matches!(
+                peer.status,
+                PeerState::Online | PeerState::Connecting
+            ));
+        }
+        self.peer_counts.set(Some(counts));
+        counts
+    }
+}
+impl std::ops::Deref for UiSnapshot {
+    type Target = Snapshot;
+    fn deref(&self) -> &Snapshot {
+        &self.value
+    }
+}
+impl std::ops::DerefMut for UiSnapshot {
+    fn deref_mut(&mut self) -> &mut Snapshot {
+        self.invalidate();
+        &mut self.value
+    }
+}
+impl SnapshotSource for UiSnapshot {
+    fn snapshot(&self) -> &Snapshot {
+        &self.value
+    }
+    fn source_revision(&self) -> Option<u64> {
+        Some(self.revision)
+    }
+}
 #[derive(Default)]
 struct PeerListCache {
     peers: Vec<PeerDisplay>,
     visible: Vec<usize>,
     selection: Option<PeerSelection>,
     revision: u64,
+    source_revision: Option<u64>,
 }
 impl PeerListCache {
     fn refresh(
         &mut self,
-        snapshot: &Snapshot,
+        source: &impl SnapshotSource,
         network: Option<&str>,
         filter: &str,
         settings: &Settings,
     ) {
-        let same_keys = self.peers.len() == snapshot.peers.len()
-            && self
-                .peers
-                .iter()
-                .map(|peer| peer.key)
-                .eq(snapshot.peers.keys().copied());
-        let mut changed = !same_keys;
-        if same_keys {
-            for (display, peer) in self.peers.iter_mut().zip(snapshot.peers.values()) {
-                changed |= display.refresh(peer);
+        let source_revision = source.source_revision();
+        let mut changed = false;
+        if source_revision.is_none() || self.source_revision != source_revision {
+            let snapshot = source.snapshot();
+            let same_keys = self.peers.len() == snapshot.peers.len()
+                && self
+                    .peers
+                    .iter()
+                    .map(|peer| peer.key)
+                    .eq(snapshot.peers.keys().copied());
+            changed = !same_keys;
+            if same_keys {
+                for (display, peer) in self.peers.iter_mut().zip(snapshot.peers.values()) {
+                    changed |= display.refresh(peer);
+                }
+            } else {
+                self.peers = snapshot
+                    .peers
+                    .iter()
+                    .map(|(key, peer)| PeerDisplay::new(*key, peer))
+                    .collect();
             }
-        } else {
-            self.peers = snapshot
-                .peers
-                .iter()
-                .map(|(key, peer)| PeerDisplay::new(*key, peer))
-                .collect();
+            self.source_revision = source_revision;
         }
         if self
             .selection
@@ -248,129 +438,65 @@ impl PeerListCache {
     }
 }
 
+/// Network lists up to this length are fully built, keeping every entry in
+/// the accessibility tree; longer ones build only the rows in view.
+const EAGER_ROWS: usize = 100;
+
+/// Everything besides row content that changes how list rows lay out. Rows
+/// measured under a different layout are re-estimated rather than rebuilt.
 #[derive(PartialEq)]
-struct PeerRowLayout {
+struct RowLayout {
     width: f32,
     pixels_per_point: f32,
     style: Arc<egui::Style>,
     language: Language,
-    show_internal_ids: bool,
-    show_details: bool,
-    show_peer_ip: bool,
-    selected_network: bool,
+    /// Display settings that add or remove lines in every row.
+    settings: [bool; 4],
 }
-enum CachedPing {
-    None,
-    Pending,
-    Measured(u64),
-    Failed(String),
-}
-impl CachedPing {
-    fn new(ping: Option<&PingState>) -> Self {
-        match ping {
-            None => Self::None,
-            Some(PingState::Pending { .. }) => Self::Pending,
-            Some(PingState::Measured(ms)) => Self::Measured(ms.to_bits()),
-            Some(PingState::Failed(error)) => Self::Failed(error.clone()),
-        }
-    }
-    fn matches(&self, ping: Option<&PingState>) -> bool {
-        match (self, ping) {
-            (Self::None, None) | (Self::Pending, Some(PingState::Pending { .. })) => true,
-            (Self::Measured(old), Some(PingState::Measured(ms))) => *old == ms.to_bits(),
-            (Self::Failed(old), Some(PingState::Failed(error))) => old == error,
-            _ => false,
-        }
-    }
-}
-struct CachedPeerRow {
-    height: f32,
-    name: String,
-    rid: u64,
-    vip: std::net::Ipv4Addr,
-    status: PeerState,
-    detail: String,
-    transport: Option<openrad::peer::TransportPath>,
-    endpoint: Option<std::net::SocketAddr>,
-    role: Option<u32>,
-    own_role: Option<u32>,
-    ping: CachedPing,
-    separator: bool,
-}
-impl CachedPeerRow {
-    fn matches(
-        &self,
-        peer: &PeerView,
-        ping: Option<&PingState>,
-        role: Option<u32>,
-        own_role: Option<u32>,
-        separator: bool,
-    ) -> bool {
-        self.name == peer.peer.name
-            && self.rid == peer.peer.rid
-            && self.vip == peer.peer.vip
-            && self.status == peer.status
-            && self.detail == peer.detail
-            && self.transport == peer.transport
-            && self.endpoint == peer.endpoint
-            && self.role == role
-            && self.own_role == own_role
-            && self.separator == separator
-            && self.ping.matches(ping)
-    }
-    fn new(
-        height: f32,
-        peer: &PeerView,
-        ping: Option<&PingState>,
-        role: Option<u32>,
-        own_role: Option<u32>,
-        separator: bool,
-    ) -> Self {
+impl RowLayout {
+    fn new(ui: &egui::Ui, language: Language, settings: [bool; 4]) -> Self {
         Self {
-            height,
-            name: peer.peer.name.clone(),
-            rid: peer.peer.rid,
-            vip: peer.peer.vip,
-            status: peer.status.clone(),
-            detail: peer.detail.clone(),
-            transport: peer.transport,
-            endpoint: peer.endpoint,
-            role,
-            own_role,
-            ping: CachedPing::new(ping),
-            separator,
-        }
-    }
-}
-#[derive(Default)]
-struct PeerRowCache {
-    layout: Option<PeerRowLayout>,
-    rows: BTreeMap<u64, CachedPeerRow>,
-    peer_revision: u64,
-}
-impl PeerRowCache {
-    fn refresh_layout(
-        &mut self,
-        ui: &egui::Ui,
-        language: Language,
-        settings: &Settings,
-        selected_network: bool,
-    ) {
-        let layout = PeerRowLayout {
             width: ui.available_width(),
             pixels_per_point: ui.ctx().pixels_per_point(),
             style: ui.style().clone(),
             language,
-            show_internal_ids: settings.show_internal_ids,
-            show_details: settings.show_peer_details,
-            show_peer_ip: settings.show_peer_ip,
-            selected_network,
-        };
-        if self.layout.as_ref() != Some(&layout) {
-            self.layout = Some(layout);
-            self.rows.clear();
+            settings,
         }
     }
+}
+/// Rows of one kind are expected to share a height. Only the lines and labels
+/// a row shows matter; names and messages are single-line or similar in size.
+fn peer_row_kind(
+    peer: &PeerView,
+    ping: Option<&PingState>,
+    role: Option<u32>,
+    settings: &Settings,
+    separator: bool,
+) -> u64 {
+    let ping = match ping {
+        None => 0,
+        Some(PingState::Pending { .. }) => 1,
+        Some(PingState::Measured(_)) => 2,
+        Some(PingState::Failed(_)) => 3,
+    };
+    let transport = match peer.transport {
+        None => 0,
+        Some(openrad::peer::TransportPath::DirectUdp) => 1,
+        Some(openrad::peer::TransportPath::DirectTcp) => 2,
+        Some(openrad::peer::TransportPath::Relay) => 3,
+    };
+    let details = settings.show_peer_details && !peer.detail.is_empty();
+    let address = settings.show_peer_ip
+        && peer.status == PeerState::Connected
+        && peer.transport.is_some()
+        && peer.endpoint.is_some();
+    u64::from(peer_rank(&peer.status))
+        | ping << 3
+        | transport << 5
+        | u64::from(role.map_or(0, |role| role.min(14) + 1)) << 7
+        | u64::from(details) << 11
+        | u64::from(address) << 12
+        | u64::from(separator) << 13
 }
 
 #[derive(Default)]
@@ -384,9 +510,19 @@ struct NetworkListCache {
     counts: BTreeMap<String, usize>,
     ordered: Arc<[Network]>,
     revision: u64,
+    source_revision: Option<u64>,
 }
 impl NetworkListCache {
-    fn refresh(&mut self, snapshot: &Snapshot, favorites: &BTreeSet<String>) {
+    fn refresh(&mut self, source: &impl SnapshotSource, favorites: &BTreeSet<String>) {
+        let source_revision = source.source_revision();
+        if source_revision.is_some()
+            && self.source_revision == source_revision
+            && self.favorites == *favorites
+        {
+            return;
+        }
+        self.source_revision = source_revision;
+        let snapshot = source.snapshot();
         let same_networks = same_joined_networks(&self.networks, &snapshot.networks);
         let same_memberships = self.memberships.len() == snapshot.peers.len()
             && self.memberships.iter().zip(&snapshot.peers).all(
@@ -459,6 +595,11 @@ struct PublicNetworkListCache {
     networks: Vec<PublicNetwork>,
     favorites: BTreeSet<String>,
     ordered: Arc<[PublicNetworkDisplay]>,
+    revision: u64,
+    /// The filter and list revision `matching` was computed for.
+    filter: Option<(String, u64)>,
+    matching: Arc<[usize]>,
+    matching_revision: u64,
 }
 impl PublicNetworkListCache {
     fn refresh(&mut self, networks: &[PublicNetwork], favorites: &BTreeSet<String>) {
@@ -482,6 +623,25 @@ impl PublicNetworkListCache {
             .collect::<Vec<_>>()
             .into();
         self.initialized = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+    /// Indices of ordered networks whose normalized names contain `filter`,
+    /// and a revision that changes whenever they change.
+    fn matching(&mut self, filter: &str) -> (u64, Arc<[usize]>) {
+        if self
+            .filter
+            .as_ref()
+            .is_none_or(|(old, revision)| old != filter || *revision != self.revision)
+        {
+            self.matching = (self.ordered.iter().enumerate())
+                .filter(|(_, display)| display.normalized_name.contains(filter))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>()
+                .into();
+            self.filter = Some((filter.to_owned(), self.revision));
+            self.matching_revision = self.matching_revision.wrapping_add(1);
+        }
+        (self.matching_revision, Arc::clone(&self.matching))
     }
 }
 struct AvailableNetwork {
@@ -501,6 +661,7 @@ struct AutoJoinListCache {
     catalog: Vec<PublicNetwork>,
     draft: Vec<JoinNetwork>,
     ordered: Arc<[AvailableNetwork]>,
+    revision: u64,
 }
 impl AutoJoinListCache {
     fn refresh(
@@ -591,11 +752,17 @@ impl AutoJoinListCache {
         self.draft = draft.to_vec();
         self.network_revision = networks.revision;
         self.initialized = true;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
 pub struct App {
     first_frame: bool,
+    welcome_started: Instant,
+    welcome_skipped: bool,
+    #[cfg(windows)]
+    welcome_create_shortcut: bool,
+    rendered_theme: ThemePreference,
     #[cfg(test)]
     windows_preview: bool,
     backend: Backend,
@@ -615,9 +782,13 @@ pub struct App {
     block_input: String,
     block_direction: runtime::BlockDirection,
     system_language: Language,
-    snapshot: Snapshot,
+    snapshot: UiSnapshot,
     peer_list: PeerListCache,
-    peer_rows: PeerRowCache,
+    peer_rows: VirtualRows<u64, RowLayout>,
+    /// The peer whose Manage menu is open stays built while scrolled away.
+    peer_menu: Option<u64>,
+    catalog_rows: VirtualRows<String, RowLayout>,
+    auto_join_rows: VirtualRows<String, RowLayout>,
     network_list: NetworkListCache,
     public_list: PublicNetworkListCache,
     auto_join_list: AutoJoinListCache,
@@ -640,6 +811,11 @@ pub struct App {
     toast: Option<(String, bool, Instant)>,
     activity: VecDeque<Activity>,
     import_path: String,
+    /// The active custom server; None is the official server.
+    server: Option<openrad::daemon::CustomServer>,
+    server_host: String,
+    server_port: String,
+    server_modulus: String,
     download: VecDeque<f32>,
     upload: VecDeque<f32>,
     last_sample: Instant,
@@ -683,6 +859,7 @@ impl App {
             settings.language = language;
         }
         cc.egui_ctx.set_zoom_factor(settings.scale);
+        apply_theme(&cc.egui_ctx, settings.theme);
         let ctx = cc.egui_ctx.clone();
         crate::startup_log::checkpoint(crate::startup_log::Stage::StartingBackend);
         let backend = Backend::spawn(
@@ -702,6 +879,11 @@ impl App {
         };
         Self {
             first_frame: true,
+            welcome_started: Instant::now(),
+            welcome_skipped: false,
+            #[cfg(windows)]
+            welcome_create_shortcut: false,
+            rendered_theme: settings.theme,
             #[cfg(test)]
             windows_preview: cfg!(windows),
             backend,
@@ -721,9 +903,12 @@ impl App {
             block_direction: runtime::BlockDirection::Both,
             settings,
             system_language: Language::system(),
-            snapshot: Snapshot::default(),
+            snapshot: UiSnapshot::default(),
             peer_list: PeerListCache::default(),
-            peer_rows: PeerRowCache::default(),
+            peer_rows: VirtualRows::default(),
+            peer_menu: None,
+            catalog_rows: VirtualRows::eager_up_to(EAGER_ROWS),
+            auto_join_rows: VirtualRows::eager_up_to(EAGER_ROWS),
             network_list: NetworkListCache::default(),
             public_list: PublicNetworkListCache::default(),
             auto_join_list: AutoJoinListCache::default(),
@@ -746,6 +931,10 @@ impl App {
             toast: None,
             activity: VecDeque::new(),
             import_path: String::new(),
+            server: None,
+            server_host: String::new(),
+            server_port: String::new(),
+            server_modulus: String::new(),
             confirm_reset: false,
             #[cfg(windows)]
             confirm_uninstall: false,
@@ -827,10 +1016,27 @@ impl App {
                     if self.identity.as_ref().is_some_and(|(old, _)| *old != rid) {
                         self.interrupt_join();
                         self.join_passwords.clear();
-                        self.snapshot = Snapshot::default();
+                        self.snapshot.replace(Snapshot::default());
                         self.selected_network = None;
                     }
                     self.identity = Some((rid, name));
+                }
+                Notice::NoIdentity => {
+                    if self.identity.is_some() {
+                        self.interrupt_join();
+                        self.join_passwords.clear();
+                        self.snapshot.replace(Snapshot::default());
+                        self.selected_network = None;
+                    }
+                    self.identity = None;
+                }
+                Notice::Server(server) => {
+                    if let Some(server) = &server {
+                        self.server_host = server.host.to_string();
+                        self.server_port = server.port.to_string();
+                        self.server_modulus.clear();
+                    }
+                    self.server = server;
                 }
                 Notice::NodeName(name) => {
                     if self.settings.node_name == self.saved_settings.node_name {
@@ -956,7 +1162,7 @@ impl App {
                     {
                         self.selected_network = None;
                     }
-                    self.snapshot = state;
+                    self.snapshot.replace(state);
                 }
                 Notice::Engine(Update::Catalog {
                     query,
@@ -1111,11 +1317,12 @@ impl App {
                 self.network_preferences_error.is_none(),
                 egui::Button::new(
                     RichText::new(if favorite { "★" } else { "☆" }).color(if favorite {
-                        AMBER
+                        amber()
                     } else {
-                        MUTED
+                        muted()
                     }),
                 )
+                .frame_when_inactive(false)
                 .min_size(Vec2::splat(30.)),
             )
             .on_hover_text(&label);
@@ -1361,7 +1568,16 @@ impl App {
             .resizable(true)
             .default_size(240.)
             .size_range(166. ..=max_width)
-            .frame(egui::Frame::new().fill(SURFACE).inner_margin(20))
+            .frame(
+                egui::Frame::new()
+                    .fill(surface())
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 14,
+                        top: 18,
+                        bottom: 20,
+                    }),
+            )
             .show(ui, |ui| {
                 // Reserve the footer before laying out an arbitrarily long membership list.
                 egui::Panel::bottom("sidebar-footer")
@@ -1379,93 +1595,82 @@ impl App {
                         .auto_shrink([false, false])
                         .min_scrolled_height(0.)
                         .show(ui, |ui| {
-                            ui.add_space(10.);
                             ui.horizontal(|ui| {
+                                ui.add_space(4.);
                                 ui.spacing_mut().item_spacing.x = 8.;
-                                logo(ui, if narrow { 26. } else { 29. });
+                                logo(ui, if narrow { 24. } else { 28. });
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new("openrad")
-                                            .size(if narrow { 20. } else { 24. })
-                                            .strong()
-                                            .color(TEXT),
+                                            .size(if narrow { 18. } else { 21. })
+                                            .color(strong()),
                                     )
                                     .truncate(),
                                 );
                             });
-                            ui.add_space(8.);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(language.text("YOUR NETWORK, CLOSER"))
-                                        .size(9.)
-                                        .color(MUTED),
-                                )
-                                .truncate(),
-                            );
-                            ui.add_space(if compact { 20. } else { 38. });
-                            for (page, label) in [
-                                (Page::Networks, language.text("My networks")),
-                                (Page::Discover, language.text("Discover")),
-                                (Page::AutoJoin, language.text("Auto join")),
-                                (Page::Settings, language.text("Settings")),
+                            ui.add_space(if compact { 14. } else { 24. });
+                            ui.spacing_mut().item_spacing.y = 2.;
+                            for (page, icon, label) in [
+                                (
+                                    Page::Networks,
+                                    NavIcon::Networks,
+                                    language.text("My networks"),
+                                ),
+                                (Page::Discover, NavIcon::Discover, language.text("Discover")),
+                                (
+                                    Page::AutoJoin,
+                                    NavIcon::AutoJoin,
+                                    language.text("Auto join"),
+                                ),
+                                (Page::Settings, NavIcon::Settings, language.text("Settings")),
                             ] {
-                                let selected = self.page == page;
-                                let button = egui::Button::new(
-                                    RichText::new(label).size(14.).color(if selected {
-                                        MINT
-                                    } else {
-                                        MUTED
-                                    }),
-                                )
-                                .fill(if selected {
-                                    Color32::from_rgb(29, 56, 51)
-                                } else {
-                                    SURFACE
-                                })
-                                .stroke(Stroke::NONE)
-                                .min_size(Vec2::new(ui.available_width(), 42.))
-                                .corner_radius(9);
-                                if ui.add(button).on_hover_text(label).clicked() {
+                                if nav_item(ui, icon, label, self.page == page)
+                                    .on_hover_text(label)
+                                    .clicked()
+                                {
                                     self.page = page;
                                 }
-                                ui.add_space(6.);
                             }
-                            ui.add_space(if compact { 16. } else { 24. });
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(language.text("MEMBERSHIPS"))
-                                        .size(10.)
-                                        .color(MUTED),
-                                )
-                                .truncate(),
-                            );
-                            ui.add_space(10.);
-                            if self.snapshot.networks.is_empty() {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(language.text("No networks yet"))
-                                            .size(12.)
-                                            .color(MUTED),
-                                    )
-                                    .truncate(),
-                                );
-                            }
+                            ui.add_space(if compact { 14. } else { 24. });
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(10, 0))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(language.text("MEMBERSHIPS"))
+                                                .size(10.)
+                                                .color(muted()),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.add_space(4.);
+                                    if self.snapshot.networks.is_empty() {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(language.text("No networks yet"))
+                                                    .size(12.)
+                                                    .color(muted()),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
+                                });
                             for n in self.joined_networks().iter() {
                                 let name = if self.network_preferences.favorites.contains(&n.name) {
                                     format!("★ {}", n.name)
                                 } else {
                                     n.name.clone()
                                 };
+                                let selected =
+                                    self.selected_network.as_ref() == Some(&n.network_id);
                                 if ui
                                     .push_id(&n.network_id, |ui| {
                                         ui.add(
-                                            egui::Button::new(RichText::new(name).size(12.))
-                                                .selected(
-                                                    self.selected_network.as_ref()
-                                                        == Some(&n.network_id),
-                                                )
+                                            egui::Button::new(RichText::new(name).size(12.5))
+                                                .selected(selected)
+                                                .frame_when_inactive(selected)
                                                 .truncate()
-                                                .min_size(Vec2::new(ui.available_width(), 31.)),
+                                                .min_size(Vec2::new(ui.available_width(), 30.)),
                                         )
                                         .on_hover_text(&n.name)
                                     })
@@ -1484,17 +1689,14 @@ impl App {
     }
     fn sidebar_footer(&self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.add_space(12.);
+        ui.add_space(10.);
+        ui.separator();
+        ui.add_space(6.);
         let name = self
             .identity
             .as_ref()
             .map(|(_, n)| n.as_str())
             .unwrap_or(language.text("This device"));
-        ui.add(egui::Label::new(RichText::new(name).size(12.).color(TEXT)).truncate())
-            .on_hover_text(name);
-        ui.add_space(4.);
-        ui.separator();
-        ui.add_space(4.);
         let status = if self.snapshot.interface_ready {
             language.text(if self.windows_platform() {
                 "OpenRad TAP active"
@@ -1504,25 +1706,41 @@ impl App {
         } else {
             language.text("Interface offline")
         };
-        ui.horizontal(|ui| {
-            dot(
-                ui,
-                if self.snapshot.interface_ready {
-                    MINT
-                } else {
-                    MUTED
-                },
-            );
-            ui.add(egui::Label::new(RichText::new(status).size(11.).color(MUTED)).truncate())
-                .on_hover_text(status);
-        });
         let version = language.message(&if self.windows_platform() {
             format!("Native Windows · v{}", env!("CARGO_PKG_VERSION"))
         } else {
             format!("Native Linux · v{}", env!("CARGO_PKG_VERSION"))
         });
-        ui.add(egui::Label::new(RichText::new(&version).size(10.).color(MUTED)).truncate())
-            .on_hover_text(version);
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(6, 0))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.;
+                ui.spacing_mut().interact_size.y = 16.;
+                ui.add(egui::Label::new(RichText::new(name).size(13.).color(strong())).truncate())
+                    .on_hover_text(name);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.;
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(8., 14.), egui::Sense::hover());
+                    ui.painter().circle_filled(
+                        rect.center(),
+                        3.5,
+                        if self.snapshot.interface_ready {
+                            success()
+                        } else {
+                            muted()
+                        },
+                    );
+                    ui.add(
+                        egui::Label::new(RichText::new(status).size(11.).color(muted())).truncate(),
+                    )
+                    .on_hover_text(status);
+                });
+                ui.add(
+                    egui::Label::new(RichText::new(&version).size(10.).color(muted())).truncate(),
+                )
+                .on_hover_text(version);
+            });
     }
     fn hero(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -1530,52 +1748,52 @@ impl App {
             Phase::Loading => (
                 language.text("Getting ready"),
                 language.text("Opening your saved identity"),
-                BLUE,
+                blue(),
             ),
             Phase::Provisioning => (
                 language.text("Creating your identity"),
                 language.text("One private identity, saved for your next connection"),
-                BLUE,
+                blue(),
             ),
             Phase::Resetting => (
                 language.text("Resetting your identity"),
                 language.text("Disconnecting, provisioning and saving your replacement"),
-                BLUE,
+                blue(),
             ),
             Phase::Connecting => (
                 language.text("Connecting"),
                 language.text("Authenticating with the network"),
-                BLUE,
+                blue(),
             ),
             Phase::Connected if self.snapshot.interface_error.is_some() => (
                 language.text("Interface needs attention"),
                 language.text("Your account is connected; application traffic is paused"),
-                AMBER,
+                amber(),
             ),
             Phase::Connected if !self.snapshot.interface_ready => (
                 language.text("Preparing your interface"),
                 language.text("Your account is connected"),
-                BLUE,
+                blue(),
             ),
             Phase::Connected => (
                 language.text("You’re connected"),
                 language.text("Your devices are within reach"),
-                MINT,
+                success(),
             ),
             Phase::Disconnecting => (
                 language.text("Disconnecting"),
                 language.text("Closing channels and removing the interface"),
-                BLUE,
+                blue(),
             ),
             Phase::Error => (
                 language.text("Connection needs attention"),
                 language.text("Your saved identity is kept safe"),
-                RED,
+                red(),
             ),
             Phase::Disconnected => (
                 language.text("Ready to connect"),
                 language.text("Bring your devices onto the same network"),
-                MUTED,
+                muted(),
             ),
         };
         card().inner_margin(24).show(ui, |ui| {
@@ -1590,7 +1808,7 @@ impl App {
             );
             let button_width = ui
                 .painter()
-                .layout_no_wrap(toggle_label.to_owned(), FontId::proportional(14.), BG)
+                .layout_no_wrap(toggle_label.to_owned(), FontId::proportional(14.), bg())
                 .size()
                 .x
                 .max(80.)
@@ -1603,8 +1821,8 @@ impl App {
                 .painter()
                 .layout(
                     title.to_owned(),
-                    FontId::proportional(25.),
-                    TEXT,
+                    FontId::proportional(22.),
+                    text(),
                     text_width,
                 )
                 .size()
@@ -1613,8 +1831,8 @@ impl App {
                 .painter()
                 .layout(
                     caption.to_owned(),
-                    FontId::proportional(12.),
-                    MUTED,
+                    FontId::proportional(13.),
+                    muted(),
                     text_width,
                 )
                 .size()
@@ -1628,7 +1846,12 @@ impl App {
                     ui.spacing_mut().item_spacing.x = gap;
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(54.), egui::Sense::hover());
                     ui.painter()
-                        .circle_filled(rect.center(), 26., color.gamma_multiply(0.13));
+                        .circle_filled(rect.center(), 26., color.gamma_multiply(0.14));
+                    ui.painter().circle_stroke(
+                        rect.center(),
+                        26.5,
+                        Stroke::new(1., color.gamma_multiply(0.3)),
+                    );
                     let c = rect.center();
                     let points = vec![
                         c + Vec2::new(-13., -13.),
@@ -1657,8 +1880,8 @@ impl App {
                         |ui| {
                             ui.set_min_width(text_width);
                             ui.spacing_mut().item_spacing.y = 3.;
-                            ui.label(RichText::new(title).size(25.).strong().color(TEXT));
-                            ui.label(RichText::new(caption).size(12.).color(MUTED));
+                            ui.label(RichText::new(title).size(22.).color(strong()));
+                            ui.label(RichText::new(caption).size(13.).color(muted()));
                         },
                     );
                     if !compact {
@@ -1678,35 +1901,18 @@ impl App {
                     |ui| self.connection_button(ui, toggle_label, button_width),
                 );
             }
-            ui.add_space(18.);
+            ui.add_space(16.);
             ui.separator();
-            ui.add_space(12.);
-            let compact_footer = ui.available_width() < 460.;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(language.text("VPN ADDRESS"))
-                        .size(10.)
-                        .color(MUTED),
-                );
-                let ip = if self.connected() {
-                    self.snapshot
-                        .vip
-                        .map(|i| i.to_string())
-                        .unwrap_or_else(|| language.text("Awaiting assignment").into())
-                } else {
-                    "—".into()
-                };
-                ui.label(RichText::new(&ip).monospace().size(16.).color(color));
-                if self.connected() && ui.small_button(language.text("Copy")).clicked() {
-                    ui.ctx().copy_text(ip);
-                }
-                if !compact_footer {
-                    self.connection_timing(ui);
-                }
-            });
-            if compact_footer {
+            ui.add_space(10.);
+            if ui.available_width() < 460. {
+                ui.horizontal_wrapped(|ui| self.address(ui));
                 ui.add_space(6.);
                 self.connection_timing(ui);
+            } else {
+                ui.horizontal(|ui| {
+                    self.address(ui);
+                    self.connection_timing(ui);
+                });
             }
         });
         if matches!(self.phase, Phase::Provisioning | Phase::Resetting) {
@@ -1714,11 +1920,11 @@ impl App {
             ui.label(
                 RichText::new(language.message(&self.message))
                     .size(12.)
-                    .color(MUTED),
+                    .color(muted()),
             );
         }
         if self.phase == Phase::Error {
-            self.banner(ui, &self.message.clone(), RED);
+            self.banner(ui, &self.message.clone(), red());
         }
         if let Some(error) = self
             .snapshot
@@ -1727,11 +1933,36 @@ impl App {
             .filter(|_| self.connected())
         {
             ui.add_space(12.);
-            egui::Frame::new().fill(Color32::from_rgb(49,39,29)).corner_radius(10).inner_margin(16).show(ui, |ui| {
-                ui.label(RichText::new(language.message(&error)).color(AMBER));
-                ui.label(RichText::new(language.text(if self.windows_platform() { "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically." } else { "Linux: allow the system permission dialog for TAP setup, then retry if needed. A running Polkit authentication agent is required. The desktop stays unprivileged." })).size(12.).color(MUTED));
+            egui::Frame::new().fill(amber().gamma_multiply(0.08)).stroke(Stroke::new(1., amber().gamma_multiply(0.3))).corner_radius(10).inner_margin(16).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(RichText::new(language.message(&error)).color(amber()));
+                ui.label(RichText::new(language.text(if self.windows_platform() { "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically." } else { "Linux: allow the system permission dialog for TAP setup, then retry if needed. A running Polkit authentication agent is required. The desktop stays unprivileged." })).size(12.).color(muted()));
                 ui.add_space(6.); if ui.button(language.text("Retry interface setup")).clicked() { self.command(Command::RetryInterface); }
             });
+        }
+    }
+    fn address(&self, ui: &mut egui::Ui) {
+        let language = self.language();
+        ui.label(
+            RichText::new(language.text("VPN ADDRESS"))
+                .size(10.)
+                .color(muted()),
+        );
+        let ip = if self.connected() {
+            self.snapshot
+                .vip
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| language.text("Awaiting assignment").into())
+        } else {
+            "—".into()
+        };
+        ui.label(RichText::new(&ip).monospace().size(15.).color(strong()));
+        if self.connected()
+            && ui
+                .add(egui::Button::new(RichText::new(language.text("Copy")).size(12.)).small())
+                .clicked()
+        {
+            ui.ctx().copy_text(ip);
         }
     }
     fn connection_button(&mut self, ui: &mut egui::Ui, label: &str, width: f32) {
@@ -1762,7 +1993,7 @@ impl App {
                             self.snapshot.latency_ms
                         ))
                         .size(11.)
-                        .color(MUTED),
+                        .color(muted()),
                     );
                 } else if matches!(
                     self.phase,
@@ -1772,12 +2003,12 @@ impl App {
                         | Phase::Resetting
                         | Phase::Disconnecting
                 ) {
-                    ui.spinner();
+                    spinner(ui);
                 } else {
                     ui.label(
                         RichText::new(self.language().text("IPv4 · per-peer transport"))
                             .size(11.)
-                            .color(MUTED),
+                            .color(muted()),
                     );
                 }
             },
@@ -1814,7 +2045,7 @@ impl App {
                         self.settings.decimal_units
                     )
                 )),
-                MINT,
+                accent(),
                 self.settings.show_traffic_graphs.then_some(&self.download),
             );
             metric(
@@ -1828,21 +2059,10 @@ impl App {
                         self.settings.decimal_units
                     )
                 )),
-                BLUE,
+                blue(),
                 self.settings.show_traffic_graphs.then_some(&self.upload),
             );
-            let active = self
-                .snapshot
-                .peers
-                .values()
-                .filter(|p| p.status == PeerState::Connected)
-                .count();
-            let queued = self
-                .snapshot
-                .peers
-                .values()
-                .filter(|p| matches!(p.status, PeerState::Online | PeerState::Connecting))
-                .count();
+            let (active, queued) = self.snapshot.peer_counts();
             metric(
                 &mut cols[2],
                 language.text("PEER CONNECTIONS"),
@@ -1851,7 +2071,7 @@ impl App {
                     "{queued} pending · {} filtered frames",
                     self.snapshot.traffic.dropped
                 )),
-                TEXT,
+                text(),
                 None,
             );
         });
@@ -1859,7 +2079,7 @@ impl App {
     fn network_selector(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let language = self.language();
         let max_name_width = (ui.available_width() - 60.).clamp(80., 240.);
-        let row_height = ui.spacing().interact_size.y.max(40.);
+        let row_height = ui.spacing().interact_size.y.max(34.);
         ui.scope(|ui| {
             // Allocate space for the scrollbar so it cannot cover the network buttons.
             ui.style_mut().spacing.scroll.floating = false;
@@ -1874,6 +2094,7 @@ impl App {
                             .add(
                                 egui::Button::new(language.text("All networks"))
                                     .selected(self.selected_network.is_none())
+                                    .corner_radius(17)
                                     .min_size(Vec2::new(0., row_height)),
                             )
                             .clicked()
@@ -1882,29 +2103,63 @@ impl App {
                         }
                         for n in self.joined_networks().iter() {
                             ui.push_id(&n.network_id, |ui| {
+                                // One pill per network: the favorite toggle
+                                // sits inside it, split from the name by a
+                                // divider. The background is painted under
+                                // both once their extent is known.
+                                let selected =
+                                    self.selected_network.as_ref() == Some(&n.network_id);
+                                let background = ui.painter().add(egui::Shape::Noop);
+                                let start = ui.cursor().min.x;
+                                ui.spacing_mut().item_spacing.x = 0.;
+                                ui.add_space(3.);
                                 self.favorite_button(ui, &n.name, self.network_is_private(&n.name));
+                                let divider = ui.cursor().min.x + 2.;
+                                ui.add_space(4.);
                                 let font = egui::TextStyle::Button.resolve(ui.style());
                                 let width = (ui
                                     .painter()
-                                    .layout_no_wrap(n.name.clone(), font.clone(), TEXT)
+                                    .layout_no_wrap(n.name.clone(), font.clone(), text())
                                     .size()
                                     .x
                                     + 2. * ui.spacing().button_padding.x
                                     + 2.)
                                     .min(max_name_width);
-                                if ui
+                                let response = ui
                                     .add_sized(
                                         Vec2::new(width, row_height),
                                         egui::Button::new(RichText::new(&n.name).font(font))
-                                            .selected(
-                                                self.selected_network.as_ref()
-                                                    == Some(&n.network_id),
-                                            )
+                                            .selected(selected)
+                                            .frame_when_inactive(false)
+                                            .corner_radius(17)
                                             .truncate(),
                                     )
-                                    .on_hover_text(&n.name)
-                                    .clicked()
-                                {
+                                    .on_hover_text(&n.name);
+                                let chip = egui::Rect::from_x_y_ranges(
+                                    start..=response.rect.right(),
+                                    response.rect.y_range(),
+                                );
+                                let (fill, stroke) = if selected {
+                                    (ui.visuals().selection.bg_fill, accent().gamma_multiply(0.6))
+                                } else {
+                                    (raised(), border())
+                                };
+                                ui.painter().set(
+                                    background,
+                                    egui::epaint::RectShape::new(
+                                        chip,
+                                        17,
+                                        fill,
+                                        Stroke::new(1., stroke),
+                                        egui::StrokeKind::Inside,
+                                    ),
+                                );
+                                ui.painter().vline(
+                                    divider,
+                                    chip.y_range().shrink(9.),
+                                    Stroke::new(1., stroke),
+                                );
+                                if response.clicked() {
                                     self.selected_network = Some(n.network_id.clone());
                                 }
                             });
@@ -1920,14 +2175,14 @@ impl App {
         if self.settings.show_traffic {
             self.traffic(ui);
         }
-        ui.add_space(25.);
-        ui.label(
-            RichText::new(language.text("Your networks"))
-                .size(19.)
-                .strong(),
-        );
-        ui.add_space(8.);
+        ui.add_space(28.);
         ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(language.text("Your networks"))
+                    .size(18.)
+                    .color(strong()),
+            );
+            ui.add_space(8.);
             if ui
                 .add_enabled(
                     self.connected() && !self.mutation_busy(),
@@ -1946,47 +2201,57 @@ impl App {
             {
                 self.network_form = Some(NetworkForm::new(Mode::Join));
             }
-            if ui.button(language.text("Browse public")).clicked() {
-                self.page = Page::Discover;
-                self.focus_search = true;
-            }
-            if ui.button(language.text("Auto join")).clicked() {
-                self.page = Page::AutoJoin;
-            }
         });
-        ui.add_space(12.);
+        ui.add_space(14.);
         if self.snapshot.networks.is_empty() {
             card().inner_margin(28).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(RichText::new(if self.connected() { language.text("Make your first connection") } else { language.text("Your networks will appear here") }).size(19.).strong());
-                ui.add_space(8.); ui.label(RichText::new(language.text("Create a private network, join one with a password, or explore public networks. OpenRad connects to available members.")).color(MUTED));
+                ui.label(RichText::new(if self.connected() { language.text("Make your first connection") } else { language.text("Your networks will appear here") }).size(17.).color(strong()));
+                ui.add_space(8.); ui.label(RichText::new(language.text("Create a private network, join one with a password, or explore public networks. OpenRad connects to available members.")).color(muted()));
                 ui.add_space(12.); if ui.add_enabled(self.connected(), primary(language.text("Explore public networks"))).clicked() { self.page = Page::Discover; self.focus_search = true; }
             });
             return;
         }
         self.network_selector(ui);
-        ui.add_space(12.);
+        ui.add_space(10.);
         if self.selected_network.is_none() {
             ui.label(
                 RichText::new(
                     language.text("Select a network to see roles and manage its members."),
                 )
                 .size(11.)
-                .color(MUTED),
+                .color(muted()),
             );
             ui.add_space(8.);
         }
         ui.horizontal_wrapped(|ui| {
+            let retry = language.text("Retry failed peers");
+            let retry_width = ui
+                .painter()
+                .layout_no_wrap(
+                    retry.to_owned(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    text(),
+                )
+                .size()
+                .x
+                + 2. * ui.spacing().button_padding.x
+                + ui.spacing().item_spacing.x
+                + 2.;
             ui.add(
                 egui::TextEdit::singleline(&mut self.peer_filter)
                     .hint_text(language.text("Filter peers by name or VPN address"))
-                    .desired_width((ui.available_width() - 130.).max(180.)),
+                    .margin(Vec2::new(10., 7.))
+                    // Share the row when both fit; otherwise the filter takes
+                    // the full width and the action wraps below it.
+                    .desired_width(if ui.available_width() - retry_width - 20. >= 220. {
+                        ui.available_width() - retry_width - 20.
+                    } else {
+                        ui.available_width() - 20.
+                    }),
             );
             if ui
-                .add_enabled(
-                    self.connected(),
-                    egui::Button::new(language.text("Retry failed peers")),
-                )
+                .add_enabled(self.connected(), egui::Button::new(retry))
                 .clicked()
             {
                 self.command(Command::RetryPeers);
@@ -2010,7 +2275,7 @@ impl App {
                 self.snapshot.retry_active, self.snapshot.retry_queued
             )))
             .size(11.)
-            .color(MUTED),
+            .color(muted()),
         );
         if let Some(id) = &self.selected_network {
             if let Some(n) = self
@@ -2026,19 +2291,19 @@ impl App {
                     .as_ref()
                     .and_then(|(rid, _)| self.snapshot.roles.get(&n.network_id)?.get(rid).copied());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(&n.name).strong());
+                    ui.label(RichText::new(&n.name).size(15.).color(strong()));
                     if self.settings.show_internal_ids {
                         ui.label(
                             RichText::new(&n.network_id)
                                 .monospace()
                                 .size(11.)
-                                .color(MUTED),
+                                .color(muted()),
                         );
                     }
                     badge(
                         ui,
                         role_label(role, language),
-                        if role == Some(2) { MINT } else { MUTED },
+                        if role == Some(2) { accent() } else { muted() },
                     );
                 });
                 ui.horizontal_wrapped(|ui| {
@@ -2057,7 +2322,7 @@ impl App {
                             .add_enabled(
                                 self.connected() && !self.mutation_busy(),
                                 egui::Button::new(
-                                    RichText::new(language.text("Delete network")).color(RED),
+                                    RichText::new(language.text("Delete network")).color(red()),
                                 ),
                             )
                             .clicked()
@@ -2081,33 +2346,55 @@ impl App {
             &self.settings,
         );
         let mut peer_rows = std::mem::take(&mut self.peer_rows);
-        if peer_rows.peer_revision != peer_list.revision {
-            peer_rows
-                .rows
-                .retain(|rid, _| self.snapshot.peers.contains_key(rid));
-            peer_rows.peer_revision = peer_list.revision;
-        }
+        let own_role = self.selected_network.as_ref().and_then(|network| {
+            let (rid, _) = self.identity.as_ref()?;
+            self.snapshot.roles.get(network)?.get(rid).copied()
+        });
         card().inner_margin(14).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            peer_rows.refresh_layout(
-                ui,
-                language,
-                &self.settings,
-                self.selected_network.is_some(),
-            );
             if peer_list.visible.is_empty() {
                 ui.add_space(15.);
                 ui.label(
                     RichText::new(language.text(
                         "No peers match this view. Members will appear as the server reports them.",
                     ))
-                    .color(MUTED),
+                    .color(muted()),
                 );
                 ui.add_space(15.);
             }
-            let keep_menus_alive = egui::Popup::is_any_open(ui.ctx());
-            for (index, display_index) in peer_list.visible.iter().enumerate() {
-                let display = &peer_list.peers[*display_index];
+            let settings = [
+                self.settings.show_internal_ids,
+                self.settings.show_peer_details,
+                self.settings.show_peer_ip,
+                self.selected_network.is_some(),
+            ];
+            peer_rows.update(
+                peer_list.revision,
+                RowLayout::new(ui, language, settings),
+                || {
+                    let peers = &peer_list.peers;
+                    peer_list
+                        .visible
+                        .iter()
+                        .map(|index| peers[*index].key)
+                        .collect()
+                },
+            );
+            let count = peer_list.visible.len();
+            let roles = self
+                .selected_network
+                .as_ref()
+                .and_then(|network| self.snapshot.roles.get(network));
+            let plan = peer_rows.plan(ui, self.peer_menu.as_ref(), |index| {
+                let peer = &self.snapshot.peers[&peer_list.peers[peer_list.visible[index]].key];
+                let role = roles.and_then(|roles| roles.get(&peer.peer.rid).copied());
+                let ping = self.pings.get(&peer.peer.rid);
+                peer_row_kind(peer, ping, role, &self.settings, index + 1 < count)
+            });
+            // Only rows in view are built; the others keep their measured space.
+            let mut open_menu = None;
+            peer_rows.show(ui, egui::Id::new("peer-rows"), plan, |ui, index| {
+                let display = &peer_list.peers[peer_list.visible[index]];
                 let peer = &self.snapshot.peers[&display.key];
                 let role = self.selected_network.as_ref().and_then(|network| {
                     self.snapshot
@@ -2116,217 +2403,194 @@ impl App {
                         .get(&peer.peer.rid)
                         .copied()
                 });
-                let own_role = self.selected_network.as_ref().and_then(|network| {
-                    let (rid, _) = self.identity.as_ref()?;
-                    self.snapshot.roles.get(network)?.get(rid).copied()
-                });
-                let separator = index + 1 < peer_list.visible.len();
-                if let Some(row) = peer_rows.rows.get(&display.key).filter(|row| {
-                    row.matches(
-                        peer,
-                        self.pings.get(&peer.peer.rid),
-                        role,
-                        own_role,
-                        separator,
-                    )
-                }) {
-                    let size = Vec2::new(ui.available_width(), row.height);
-                    let rect = egui::Rect::from_min_size(ui.next_widget_position(), size);
-                    if !keep_menus_alive && !ui.is_rect_visible(rect) {
-                        // Same allocation and spacing as push_id, with no
-                        // widgets, text layout, or actions for an offscreen row.
-                        ui.allocate_space(size);
-                        continue;
-                    }
-                }
-                let response = ui.push_id(peer.peer.rid, |ui| {
-                    ui.horizontal(|ui| {
-                        let color = peer_color(&peer.status);
-                        dot(ui, color);
-                        let width = (ui.available_width() - 330.).max(100.);
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(
-                                width,
-                                if self.settings.show_internal_ids {
-                                    58.
-                                } else {
-                                    43.
-                                },
-                            ),
-                            egui::Layout::top_down(Align::LEFT),
-                            |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&peer.peer.name).size(13.).strong(),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(&peer.peer.name);
-                                ui.label(
-                                    RichText::new(&display.address)
-                                        .monospace()
-                                        .size(11.)
-                                        .color(MUTED),
-                                );
-                                if self.settings.show_internal_ids {
-                                    ui.label(
-                                        RichText::new(format!("RID {}", peer.peer.rid))
-                                            .monospace()
-                                            .size(10.)
-                                            .color(MUTED),
-                                    );
-                                }
+                let separator = index + 1 < count;
+                ui.horizontal(|ui| {
+                    let color = peer_color(&peer.status);
+                    dot(ui, color);
+                    let width = (ui.available_width() - 330.).max(100.);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(
+                            width,
+                            if self.settings.show_internal_ids {
+                                58.
+                            } else {
+                                43.
                             },
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            let rid = peer.peer.rid;
-                            let pending =
-                                matches!(self.pings.get(&rid), Some(PingState::Pending { .. }));
-                            if ui
-                                .add_enabled(
-                                    can_ping && peer.status == PeerState::Connected && !pending,
-                                    egui::Button::new(language.text("Test RTT")),
+                        ),
+                        egui::Layout::top_down(Align::LEFT),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&peer.peer.name).size(13.5).color(strong()),
                                 )
-                                .clicked()
-                            {
-                                self.next_ping_id = self.next_ping_id.wrapping_add(1);
-                                let id = self.next_ping_id;
-                                self.pings.insert(
-                                    rid,
-                                    PingState::Pending {
-                                        id,
-                                        started: Instant::now(),
-                                    },
+                                .truncate(),
+                            )
+                            .on_hover_text(&peer.peer.name);
+                            ui.label(
+                                RichText::new(&display.address)
+                                    .monospace()
+                                    .size(11.)
+                                    .color(muted()),
+                            );
+                            if self.settings.show_internal_ids {
+                                ui.label(
+                                    RichText::new(format!("RID {}", peer.peer.rid))
+                                        .monospace()
+                                        .size(10.)
+                                        .color(muted()),
                                 );
-                                self.backend.send(Action::Engine(Command::Tagged {
-                                    id,
-                                    command: Box::new(Command::Ping { peer: rid }),
-                                }));
                             }
-                            match self.pings.get(&rid) {
-                                Some(PingState::Pending { .. }) => {
-                                    ui.spinner();
-                                }
-                                Some(PingState::Measured(ms)) => {
-                                    ui.label(
+                        },
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        let rid = peer.peer.rid;
+                        let pending =
+                            matches!(self.pings.get(&rid), Some(PingState::Pending { .. }));
+                        if ui
+                            .add_enabled(
+                                can_ping && peer.status == PeerState::Connected && !pending,
+                                egui::Button::new(
+                                    RichText::new(language.text("Test RTT")).size(12.),
+                                )
+                                .small(),
+                            )
+                            .clicked()
+                        {
+                            self.next_ping_id = self.next_ping_id.wrapping_add(1);
+                            let id = self.next_ping_id;
+                            self.pings.insert(
+                                rid,
+                                PingState::Pending {
+                                    id,
+                                    started: Instant::now(),
+                                },
+                            );
+                            self.backend.send(Action::Engine(Command::Tagged {
+                                id,
+                                command: Box::new(Command::Ping { peer: rid }),
+                            }));
+                        }
+                        match self.pings.get(&rid) {
+                            Some(PingState::Pending { .. }) => {
+                                spinner(ui);
+                            }
+                            Some(PingState::Measured(ms)) => {
+                                ui.label(
+                                    RichText::new(
                                         language
                                             .format("RTT: {ms} ms", &[("ms", &format!("{ms:.1}"))]),
-                                    );
-                                }
-                                _ => {}
-                            }
-                            if let Some(network) = &self.selected_network {
-                                if own_role == Some(2) {
-                                    ui.add_enabled_ui(can_manage, |ui| {
-                                        ui.menu_button(language.text("Manage"), |ui| {
-                                            let role_action = match role {
-                                                Some(2) => Some(MemberAction::RevokeAdmin),
-                                                Some(1) => Some(MemberAction::GrantAdmin),
-                                                _ => None,
-                                            };
-                                            for action in
-                                                role_action.into_iter().chain([MemberAction::Kick])
-                                            {
-                                                if ui
-                                                    .button(language.text(action.label()))
-                                                    .clicked()
-                                                {
-                                                    self.member_confirmation =
-                                                        Some(MemberConfirmation {
-                                                            network: network.clone(),
-                                                            network_name: self
-                                                                .snapshot
-                                                                .networks
-                                                                .iter()
-                                                                .find(|n| &n.network_id == network)
-                                                                .map(|n| n.name.clone())
-                                                                .unwrap_or_default(),
-                                                            member: peer.peer.rid,
-                                                            member_name: peer.peer.name.clone(),
-                                                            action,
-                                                        });
-                                                    ui.close();
-                                                }
-                                            }
-                                        });
-                                    });
-                                }
-                                badge(
-                                    ui,
-                                    role_label(role, language),
-                                    if role == Some(2) { MINT } else { MUTED },
+                                    )
+                                    .size(12.)
+                                    .color(text()),
                                 );
+                            }
+                            _ => {}
+                        }
+                        if let Some(network) = &self.selected_network {
+                            if own_role == Some(2) {
+                                let menu = ui.add_enabled_ui(can_manage, |ui| {
+                                    ui.menu_button(language.text("Manage"), |ui| {
+                                        let role_action = match role {
+                                            Some(2) => Some(MemberAction::RevokeAdmin),
+                                            Some(1) => Some(MemberAction::GrantAdmin),
+                                            _ => None,
+                                        };
+                                        for action in
+                                            role_action.into_iter().chain([MemberAction::Kick])
+                                        {
+                                            if ui.button(language.text(action.label())).clicked() {
+                                                self.member_confirmation =
+                                                    Some(MemberConfirmation {
+                                                        network: network.clone(),
+                                                        network_name: self
+                                                            .snapshot
+                                                            .networks
+                                                            .iter()
+                                                            .find(|n| &n.network_id == network)
+                                                            .map(|n| n.name.clone())
+                                                            .unwrap_or_default(),
+                                                        member: peer.peer.rid,
+                                                        member_name: peer.peer.name.clone(),
+                                                        action,
+                                                    });
+                                                ui.close();
+                                            }
+                                        }
+                                    })
+                                    .inner
+                                    .is_some()
+                                });
+                                if menu.inner {
+                                    open_menu = Some(display.key);
+                                }
                             }
                             badge(
                                 ui,
-                                language.text(
-                                    peer.transport
-                                        .map(|p| p.label())
-                                        .unwrap_or(peer.status.label()),
-                                ),
-                                color,
-                            )
-                            .on_hover_text(language.message(
-                                if peer.detail.is_empty() {
-                                    peer.status.label()
-                                } else {
-                                    &peer.detail
-                                },
-                            ));
-                        });
-                    });
-                    if let Some(PingState::Failed(error)) = self.pings.get(&peer.peer.rid) {
-                        ui.label(
-                            RichText::new(language.message(error))
-                                .size(11.)
-                                .color(AMBER),
-                        );
-                    }
-                    if self.settings.show_peer_details && !peer.detail.is_empty() {
-                        ui.label(
-                            RichText::new(language.message(&peer.detail))
-                                .size(11.)
-                                .color(MUTED),
-                        );
-                    }
-                    if self.settings.show_peer_ip && peer.status == PeerState::Connected {
-                        if let (Some(path), Some(endpoint)) = (peer.transport, peer.endpoint) {
-                            let address = if path == openrad::peer::TransportPath::Relay {
-                                language
-                                    .format("Relay IP: {ip}", &[("ip", &endpoint.ip().to_string())])
-                            } else {
-                                language.format(
-                                    "Peer IP: {endpoint}",
-                                    &[("endpoint", &endpoint.to_string())],
-                                )
-                            };
-                            ui.label(RichText::new(address).monospace().size(11.).color(MUTED));
+                                role_label(role, language),
+                                if role == Some(2) { accent() } else { muted() },
+                            );
                         }
-                    }
-                    if separator {
-                        ui.separator();
-                    }
+                        badge(
+                            ui,
+                            language.text(
+                                peer.transport
+                                    .map(|p| p.label())
+                                    .unwrap_or(peer.status.label()),
+                            ),
+                            // The dot already shows a healthy state; keep the
+                            // transport tag quiet and color only problems.
+                            if peer.status == PeerState::Connected {
+                                muted()
+                            } else {
+                                color
+                            },
+                        )
+                        .on_hover_text(language.message(
+                            if peer.detail.is_empty() {
+                                peer.status.label()
+                            } else {
+                                &peer.detail
+                            },
+                        ));
+                    });
                 });
-                let height = response.response.rect.height();
-                let ping = self.pings.get(&peer.peer.rid);
-                if let Some(row) = peer_rows
-                    .rows
-                    .get_mut(&display.key)
-                    .filter(|row| row.matches(peer, ping, role, own_role, separator))
-                {
-                    row.height = height;
-                } else {
-                    peer_rows.rows.insert(
-                        display.key,
-                        CachedPeerRow::new(height, peer, ping, role, own_role, separator),
+                if let Some(PingState::Failed(error)) = self.pings.get(&peer.peer.rid) {
+                    ui.label(
+                        RichText::new(language.message(error))
+                            .size(11.)
+                            .color(amber()),
                     );
                 }
-            }
+                if self.settings.show_peer_details && !peer.detail.is_empty() {
+                    ui.label(
+                        RichText::new(language.message(&peer.detail))
+                            .size(11.)
+                            .color(muted()),
+                    );
+                }
+                if self.settings.show_peer_ip && peer.status == PeerState::Connected {
+                    if let (Some(path), Some(endpoint)) = (peer.transport, peer.endpoint) {
+                        let address = if path == openrad::peer::TransportPath::Relay {
+                            language.format("Relay IP: {ip}", &[("ip", &endpoint.ip().to_string())])
+                        } else {
+                            language.format(
+                                "Peer IP: {endpoint}",
+                                &[("endpoint", &endpoint.to_string())],
+                            )
+                        };
+                        ui.label(RichText::new(address).monospace().size(11.).color(muted()));
+                    }
+                }
+                if separator {
+                    ui.separator();
+                }
+            });
+            self.peer_menu = open_menu;
         });
         self.peer_list = peer_list;
         self.peer_rows = peer_rows;
         ui.add_space(12.);
-        ui.label(RichText::new(language.text("Refused means the remote service declined the connection. Offline members are kept in your network list.")).size(11.).color(MUTED));
+        ui.label(RichText::new(language.text("Refused means the remote service declined the connection. Offline members are kept in your network list.")).size(11.).color(muted()));
         if self.settings.show_recent_activity && !self.activity.is_empty() {
             ui.add_space(15.);
             egui::CollapsingHeader::new(language.text("Recent activity")).show(ui, |ui| {
@@ -2335,46 +2599,28 @@ impl App {
                     .iter()
                     .take(self.settings.recent_activity_count)
                 {
-                    ui.label(RichText::new(event.text(language)).size(11.).color(MUTED));
+                    ui.label(RichText::new(event.text(language)).size(11.).color(muted()));
                 }
             });
         }
     }
     fn discover(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.label(
-            RichText::new(language.text("Find your people."))
-                .size(29.)
-                .strong(),
+        page_title(
+            ui,
+            language.text("Find your people."),
+            language.text("Explore public networks and bring everyone onto the same LAN."),
         );
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language.text("Explore public networks and bring everyone onto the same LAN."),
-            )
-            .color(MUTED),
-        );
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(language.text("Auto join")).clicked() {
-                self.page = Page::AutoJoin;
-            }
-            ui.label(
-                RichText::new(language.format(
-                    "{count} networks selected",
-                    &[("count", &self.join_draft.len().to_string())],
-                ))
-                .size(11.)
-                .color(MUTED),
-            );
-        });
-        ui.add_space(24.);
         let available = self.connected();
-        card().inner_margin(18).show(ui, |ui| {
+        card().inner_margin(16).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 let response = ui.add_enabled(
                     available,
                     egui::TextEdit::singleline(&mut self.query)
                         .hint_text(language.text("Search games, communities, or a network name"))
+                        .margin(Vec2::new(12., 9.))
+                        .font(FontId::proportional(15.))
                         .desired_width((ui.available_width() - 28.).max(180.)),
                 );
                 if self.focus_search {
@@ -2386,14 +2632,30 @@ impl App {
                     self.cursor = 0;
                 }
                 if self.search_in_flight.is_some() {
-                    ui.spinner();
+                    spinner(ui);
                 }
             });
-            ui.label(
-                RichText::new(language.text("Results update as you type."))
-                    .size(11.)
-                    .color(MUTED),
-            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(language.text("Results update as you type."))
+                        .size(11.)
+                        .color(muted()),
+                );
+                ui.label(RichText::new("·").size(11.).color(muted()));
+                if ui
+                    .link(
+                        RichText::new(language.format(
+                            "{count} networks selected",
+                            &[("count", &self.join_draft.len().to_string())],
+                        ))
+                        .size(11.),
+                    )
+                    .on_hover_text(language.text("Auto join"))
+                    .clicked()
+                {
+                    self.page = Page::AutoJoin;
+                }
+            });
         });
         if self.connected()
             && !self.has_searched
@@ -2403,20 +2665,18 @@ impl App {
             self.search_due = Some(Instant::now() + SEARCH_DEBOUNCE);
         }
         if let Some(due) = self.search_due {
-            if Instant::now() >= due
-                && !self.mutation_busy()
-                && self.search_in_flight.is_none()
-                && self.connected()
-            {
+            let now = Instant::now();
+            if now < due {
+                ui.ctx().request_repaint_after(due - now);
+            } else if !self.mutation_busy() && self.search_in_flight.is_none() && self.connected() {
                 self.command(Command::Search {
                     query: self.query.trim().to_owned(),
                     cursor: 0,
                 });
             } else {
-                ui.ctx().request_repaint_after(
-                    due.saturating_duration_since(Instant::now())
-                        .max(Duration::from_millis(20)),
-                );
+                // Search results, operation results and phase changes wake the
+                // UI; this only bounds the wait, without polling every frame.
+                ui.ctx().request_repaint_after(SEARCH_RETRY);
             }
         }
         ui.add_space(18.);
@@ -2424,7 +2684,7 @@ impl App {
             self.banner(
                 ui,
                 language.text("Connect your device to search and join public networks."),
-                AMBER,
+                amber(),
             );
             if ui
                 .add_enabled(
@@ -2440,7 +2700,8 @@ impl App {
         if !self.has_searched && self.search_in_flight.is_none() {
             ui.label(
                 RichText::new(language.text("Start with a name, or browse what’s available."))
-                    .size(18.),
+                    .size(16.)
+                    .color(muted()),
             );
         } else if self.catalog.is_empty()
             && self.search_in_flight.is_none()
@@ -2448,82 +2709,90 @@ impl App {
         {
             ui.label(
                 RichText::new(language.text("No networks found"))
-                    .size(21.)
-                    .strong(),
+                    .size(18.)
+                    .color(strong()),
             );
             ui.label(
                 RichText::new(language.text("Try a shorter name or a different search."))
-                    .color(MUTED),
+                    .color(muted()),
             );
         } else {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(language.message(&format!("{} networks", self.catalog.len())))
                         .size(13.)
-                        .color(MUTED),
+                        .color(muted()),
                 );
                 if self.busy {
-                    ui.spinner();
-                    ui.label(RichText::new(language.text("Working…")).color(MUTED));
+                    spinner(ui);
+                    ui.label(RichText::new(language.text("Working…")).color(muted()));
                 }
             });
             ui.add_space(12.);
             let filter = self.query.trim().to_lowercase();
             self.network_list
                 .refresh(&self.snapshot, &self.network_preferences.favorites);
-            for display in self
-                .public_networks()
-                .iter()
-                .filter(|display| display.normalized_name.contains(&filter))
-            {
-                let network = &display.network;
+            let public = self.public_networks();
+            let (revision, matching) = self.public_list.matching(&filter);
+            let mut rows = std::mem::take(&mut self.catalog_rows);
+            rows.update(revision, RowLayout::new(ui, language, [false; 4]), || {
+                matching
+                    .iter()
+                    .map(|index| public[*index].network.name.clone())
+                    .collect()
+            });
+            let joined_names = &self.network_list.joined_names;
+            let plan = rows.plan(ui, None, |index| {
+                u64::from(joined_names.contains(&public[matching[index]].network.name))
+            });
+            rows.show(ui, egui::Id::new("catalog-rows"), plan, |ui, index| {
+                let network = &public[matching[index]].network;
                 let joined = self.network_list.joined_names.contains(&network.name);
-                ui.push_id(&network.name, |ui| {
-                    card().inner_margin(18).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            self.favorite_button(ui, &network.name, false);
-                            let width = (ui.available_width() - 110.).max(150.);
-                            ui.allocate_ui_with_layout(
-                                Vec2::new(width, 45.),
-                                egui::Layout::top_down(Align::LEFT),
-                                |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&network.name).size(16.).strong(),
-                                        )
-                                        .truncate(),
+                card().inner_margin(14).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        self.favorite_button(ui, &network.name, false);
+                        let width = (ui.available_width() - 110.).max(150.);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(width, 45.),
+                            egui::Layout::top_down(Align::LEFT),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&network.name).size(15.).color(strong()),
                                     )
-                                    .on_hover_text(&network.name);
-                                    ui.add_space(5.);
-                                    ui.label(
-                                        RichText::new(language.message(&format!(
-                                            "Public network  ·  {} members reported",
-                                            network.reported_count
-                                        )))
-                                        .size(11.)
-                                        .color(MUTED),
-                                    );
-                                },
-                            );
-                            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                                if joined {
-                                    badge(ui, language.text("Joined"), MINT);
-                                } else if ui
-                                    .add_enabled(
-                                        !self.mutation_busy(),
-                                        primary(language.text("Join network")),
-                                    )
-                                    .clicked()
-                                {
-                                    self.command(Command::Join(network.name.clone()));
-                                }
-                            });
+                                    .truncate(),
+                                )
+                                .on_hover_text(&network.name);
+                                ui.add_space(3.);
+                                ui.label(
+                                    RichText::new(language.message(&format!(
+                                        "Public network  ·  {} members reported",
+                                        network.reported_count
+                                    )))
+                                    .size(11.)
+                                    .color(muted()),
+                                );
+                            },
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if joined {
+                                badge(ui, language.text("Joined"), success());
+                            } else if ui
+                                .add_enabled(
+                                    !self.mutation_busy(),
+                                    primary(language.text("Join network")),
+                                )
+                                .clicked()
+                            {
+                                self.command(Command::Join(network.name.clone()));
+                            }
                         });
-                        self.join_selection_button(ui, &network.name, false);
                     });
-                    ui.add_space(9.);
+                    self.join_selection_button(ui, &network.name, false);
                 });
-            }
+                ui.add_space(8.);
+            });
+            self.catalog_rows = rows;
             if self.cursor != 0
                 && self.catalog_query == self.query.trim()
                 && self.search_in_flight.is_none()
@@ -2545,20 +2814,14 @@ impl App {
     fn auto_join(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
         let active = self.join_run.active();
-        ui.label(RichText::new(language.text("Auto join")).size(29.).strong());
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language
-                    .text("Select networks and join them together, with 50 ms between requests."),
-            )
-            .color(MUTED),
+        page_title(
+            ui,
+            language.text("Auto join"),
+            language.text("Select networks and join them together, with 50 ms between requests."),
         );
-        ui.add_space(18.);
-        card().inner_margin(18).show(ui, |ui| {
+        card().inner_margin(20).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Saved configurations")).size(17.).strong());
-            ui.add_space(10.);
+            section_title(ui, language.text("Saved configurations"));
             ui.add_enabled_ui(!active, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     egui::ComboBox::from_id_salt("join-configuration")
@@ -2587,6 +2850,7 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.join_config_name)
                         .hint_text(language.text("Configuration name"))
+                        .margin(Vec2::new(8., 6.))
                         .char_limit(80).desired_width(240.));
                     if ui.add_enabled(!self.join_draft.is_empty() && self.network_preferences_error.is_none(), egui::Button::new(language.text("Save configuration"))).clicked() {
                         if let Err(error) = self.save_join_configuration() { self.notify_error(error); }
@@ -2594,20 +2858,16 @@ impl App {
                 });
             });
             ui.add_space(8.);
-            ui.label(RichText::new(language.text("Saved lists stay available after changing identity. Private passwords are requested again and never saved.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Saved lists stay available after changing identity. Private passwords are requested again and never saved.")).size(11.).color(muted()));
         });
-        ui.add_space(18.);
-        ui.label(
-            RichText::new(language.text("Select networks"))
-                .size(19.)
-                .strong(),
-        );
-        ui.add_space(8.);
+        ui.add_space(24.);
+        section_title(ui, language.text("Select networks"));
         ui.add_enabled_ui(!active, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.join_new_name)
                         .hint_text(language.text("Exact network name"))
+                        .margin(Vec2::new(8., 6.))
                         .char_limit(255)
                         .desired_width(240.),
                 );
@@ -2667,17 +2927,17 @@ impl App {
                     "{count} networks selected",
                     &[("count", &self.join_draft.len().to_string())],
                 ))
-                .color(MUTED),
+                .color(muted()),
             );
             if active {
-                ui.spinner();
+                spinner(ui);
             }
         });
         if !self.connected() {
             self.banner(
                 ui,
                 language.text("Connect your device to join the selected networks."),
-                AMBER,
+                amber(),
             );
             if ui
                 .add_enabled(
@@ -2696,101 +2956,127 @@ impl App {
                 RichText::new(language.text(
                     "Browse public networks or add an exact private network name to get started.",
                 ))
-                .color(MUTED),
+                .color(muted()),
             );
         }
-        for network in available.iter() {
+        let mut rows = std::mem::take(&mut self.auto_join_rows);
+        rows.update(
+            self.auto_join_list.revision,
+            RowLayout::new(ui, language, [false; 4]),
+            || {
+                available
+                    .iter()
+                    .map(|network| network.name.clone())
+                    .collect()
+            },
+        );
+        let run = &self.join_run;
+        let plan = rows.plan(ui, None, |index| {
+            let network = &available[index];
+            let name = network.name.as_str();
+            let password = network.selected && network.private && !network.joined && !active;
+            let status = run.results.contains_key(name)
+                || run.pending.values().any(|pending| pending == name)
+                || (active && network.selected);
+            u64::from(network.selected)
+                | u64::from(password) << 1
+                | u64::from(network.joined) << 2
+                | u64::from(status) << 3
+        });
+        rows.show(ui, egui::Id::new("auto-join-rows"), plan, |ui, index| {
+            let network = &available[index];
             let name = network.name.as_str();
             let mut private = network.private;
             let mut selected = network.selected;
             let joined = network.joined;
-            ui.push_id(name, |ui| {
-                card().inner_margin(14).show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .add_enabled(!active, egui::Checkbox::new(&mut selected, name))
-                            .changed()
-                        {
-                            self.select_join_network(
-                                JoinNetwork {
-                                    name: name.to_owned(),
-                                    private,
-                                },
-                                selected,
-                            );
-                        }
-                        self.favorite_button(ui, name, private);
-                        if joined {
-                            let pending = self.membership_pending(name);
-                            badge(
-                                ui,
-                                language.text(if pending {
-                                    "Pending approval"
-                                } else {
-                                    "Joined"
-                                }),
-                                if pending { AMBER } else { MINT },
-                            );
-                        }
-                    });
-                    if selected {
-                        if ui
-                            .add_enabled(
-                                !active,
-                                egui::Checkbox::new(&mut private, language.text("Private network")),
-                            )
-                            .changed()
-                        {
-                            if let Some(network) = self
-                                .join_draft
-                                .iter_mut()
-                                .find(|network| network.name == name)
-                            {
-                                network.private = private;
-                            }
-                            self.join_passwords.remove(name);
-                        }
-                        if private && !joined && !active {
-                            let label = ui.label(language.text("Password"));
-                            let password = self.join_passwords.entry(name.to_owned()).or_default();
-                            ui.add(
-                                egui::TextEdit::singleline(&mut **password)
-                                    .password(true)
-                                    .char_limit(256)
-                                    .desired_width(f32::INFINITY),
-                            )
-                            .labelled_by(label.id);
-                        }
-                    }
-                    if let Some((message, error)) = self.join_run.results.get(name) {
-                        ui.label(
-                            RichText::new(language.message(message))
-                                .size(12.)
-                                .color(if *error { RED } else { MINT }),
-                        );
-                    } else if self
-                        .join_run
-                        .pending
-                        .values()
-                        .any(|pending| pending.as_str() == name)
+            card().inner_margin(14).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(!active, egui::Checkbox::new(&mut selected, name))
+                        .changed()
                     {
-                        ui.label(
-                            RichText::new(language.text("Joining…"))
-                                .size(12.)
-                                .color(BLUE),
+                        self.select_join_network(
+                            JoinNetwork {
+                                name: name.to_owned(),
+                                private,
+                            },
+                            selected,
                         );
-                    } else if active && selected {
-                        ui.label(
-                            RichText::new(language.text("Waiting to join…"))
-                                .size(12.)
-                                .color(MUTED),
+                    }
+                    self.favorite_button(ui, name, private);
+                    if joined {
+                        let pending = self.membership_pending(name);
+                        badge(
+                            ui,
+                            language.text(if pending {
+                                "Pending approval"
+                            } else {
+                                "Joined"
+                            }),
+                            if pending { amber() } else { success() },
                         );
                     }
                 });
+                if selected {
+                    if ui
+                        .add_enabled(
+                            !active,
+                            egui::Checkbox::new(&mut private, language.text("Private network")),
+                        )
+                        .changed()
+                    {
+                        if let Some(network) = self
+                            .join_draft
+                            .iter_mut()
+                            .find(|network| network.name == name)
+                        {
+                            network.private = private;
+                        }
+                        self.join_passwords.remove(name);
+                    }
+                    if private && !joined && !active {
+                        let label = ui.label(language.text("Password"));
+                        let password = self.join_passwords.entry(name.to_owned()).or_default();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut **password)
+                                .password(true)
+                                .margin(Vec2::new(8., 6.))
+                                .char_limit(256)
+                                .desired_width(f32::INFINITY),
+                        )
+                        .labelled_by(label.id);
+                    }
+                }
+                if let Some((message, error)) = self.join_run.results.get(name) {
+                    ui.label(
+                        RichText::new(language.message(message))
+                            .size(12.)
+                            .color(if *error { red() } else { success() }),
+                    );
+                } else if self
+                    .join_run
+                    .pending
+                    .values()
+                    .any(|pending| pending.as_str() == name)
+                {
+                    ui.label(
+                        RichText::new(language.text("Joining…"))
+                            .size(12.)
+                            .color(blue()),
+                    );
+                } else if active && selected {
+                    ui.label(
+                        RichText::new(language.text("Waiting to join…"))
+                            .size(12.)
+                            .color(muted()),
+                    );
+                }
             });
-            ui.add_space(8.);
-        }
+            // The same 8-point gap between cards as outside a row scope.
+            ui.add_space(8. - ui.spacing().item_spacing.y);
+        });
+        self.auto_join_rows = rows;
     }
     fn broadcast_settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -2798,8 +3084,7 @@ impl App {
             .refresh(&self.snapshot, None, "", &self.settings);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Outgoing broadcasts")).size(18.).strong());
-            ui.add_space(8.);
+            section_title(ui, language.text("Outgoing broadcasts"));
             let summary = match &self.broadcast_selection {
                 runtime::BroadcastSelection::All => language.text("Outgoing broadcasts: all peers").to_owned(),
                 runtime::BroadcastSelection::Include(peers) => language.format("Outgoing broadcasts: {count} selected peers", &[("count", &peers.len().to_string())]),
@@ -2838,10 +3123,11 @@ impl App {
                     }
                 });
             }
-            ui.label(RichText::new(language.text("Select peers above or enter RIDs, exact names or VPN IPs below, one per line.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Select peers above or enter RIDs, exact names or VPN IPs below, one per line.")).size(11.).color(muted()));
             self.broadcast_dirty |= ui.add(egui::TextEdit::multiline(&mut self.broadcast_input)
                 .hint_text(language.text("Peer RID, name or VPN IP"))
                 .char_limit(32768).desired_rows(2)
+                .margin(Vec2::new(8., 6.))
                 .desired_width(ui.available_width())).changed();
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!self.broadcast_selected.is_empty() || !self.broadcast_input.trim().is_empty(), primary(language.text("Apply broadcast selection"))).clicked() {
@@ -2855,22 +3141,22 @@ impl App {
                     self.backend.send(Action::BroadcastPeers { targets: Vec::new(), exclude: false });
                 }
             });
-            ui.label(RichText::new(language.text("Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Saved when applied, without reconnecting. Incoming broadcasts remain enabled. Excluded peers receive no outgoing broadcasts, including ARP.")).size(11.).color(muted()));
         });
     }
     fn stealth_block_settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Stealth block")).size(18.).strong());
-            ui.add_space(8.);
-            ui.label(RichText::new(language.text("Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.")).size(11.).color(MUTED));
+            section_title(ui, language.text("Stealth block"));
+            ui.label(RichText::new(language.text("Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.")).size(11.).color(muted()));
             ui.add_space(8.);
             let address = self.block_input.trim().parse::<std::net::Ipv4Addr>().ok()
                 .filter(|address| runtime::validate_block_address(*address).is_ok());
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.block_input)
                     .hint_text(language.text("VPN IP, e.g. 26.1.2.3"))
+                    .margin(Vec2::new(8., 6.))
                     .char_limit(15).desired_width(160.));
                 egui::ComboBox::from_id_salt("block_direction")
                     .selected_text(language.text(self.block_direction.label()))
@@ -2887,11 +3173,11 @@ impl App {
                 }
             });
             if address.is_none() && !self.block_input.trim().is_empty() {
-                ui.label(RichText::new(language.text("Enter a peer's VPN IPv4 address")).size(11.).color(RED));
+                ui.label(RichText::new(language.text("Enter a peer's VPN IPv4 address")).size(11.).color(red()));
             }
             ui.add_space(6.);
             if self.blocked.is_empty() {
-                ui.label(RichText::new(language.text("No blocked addresses.")).color(MUTED));
+                ui.label(RichText::new(language.text("No blocked addresses.")).color(muted()));
             } else {
                 // Rows are virtualized; only visible rows look up a peer name.
                 let rows: Vec<_> = self.blocked.iter().map(|(address, direction)| (*address, *direction)).collect();
@@ -2905,7 +3191,7 @@ impl App {
                                     .map(|view| view.peer.name.as_str());
                                 ui.label(RichText::new(address.to_string()).monospace());
                                 if let Some(name) = name {
-                                    ui.label(RichText::new(name).color(MUTED));
+                                    ui.label(RichText::new(name).color(muted()));
                                 }
                                 egui::ComboBox::from_id_salt("direction")
                                     .selected_text(language.text(selected.label()))
@@ -2924,30 +3210,20 @@ impl App {
                         }
                     });
             }
-            ui.label(RichText::new(language.text("Saved and applied immediately, without reconnecting.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Saved and applied immediately, without reconnecting.")).size(11.).color(muted()));
         });
     }
     /// Render the Settings page, including Windows-only uninstall confirmation.
     fn settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.label(
-            RichText::new(language.text("Make yourself at home."))
-                .size(28.)
-                .strong(),
+        page_title(
+            ui,
+            language.text("Make yourself at home."),
+            language.text("Tune connection behavior, the workspace, and developer diagnostics."),
         );
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language
-                    .text("Tune connection behavior, the workspace, and developer diagnostics."),
-            )
-            .color(MUTED),
-        );
-        ui.add_space(25.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            let label = ui.label(RichText::new(language.text("Language")).size(18.).strong());
-            ui.add_space(12.);
+            let label = section_title(ui, language.text("Language"));
             egui::ComboBox::from_id_salt("language")
                 .selected_text(self.settings.language.label(language))
                 .show_ui(ui, |ui| {
@@ -2967,18 +3243,31 @@ impl App {
                     &[("name", self.system_language.localized_name(language))],
                 ))
                 .size(11.)
-                .color(MUTED),
+                .color(muted()),
             );
         });
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Connection")).size(18.).strong());
-            ui.add_space(12.);
+            section_title(ui, language.text("Connection"));
             ui.checkbox(
                 &mut self.settings.auto_connect,
                 language.text("Connect when OpenRad launches"),
             );
+            #[cfg(windows)]
+            {
+                ui.checkbox(
+                    &mut self.settings.start_with_windows,
+                    language.text("Start VPN with Windows (without opening the interface)"),
+                );
+                ui.label(
+                    RichText::new(language.text(
+                        "Starts only the VPN in the background after Windows sign-in. Requires a saved identity and Windows Task Scheduler. Closing this window keeps the connection active."
+                    ))
+                    .size(11.)
+                    .color(muted()),
+                );
+            }
             ui.checkbox(
                 &mut self.settings.auto_reconnect,
                 language.text("Reconnect after a connection failure"),
@@ -2993,22 +3282,21 @@ impl App {
                     ui.add(egui::Slider::new(&mut self.settings.reconnect_base_delay_seconds, 1..=30).suffix(" s"));
                 });
             });
-            ui.label(RichText::new(language.text("Each retry waits twice as long, up to five minutes. Changes apply to the next failure.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Each retry waits twice as long, up to five minutes. Changes apply to the next failure.")).size(11.).color(muted()));
             ui.add_space(14.);
             ui.checkbox(&mut self.settings.force_relay, language.text("Force Relay"));
-            ui.label(RichText::new(language.text("Use relays only. Saving reconnects the session without direct UDP or TCP attempts.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Use relays only. Saving reconnects the session without direct UDP or TCP attempts.")).size(11.).color(muted()));
             ui.add_space(14.);
             ui.label(language.text("Device name"));
-            ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).desired_width(300.));
-            ui.label(RichText::new(language.text("Save preferences to change the name peers see. Your identity and memberships are preserved.")).size(11.).color(MUTED));
+            ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).margin(Vec2::new(8., 6.)).desired_width(300.));
+            ui.label(RichText::new(language.text("Save preferences to change the name peers see. Your identity and memberships are preserved.")).size(11.).color(muted()));
         });
         ui.add_space(16.);
         self.broadcast_settings(ui);
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Workspace")).size(18.).strong());
-            ui.add_space(12.);
+            section_title(ui, language.text("Workspace"));
             ui.label(language.text("Open to"));
             egui::ComboBox::from_id_salt("start_page")
                 .selected_text(match self.settings.start_page {
@@ -3030,7 +3318,33 @@ impl App {
             ui.label(
                 RichText::new(language.text("Used the next time OpenRad starts."))
                     .size(11.)
-                    .color(MUTED),
+                    .color(muted()),
+            );
+            ui.add_space(12.);
+            ui.label(language.text("Theme"));
+            egui::ComboBox::from_id_salt("appearance_theme")
+                .selected_text(language.text(match self.settings.theme {
+                    ThemePreference::Dark => "Dark",
+                    ThemePreference::Light => "Light",
+                }))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.settings.theme,
+                        ThemePreference::Dark,
+                        language.text("Dark"),
+                    );
+                    ui.selectable_value(
+                        &mut self.settings.theme,
+                        ThemePreference::Light,
+                        language.text("Light"),
+                    );
+                });
+            ui.label(
+                RichText::new(
+                    language.text("The change applies immediately. Save to keep your preference."),
+                )
+                .size(11.)
+                .color(muted()),
             );
             ui.add_space(12.);
             ui.label(language.text("Interface scale"));
@@ -3100,14 +3414,9 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(language.text("Developer view"))
-                    .size(18.)
-                    .strong(),
-            );
-            ui.add_space(12.);
+            section_title(ui, language.text("Developer view"));
             ui.checkbox(&mut self.settings.show_peer_ip, language.text("Peer IP"));
-            ui.label(RichText::new(language.text("Show the relay IP or the direct peer IP and port under each connected peer for debugging.")).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text("Show the relay IP or the direct peer IP and port under each connected peer for debugging.")).size(11.).color(muted()));
             ui.checkbox(
                 &mut self.settings.show_peer_details,
                 language.text("Show peer connection details under each row"),
@@ -3184,6 +3493,7 @@ impl App {
                 if self.identity.is_some() {
                     defaults.node_name = self.settings.node_name.clone();
                 }
+                defaults.onboarding_complete = self.settings.onboarding_complete;
                 self.settings = defaults;
                 ui.ctx().set_zoom_factor(self.settings.scale);
             }
@@ -3193,7 +3503,7 @@ impl App {
                 "Display changes preview immediately. Save preferences to keep them after restart.",
             ))
             .size(11.)
-            .color(MUTED),
+            .color(muted()),
         );
         ui.add_space(16.);
         // Applied immediately, so it sits outside the Save preferences group.
@@ -3201,12 +3511,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(language.text("Private device identity"))
-                    .size(18.)
-                    .strong(),
-            );
-            ui.add_space(12.);
+            section_title(ui, language.text("Private device identity"));
             if let Some((rid, name)) = &self.identity {
                 ui.label(language.format(
                     "{name}  ·  Device {rid}",
@@ -3220,7 +3525,7 @@ impl App {
                     "The desktop and CLI share this identity. It is reused each time you connect.",
                 ))
                 .size(12.)
-                .color(MUTED),
+                .color(muted()),
             );
             ui.add_space(12.);
             let can_reset = self.identity.is_some()
@@ -3237,7 +3542,7 @@ impl App {
             if ui
                 .add_enabled(
                     can_reset,
-                    egui::Button::new(RichText::new(label).color(AMBER)),
+                    egui::Button::new(RichText::new(label).color(amber())),
                 )
                 .clicked()
             {
@@ -3249,12 +3554,15 @@ impl App {
                 }
             }
             ui.add_space(12.);
-            ui.label(RichText::new(language.text("Import an existing OpenRad identity")).strong());
+            ui.label(
+                RichText::new(language.text("Import an existing OpenRad identity")).color(strong()),
+            );
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_path)
                         .hint_text("/path/to/identity.json")
-                        .desired_width((ui.available_width() - 90.).max(160.)),
+                        .margin(Vec2::new(8., 6.))
+                        .desired_width((ui.available_width() - 106.).max(160.)),
                 );
                 if ui
                     .add_enabled(
@@ -3271,19 +3579,21 @@ impl App {
             });
         });
         ui.add_space(16.);
+        self.server_settings(ui);
+        ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" })).size(18.).strong()); ui.add_space(10.);
+            section_title(ui, language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" }));
             ui.label(if self.windows_platform() { "OpenRad · TAP-Windows6 · MTU 1500" } else { "radminvpn0 · Ethernet TAP · MTU 1500" });
-            ui.label(RichText::new(language.text(if self.windows_platform() { "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains." } else { "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running." })).size(12.).color(MUTED));
-            ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup." })).size(12.).color(MUTED));
-            ui.add_space(10.); ui.label(RichText::new(language.text("Windows uses TAP-Windows6 and awaits Windows runtime validation. macOS has no data plane. Each connected peer shows its authenticated transport; relay remains available when direct connection fails.")).size(12.).color(MUTED));
-            ui.add_space(10.); ui.label(RichText::new(language.message(&format!("Settings: {}", self.paths.directory.display()))).size(11.).color(MUTED));
+            ui.label(RichText::new(language.text(if self.windows_platform() { "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains." } else { "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running." })).size(12.).color(muted()));
+            ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup." })).size(12.).color(muted()));
+            ui.add_space(10.); ui.label(RichText::new(language.text("Windows uses TAP-Windows6 and awaits Windows runtime validation. macOS has no data plane. Each connected peer shows its authenticated transport; relay remains available when direct connection fails.")).size(12.).color(muted()));
+            ui.add_space(10.); ui.label(RichText::new(language.message(&format!("Settings: {}", self.paths.directory.display()))).size(11.).color(muted()));
             if ui.button(language.text("Copy profile path")).clicked() {
                 ui.ctx().copy_text(self.paths.directory.display().to_string());
             }
             ui.add_space(10.);
-            ui.label(RichText::new(language.message(&format!("Connection logs: {}", self.paths.directory.join("diagnostics").display()))).size(11.).color(MUTED));
+            ui.label(RichText::new(language.message(&format!("Connection logs: {}", self.paths.directory.join("diagnostics").display()))).size(11.).color(muted()));
             if ui.button(language.text("Copy connection log path")).clicked() {
                 ui.ctx().copy_text(self.paths.directory.join("diagnostics").display().to_string());
             }
@@ -3292,21 +3602,131 @@ impl App {
             }
         });
         ui.add_space(16.);
-        ui.label(RichText::new(language.text("Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate")).size(11.).color(MUTED));
+        ui.label(RichText::new(language.text("Shortcuts: Ctrl+K search · Ctrl+D connect / disconnect · Ctrl+, settings · Tab / Shift+Tab navigate")).size(11.).color(muted()));
         #[cfg(windows)]
         {
             ui.add_space(22.);
             card().inner_margin(22).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(RichText::new(language.text("Uninstall OpenRad")).size(18.).strong().color(RED));
-                ui.add_space(9.);
-                ui.label(RichText::new(language.text("Remove the OpenRad app and its dedicated TAP adapter. Your saved identity, profiles and personal settings will be preserved.")).size(12.).color(MUTED));
+                ui.label(RichText::new(language.text("Uninstall OpenRad")).size(16.).color(red()));
+                ui.add_space(10.);
+                ui.label(RichText::new(language.text("Remove the OpenRad app and its dedicated TAP adapter. Your saved identity, profiles and personal settings will be preserved.")).size(12.).color(muted()));
                 ui.add_space(12.);
-                if ui.add_enabled(!self.closing, egui::Button::new(RichText::new(language.text("Uninstall OpenRad")).color(RED))).clicked() {
+                if ui.add_enabled(!self.closing, egui::Button::new(RichText::new(language.text("Uninstall OpenRad")).color(red()))).clicked() {
                     self.confirm_uninstall = true;
                 }
             });
         }
+    }
+    /// Parse the custom server fields; an empty port means the default port.
+    fn server_choice(&self) -> Result<ServerChoice, &'static str> {
+        let host = self
+            .server_host
+            .trim()
+            .parse::<std::net::Ipv4Addr>()
+            .ok()
+            .filter(|host| !host.is_unspecified() && !host.is_broadcast() && !host.is_multicast())
+            .ok_or("Enter the server's IPv4 address")?;
+        let port = match self.server_port.trim() {
+            "" => openrad::DEFAULT_CONTROL_PORT,
+            port => port
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .ok_or("Enter a server port from 1 to 65535")?,
+        };
+        let modulus = self.server_modulus.trim();
+        Ok(ServerChoice {
+            host,
+            port,
+            modulus: (!modulus.is_empty()).then(|| PathBuf::from(modulus)),
+        })
+    }
+    /// Choose a self-hosted server: import its modulus, enter its address and
+    /// port. Each server keeps its own identity, so switching never deletes one.
+    fn server_settings(&mut self, ui: &mut egui::Ui) {
+        let language = self.language();
+        card().inner_margin(22).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            section_title(ui, language.text("Server"));
+            match &self.server {
+                None => ui.label(language.text("Using the official OpenRad server")),
+                Some(server) => ui.label(language.format(
+                    "Using custom server {address}",
+                    &[("address", &server.address())],
+                )),
+            };
+            ui.label(
+                RichText::new(language.text(
+                    "Use a self-hosted OpenRad-compatible server. Each server keeps its own identity in this profile; switching back restores the previous one. Changing servers stops the VPN.",
+                ))
+                .size(12.)
+                .color(muted()),
+            );
+            ui.add_space(12.);
+            let field = (ui.available_width() - 16.).clamp(160., 420.);
+            ui.label(language.text("Server IPv4 address"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_host)
+                    .hint_text("192.168.1.10")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(field),
+            );
+            ui.label(language.text("Port"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_port)
+                    .hint_text("17301")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(120.),
+            );
+            ui.label(language.text("Modulus file"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.server_modulus)
+                    .hint_text("/path/to/modulus.bin")
+                    .margin(Vec2::new(8., 6.))
+                    .desired_width(field),
+            );
+            ui.label(
+                RichText::new(language.text(
+                    "The server writes modulus.bin next to its database. Leave this empty when returning to a server used before.",
+                ))
+                .size(11.)
+                .color(muted()),
+            );
+            let choice = self.server_choice();
+            if let (Err(error), false) = (&choice, self.server_host.trim().is_empty()) {
+                ui.label(RichText::new(language.text(error)).size(11.).color(red()));
+            }
+            let can_change = !self.closing
+                && !self.replacement_pending
+                && matches!(
+                    self.phase,
+                    Phase::Connected | Phase::Disconnected | Phase::Error
+                );
+            ui.add_space(8.);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        can_change && choice.is_ok(),
+                        primary(language.text("Use this server")),
+                    )
+                    .clicked()
+                {
+                    if let Ok(choice) = choice {
+                        self.backend.send(Action::SetServer(Some(choice)));
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        can_change && self.server.is_some(),
+                        egui::Button::new(language.text("Use the official server")),
+                    )
+                    .clicked()
+                {
+                    self.backend.send(Action::SetServer(None));
+                }
+            });
+        });
     }
     fn update_notice(&mut self, ui: &mut egui::Ui) {
         let Some(release) = self.release.clone() else {
@@ -3320,7 +3740,7 @@ impl App {
                         "OpenRad {version} is available",
                         &[("version", &release.version)],
                     ))
-                    .color(BLUE),
+                    .color(blue()),
                 );
                 let view_release = ui.button(language.text("View release"));
                 if view_release.clicked() {
@@ -3421,6 +3841,11 @@ impl eframe::App for App {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        if self.rendered_theme != self.settings.theme {
+            apply_theme(ui.ctx(), self.settings.theme);
+            self.rendered_theme = self.settings.theme;
+        }
+        use_light_palette(self.settings.theme == ThemePreference::Light);
         if self.first_frame {
             crate::startup_log::checkpoint(crate::startup_log::Stage::FirstUi);
         }
@@ -3432,7 +3857,138 @@ impl eframe::App for App {
     }
 }
 impl App {
+    fn welcome(&mut self, ui: &mut egui::Ui) {
+        let language = self.language();
+        let elapsed = self.welcome_started.elapsed().as_secs_f32();
+        let splash = !self.welcome_skipped && elapsed < 9.0;
+        if splash {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(if splash {
+                        Color32::from_rgb(11, 12, 16)
+                    } else {
+                        bg()
+                    })
+                    .inner_margin(egui::Margin::same(24)),
+            )
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(
+                        (ui.available_height() * if splash { 0.23 } else { 0.08 }).min(150.0),
+                    );
+                    if splash {
+                        // Reveal the unchanged official mark directly in egui, without
+                        // an external video decoder or audio playback.
+                        let reveal = ((elapsed - 0.30) / 2.75).clamp(0.0, 1.0);
+                        let start = ui.cursor().min;
+                        let clip_before = ui.clip_rect();
+                        ui.set_clip_rect(egui::Rect::from_min_max(
+                            start,
+                            egui::pos2(clip_before.max.x, start.y + 170.0 * reveal),
+                        ));
+                        logo(ui, 170.);
+                        ui.set_clip_rect(clip_before);
+                        ui.add_space(14.);
+                        if elapsed > 3.0 {
+                            let opacity = ((elapsed - 3.0) / 1.6).clamp(0.0, 1.0);
+                            ui.label(
+                                RichText::new("OpenRad")
+                                    .size(42.)
+                                    .strong()
+                                    .color(Color32::WHITE.gamma_multiply(opacity)),
+                            );
+                        } else {
+                            ui.add_space(55.);
+                        }
+                        ui.add_space(35.);
+                        if ui.button(language.text("Skip animation")).clicked() {
+                            self.welcome_skipped = true;
+                        }
+                        return;
+                    }
+                    logo(ui, 96.);
+                    ui.add_space(12.);
+                    ui.label(
+                        RichText::new(language.text("Welcome to OpenRad"))
+                            .size(26.)
+                            .color(strong()),
+                    );
+                    ui.add_space(6.);
+                    ui.label(
+                        RichText::new(
+                            language.text("Choose your preferences before getting started."),
+                        )
+                        .color(muted()),
+                    );
+                    ui.add_space(28.);
+                    ui.label(RichText::new(language.text("Appearance")).color(muted()));
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut self.settings.theme,
+                            ThemePreference::Dark,
+                            language.text("Dark"),
+                        );
+                        ui.selectable_value(
+                            &mut self.settings.theme,
+                            ThemePreference::Light,
+                            language.text("Light"),
+                        );
+                    });
+                    ui.add_space(16.);
+                    #[cfg(windows)]
+                    ui.checkbox(
+                        &mut self.welcome_create_shortcut,
+                        language.text("Create OpenRad desktop shortcut"),
+                    );
+                    ui.checkbox(
+                        &mut self.settings.auto_connect,
+                        language.text("Connect when OpenRad launches"),
+                    );
+                    #[cfg(windows)]
+                    {
+                        ui.checkbox(
+                            &mut self.settings.start_with_windows,
+                            language.text("Start VPN with Windows (without opening the interface)"),
+                        );
+                        ui.label(
+                            RichText::new(language.text(
+                                "Automatic VPN startup is configured after the first identity is saved."
+                            ))
+                            .size(11.)
+                            .color(muted()),
+                        );
+                    }
+                    ui.add_space(24.);
+                    if ui
+                        .add(primary(language.text("Get started")).min_size(Vec2::new(180., 40.)))
+                        .clicked()
+                    {
+                        #[cfg(windows)]
+                        if self.welcome_create_shortcut {
+                            if let Err(err) = crate::shortcut::create_desktop_shortcut() {
+                                let message = language.format(
+                                    "Desktop shortcut: {error}",
+                                    &[("error", &format!("{err:#}"))],
+                                );
+                                self.notify_error(anyhow::anyhow!("{message}"));
+                                return;
+                            }
+                        }
+                        self.settings.onboarding_complete = true;
+                        self.backend.send(Action::Save(self.settings.clone()));
+                    }
+                });
+            });
+    }
+
     fn show(&mut self, ui: &mut egui::Ui) {
+        if !self.settings.onboarding_complete {
+            self.welcome(ui);
+            return;
+        }
         let language = self.language();
         let ctx = ui.ctx().clone();
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::K)) {
@@ -3446,50 +4002,11 @@ impl App {
             self.page = Page::Settings;
         }
         self.sidebar(ui);
-        egui::Panel::top("page_header")
-            .frame(
-                egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(egui::Margin::symmetric(28, 16)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(match self.page {
-                            Page::Networks => language.text("WORKSPACE / MY NETWORKS"),
-                            Page::Discover => language.text("WORKSPACE / DISCOVER"),
-                            Page::AutoJoin => language.text("WORKSPACE / AUTO JOIN"),
-                            Page::Settings => language.text("WORKSPACE / SETTINGS"),
-                        })
-                        .size(10.)
-                        .color(MUTED),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        badge(
-                            ui,
-                            if self.snapshot.interface_ready {
-                                language.text("Connected")
-                            } else {
-                                language.text(if self.windows_platform() {
-                                    "Windows preview"
-                                } else {
-                                    "Linux preview"
-                                })
-                            },
-                            if self.snapshot.interface_ready {
-                                MINT
-                            } else {
-                                MUTED
-                            },
-                        );
-                    });
-                });
-            });
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(BG)
-                    .inner_margin(egui::Margin::symmetric(28, 12)),
+                    .fill(bg())
+                    .inner_margin(egui::Margin::symmetric(28, 0)),
             )
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
@@ -3497,10 +4014,11 @@ impl App {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
+                        ui.add_space(24.);
                         self.update_notice(ui);
-                        if let Some(error) = &self.network_preferences_error { self.banner(ui, error, RED); }
+                        if let Some(error) = &self.network_preferences_error { self.banner(ui, error, red()); }
                         if self.snapshot.restricted_traffic {
-                            self.banner(ui, language.text("Controlled test mode · application traffic is restricted to the selected test peers"), AMBER);
+                            self.banner(ui, language.text("Controlled test mode · application traffic is restricted to the selected test peers"), amber());
                             ui.add_space(12.);
                         }
                         match self.page {
@@ -3519,7 +4037,23 @@ impl App {
                     .order(egui::Order::Foreground)
                     .show(&ctx, |ui| {
                         ui.set_max_width(420.);
-                        self.banner(ui, &message, if error { RED } else { MINT });
+                        let color = if error { red() } else { success() };
+                        egui::Frame::popup(ui.style())
+                            .fill(surface())
+                            .inner_margin(egui::Margin::symmetric(14, 11))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    dot(ui, color);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(self.language().message(&message))
+                                                .size(12.5)
+                                                .color(text()),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            });
                     });
             } else {
                 self.toast = None;
@@ -3530,14 +4064,14 @@ impl App {
         if self.confirm_uninstall && !self.closing {
             egui::Modal::new(egui::Id::new("complete-uninstall")).show(&ctx, |ui| {
                 ui.set_max_width(470.);
-                ui.heading(RichText::new(language.text("Uninstall OpenRad?")).color(RED));
+                ui.heading(RichText::new(language.text("Uninstall OpenRad?")).color(red()));
                 ui.label(language.text("The Windows uninstaller will remove OpenRad and its dedicated TAP adapter. Your saved identity, profiles, settings and logs will remain available if you reinstall later."));
                 ui.add_space(10.);
                 ui.horizontal(|ui| {
                     if ui.button(language.text("Cancel")).clicked() {
                         self.confirm_uninstall = false;
                     }
-                    if ui.button(RichText::new(language.text("Open Windows uninstaller")).color(RED)).clicked() {
+                    if ui.button(RichText::new(language.text("Open Windows uninstaller")).color(red())).clicked() {
                         match crate::uninstall::launch_installed_uninstaller() {
                             Ok(()) => {
                                 self.confirm_uninstall = false;
@@ -3562,7 +4096,7 @@ impl App {
                 ui.add_space(12.);
                 ui.horizontal(|ui| {
                     if ui.button(language.text("Cancel")).clicked() { self.confirm_reset = false; }
-                    if ui.button(RichText::new(language.text("Disconnect and reset identity")).color(AMBER)).clicked() {
+                    if ui.button(RichText::new(language.text("Disconnect and reset identity")).color(amber())).clicked() {
                         self.confirm_reset = false;
                         self.phase = Phase::Resetting;
                         self.interrupt_join();
@@ -3578,7 +4112,7 @@ impl App {
                 ui.label(language.text(
                     "The VPN session stays available to the CLI. Use Disconnect to stop it.",
                 ));
-                ui.spinner();
+                spinner(ui);
             });
         }
         self.advance_join(&ctx, Instant::now());
@@ -3605,28 +4139,16 @@ pub(crate) fn configure(ctx: &egui::Context) {
         .or_default()
         .push("openrad_noto".into());
     ctx.set_fonts(fonts);
-    let mut style = egui::Style {
-        visuals: egui::Visuals::dark(),
-        ..Default::default()
-    };
-    style.visuals.override_text_color = Some(TEXT);
-    style.visuals.panel_fill = BG;
-    style.visuals.window_fill = SURFACE;
-    style.visuals.extreme_bg_color = BG;
-    style.visuals.faint_bg_color = RAISED;
-    style.visuals.selection.bg_fill = Color32::from_rgb(37, 79, 67);
-    style.visuals.selection.stroke = Stroke::new(1., MINT);
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1., BORDER);
-    style.visuals.widgets.inactive.weak_bg_fill = RAISED;
-    style.visuals.widgets.inactive.bg_fill = RAISED;
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1., BORDER);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(41, 56, 68);
-    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(41, 56, 68);
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1., MINT);
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1., MINT);
+    let mut style = egui::Style::default();
+    use_light_palette(false);
+    style.visuals = visuals(false);
     style.spacing.item_spacing = Vec2::new(10., 8.);
-    style.spacing.button_padding = Vec2::new(13., 8.);
+    style.spacing.button_padding = Vec2::new(14., 7.);
     style.spacing.interact_size = Vec2::new(40., 32.);
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.spacing.icon_width = 17.;
+    style.spacing.icon_width_inner = 9.;
+    style.spacing.icon_spacing = 7.;
     style
         .text_styles
         .insert(egui::TextStyle::Body, FontId::proportional(14.));
@@ -3639,32 +4161,248 @@ pub(crate) fn configure(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     ctx.set_style_of(egui::Theme::Dark, style);
 }
+/// The shared widget look for both palettes; reads the active palette.
+fn visuals(light: bool) -> egui::Visuals {
+    let mut visuals = if light {
+        egui::Visuals::light()
+    } else {
+        egui::Visuals::dark()
+    };
+    // Shared by buttons and checkboxes; larger radii turn checkboxes into circles.
+    let radius = egui::CornerRadius::same(6);
+    visuals.override_text_color = None;
+    visuals.panel_fill = bg();
+    visuals.window_fill = surface();
+    visuals.window_stroke = Stroke::new(1., border());
+    visuals.window_corner_radius = egui::CornerRadius::same(14);
+    visuals.menu_corner_radius = egui::CornerRadius::same(10);
+    let shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: Color32::from_black_alpha(if light { 28 } else { 110 }),
+    };
+    visuals.window_shadow = shadow;
+    visuals.popup_shadow = shadow;
+    visuals.extreme_bg_color = pick(Color32::from_rgb(14, 15, 20), Color32::WHITE);
+    visuals.text_edit_bg_color = Some(pick(Color32::from_rgb(14, 15, 20), Color32::WHITE));
+    visuals.faint_bg_color = raised();
+    visuals.code_bg_color = raised();
+    visuals.hyperlink_color = accent();
+    visuals.warn_fg_color = amber();
+    visuals.error_fg_color = red();
+    visuals.slider_trailing_fill = true;
+    visuals.selection.bg_fill = accent().gamma_multiply(if light { 0.16 } else { 0.22 });
+    visuals.selection.stroke = Stroke::new(1., accent());
+    let widgets = &mut visuals.widgets;
+    widgets.noninteractive.bg_fill = surface();
+    widgets.noninteractive.weak_bg_fill = surface();
+    widgets.noninteractive.bg_stroke = Stroke::new(1., border());
+    widgets.noninteractive.fg_stroke = Stroke::new(1., text());
+    widgets.noninteractive.corner_radius = radius;
+    let control_border = pick(
+        Color32::from_rgb(48, 51, 64),
+        Color32::from_rgb(208, 211, 220),
+    );
+    for (state, fill, stroke, fg) in [
+        (&mut widgets.inactive, raised(), control_border, text()),
+        (&mut widgets.hovered, hover(), hover(), strong()),
+        (&mut widgets.active, hover(), accent(), strong()),
+        (&mut widgets.open, hover(), border(), strong()),
+    ] {
+        state.bg_fill = fill;
+        state.weak_bg_fill = fill;
+        state.bg_stroke = Stroke::new(1., stroke);
+        state.fg_stroke = Stroke::new(1.5, fg);
+        state.corner_radius = radius;
+        state.expansion = 0.;
+    }
+    // Checkboxes, radios and slider rails use `bg_fill`; buttons use
+    // `weak_bg_fill`. Give the small controls more contrast on cards.
+    widgets.inactive.bg_fill = pick(Color32::from_rgb(38, 41, 52), Color32::WHITE);
+    visuals
+}
+fn apply_theme(ctx: &egui::Context, preference: ThemePreference) {
+    let light = preference == ThemePreference::Light;
+    use_light_palette(light);
+    let theme = if light {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    };
+    // Both palettes share the configured typography and control dimensions.
+    // The light theme otherwise starts from egui's defaults (including much
+    // smaller buttons), because configure installs our metrics on Dark.
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
+    style.visuals = visuals(light);
+    ctx.set_style_of(theme, style);
+    ctx.set_theme(theme);
+}
 fn card() -> egui::Frame {
     egui::Frame::new()
-        .fill(SURFACE)
-        .stroke(Stroke::new(1., BORDER))
-        .corner_radius(12)
+        .fill(surface())
+        .stroke(Stroke::new(1., border()))
+        .corner_radius(14)
         .inner_margin(18)
 }
+/// Large page heading with a muted one-line description.
+fn page_title(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.label(RichText::new(title).size(24.).color(strong()));
+    ui.add_space(2.);
+    ui.label(RichText::new(subtitle).size(13.).color(muted()));
+    ui.add_space(20.);
+}
+/// Heading at the top of a card.
+fn section_title(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    let response = ui.label(RichText::new(title).size(16.).color(strong()));
+    ui.add_space(8.);
+    response
+}
 fn primary(label: &str) -> egui::Button<'_> {
-    egui::Button::new(
-        RichText::new(label)
-            .color(Color32::from_rgb(14, 42, 33))
-            .strong(),
-    )
-    .fill(MINT)
-    .corner_radius(8)
-    .stroke(Stroke::NONE)
+    egui::Button::new(RichText::new(label).color(Color32::WHITE))
+        .fill(accent_fill())
+        .corner_radius(8)
+        .stroke(Stroke::NONE)
 }
 fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     egui::Frame::new()
-        .fill(color.gamma_multiply(0.12))
-        .corner_radius(6)
-        .inner_margin(egui::Margin::symmetric(9, 5))
+        .fill(color.gamma_multiply(0.13))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(9, 3))
         .show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 0.;
             ui.label(RichText::new(text).size(11.).color(color))
         })
         .response
+}
+#[derive(Clone, Copy)]
+enum NavIcon {
+    Networks,
+    Discover,
+    AutoJoin,
+    Settings,
+}
+/// A sidebar destination: a painted icon and label on a full-width row.
+fn nav_item(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let painter = ui.painter();
+    let fill = if selected {
+        accent().gamma_multiply(0.14)
+    } else if hovered {
+        hover()
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, 8., fill);
+    let color = if selected {
+        accent()
+    } else if hovered {
+        strong()
+    } else {
+        muted()
+    };
+    let c = egui::pos2(rect.left() + 20., rect.center().y);
+    let stroke = Stroke::new(1.6, color);
+    let at = |x: f32, y: f32| c + Vec2::new(x, y);
+    match icon {
+        NavIcon::Networks => {
+            let nodes = [at(0., -5.5), at(-5.5, 4.5), at(5.5, 4.5)];
+            for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+                painter.line_segment([nodes[a], nodes[b]], stroke);
+            }
+            for node in nodes {
+                painter.circle_filled(node, 2.6, color);
+            }
+        }
+        NavIcon::Discover => {
+            painter.circle_stroke(at(-1.5, -1.5), 5., stroke);
+            painter.line_segment([at(2.3, 2.3), at(6., 6.)], Stroke::new(2., color));
+        }
+        NavIcon::AutoJoin => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    at(1.5, -7.),
+                    at(-4.5, 1.),
+                    at(-0.5, 1.),
+                    at(-1.5, 7.),
+                    at(4.5, -1.),
+                    at(0.5, -1.),
+                ],
+                stroke,
+            ));
+        }
+        NavIcon::Settings => {
+            for (y, knob) in [(-5., -2.5), (0., 3.), (5., -0.5)] {
+                painter.line_segment([at(-6.5, y), at(6.5, y)], stroke);
+                painter.circle_filled(at(knob, y), 2.4, bg_behind(selected, hovered));
+                painter.circle_stroke(at(knob, y), 2.4, stroke);
+            }
+        }
+    }
+    let galley = egui::WidgetText::from(RichText::new(label).size(13.5)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (rect.width() - 50.).max(0.),
+        egui::TextStyle::Button,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 38., rect.center().y - galley.size().y / 2.),
+        galley,
+        color,
+    );
+    response
+}
+/// The opaque color under a nav icon, so slider knobs hide their track.
+fn bg_behind(selected: bool, hovered: bool) -> Color32 {
+    if selected {
+        // A 14% accent tint over the sidebar surface.
+        let (a, s) = (accent(), surface());
+        let mix = |x: u8, y: u8| (f32::from(y) + (f32::from(x) - f32::from(y)) * 0.14) as u8;
+        Color32::from_rgb(mix(a.r(), s.r()), mix(a.g(), s.g()), mix(a.b(), s.b()))
+    } else if hovered {
+        hover()
+    } else {
+        surface()
+    }
+}
+/// Loading indicators animate at this interval. egui's spinner requests a
+/// repaint every frame, redrawing the whole window at the display refresh rate
+/// for as long as a connection, search, join or RTT probe is pending.
+const SPINNER_FRAME: Duration = Duration::from_millis(33);
+
+/// egui's spinner, animated at [`SPINNER_FRAME`] instead of every frame.
+fn spinner(ui: &mut egui::Ui) -> egui::Response {
+    let size = ui.spacing().interact_size.y;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::new(egui::WidgetType::ProgressIndicator));
+    if ui.is_rect_visible(rect) {
+        ui.ctx().request_repaint_after(SPINNER_FRAME);
+        let radius = rect.height().min(rect.width()) / 2. - 2.;
+        let count = (radius.round() as u32).clamp(8, 128);
+        let time = ui.input(|i| i.time);
+        let start = time * std::f64::consts::TAU;
+        let end = start + 240f64.to_radians() * time.sin();
+        let points = (0..count)
+            .map(|i| {
+                let (sin, cos) = egui::lerp(start..=end, f64::from(i) / f64::from(count)).sin_cos();
+                rect.center() + radius * Vec2::new(cos as f32, sin as f32)
+            })
+            .collect();
+        let stroke = Stroke::new(3., ui.visuals().strong_text_color());
+        ui.painter().add(egui::Shape::line(points, stroke));
+    }
+    response
 }
 fn dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(12., 14.), egui::Sense::hover());
@@ -3688,15 +4426,18 @@ fn logo(ui: &mut egui::Ui, size: f32) {
         map(40., 70.),
         map(26., 70.),
     ];
-    ui.painter()
-        .add(egui::Shape::convex_polygon(roof, MINT, Stroke::NONE));
+    ui.painter().add(egui::Shape::convex_polygon(
+        roof,
+        Color32::from_rgb(98, 226, 181),
+        Stroke::NONE,
+    ));
     ui.painter().rect_filled(
         egui::Rect::from_min_size(
             map(34., 74.),
             Vec2::new(40. / 108. * rect.width(), 6. / 108. * rect.height()),
         ),
         0.,
-        BLUE,
+        Color32::from_rgb(132, 164, 255),
     );
 }
 fn metric(
@@ -3710,9 +4451,9 @@ fn metric(
     card().inner_margin(16).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height(103.);
-        ui.label(RichText::new(label).size(10.).color(MUTED));
+        ui.label(RichText::new(label).size(10.).color(muted()));
         ui.label(RichText::new(value).size(23.).color(color));
-        ui.add(egui::Label::new(RichText::new(sub).size(10.).color(MUTED)).truncate())
+        ui.add(egui::Label::new(RichText::new(sub).size(10.).color(muted())).truncate())
             .on_hover_text(sub);
         if let Some(values) = series {
             let (rect, _) =
@@ -3737,11 +4478,11 @@ fn metric(
 }
 fn peer_color(state: &PeerState) -> Color32 {
     match state {
-        PeerState::Connected => MINT,
-        PeerState::Online | PeerState::Connecting => BLUE,
-        PeerState::Refused => AMBER,
-        PeerState::Failed => RED,
-        _ => MUTED,
+        PeerState::Connected => success(),
+        PeerState::Online | PeerState::Connecting => blue(),
+        PeerState::Refused => amber(),
+        PeerState::Failed => red(),
+        _ => muted(),
     }
 }
 fn peer_rank(state: &PeerState) -> u8 {
@@ -3931,7 +4672,15 @@ mod tests {
             ));
             let paths = Paths::new(Some(directory.clone())).unwrap();
             let lock = paths.lock().unwrap();
-            let mut app = App::from_parts(Backend::fixture(), paths, lock, Settings::default());
+            let mut app = App::from_parts(
+                Backend::fixture(),
+                paths,
+                lock,
+                Settings {
+                    onboarding_complete: true,
+                    ..Settings::default()
+                },
+            );
             app.system_language = Language::Portuguese;
             app.phase = Phase::Disconnected;
             Self {
@@ -5023,6 +5772,87 @@ mod tests {
         assert_eq!(ids(&cache), [3]);
     }
     #[test]
+    fn ui_snapshot_caches_track_edits_replacements_and_notice_transitions() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        let ctx = egui::Context::default();
+        let mut initial = Snapshot {
+            networks: vec![Network {
+                name: "LAN".into(),
+                network_id: "a".into(),
+            }],
+            ..Default::default()
+        };
+        initial.peers.insert(1, cached_peer(1, "Alpha", &["a"]));
+        app.backend
+            .notices
+            .send(Notice::Engine(Update::State(initial)));
+        app.consume(&ctx);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "", &app.settings);
+        assert_eq!(app.snapshot.peer_counts(), (1, 0));
+        assert_eq!(app.network_list.counts["a"], 2);
+        let source_revision = app.snapshot.source_revision();
+        let list_revision = app.peer_list.revision;
+        // Read-only snapshots and repeated draws do not invalidate their data.
+        let mut replacement = app.snapshot.snapshot().clone();
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "alpha", &app.settings);
+        assert_eq!(app.snapshot.source_revision(), source_revision);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        app.peer_list
+            .refresh(&app.snapshot, None, "absent", &app.settings);
+        assert!(app.peer_list.visible.is_empty());
+        assert!(app.peer_list.revision > list_revision);
+
+        // A newly wrapped source with the same keys must not inherit a token
+        // from the previous source. Its different metadata/counts are visible.
+        replacement.peers.get_mut(&1).unwrap().peer.name = "Replacement".into();
+        replacement.peers.get_mut(&1).unwrap().status = PeerState::Online;
+        replacement
+            .roles
+            .insert("a".into(), [(1, 1), (2, 1), (3, 1)].into_iter().collect());
+        app.snapshot = replacement.into();
+        assert_ne!(app.snapshot.source_revision(), source_revision);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "replacement", &app.settings);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        assert_eq!(app.network_list.counts["a"], 3);
+        assert_eq!(app.snapshot.peer_counts(), (0, 1));
+
+        // Direct edits use the same invalidation path as consumed snapshots.
+        app.snapshot.peers.get_mut(&1).unwrap().peer.name = "Edited".into();
+        app.snapshot.peers.get_mut(&1).unwrap().status = PeerState::Connected;
+        app.snapshot.roles.get_mut("a").unwrap().insert(4, 1);
+        app.joined_networks();
+        app.peer_list
+            .refresh(&app.snapshot, None, "edited", &app.settings);
+        assert_eq!(app.peer_list.visible.len(), 1);
+        assert_eq!(app.network_list.counts["a"], 4);
+        assert_eq!(app.snapshot.peer_counts(), (1, 0));
+        app.backend.notices.send(Notice::Phase(
+            Phase::Disconnected,
+            "Synthetic disconnect".into(),
+        ));
+        app.consume(&ctx);
+        assert_eq!(app.snapshot.peer_counts(), (0, 0));
+        app.settings.show_offline_peers = false;
+        app.peer_list
+            .refresh(&app.snapshot, None, "", &app.settings);
+        assert!(app.peer_list.visible.is_empty());
+        app.identity = Some((1, "Previous".into()));
+        app.backend.notices.send(Notice::Identity {
+            rid: 2,
+            name: "New identity".into(),
+        });
+        app.consume(&ctx);
+        assert!(app.joined_networks().is_empty());
+        assert_eq!(app.snapshot.peer_counts(), (0, 0));
+    }
+    #[test]
     fn network_caches_preserve_count_fallbacks_roles_and_join_selection_precedence() {
         let mut snapshot = Snapshot {
             networks: ["Zeta", "Alpha", "Unpinned"]
@@ -5154,34 +5984,57 @@ mod tests {
             [("α", 1), ("alpha", 2), ("Beta", 3), ("beta", 4)]
         );
     }
+    fn sized_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        size: Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ui| app.show(ui),
+        );
+        output.textures_delta.clear();
+        output
+    }
+    fn peer_labels(output: &egui::FullOutput) -> usize {
+        labels(output)
+            .iter()
+            .filter(|label| label.starts_with("Synthetic peer"))
+            .count()
+    }
     #[test]
-    fn peer_rows_keep_exact_scroll_extent_and_remeasure_layout_changes() {
+    fn peer_rows_build_only_visible_rows_with_exact_extents_across_layout_changes() {
         let mut fixture = Fixture::new();
         let app = fixture.app();
         app.phase = Phase::Connected;
         app.settings.language = LanguagePreference::English;
         app.settings.show_traffic = false;
-        app.settings.show_peer_details = true;
         app.snapshot.networks = vec![Network {
             name: "LAN".into(),
             network_id: "a".into(),
         }];
-        for rid in 1..=80 {
+        for rid in 1..=2000 {
             app.snapshot.peers.insert(
                 rid,
-                cached_peer(rid, &format!("Synthetic peer {rid:03}"), &["a"]),
+                cached_peer(rid, &format!("Synthetic peer {rid:04}"), &["a"]),
             );
         }
         let ctx = egui::Context::default();
         configure(&ctx);
         ctx.enable_accesskit();
-        let render = |app: &mut App| {
+        let render = |app: &mut App, width: f32| {
             let mut extent = Vec2::ZERO;
+            let passes = ctx.cumulative_pass_nr();
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        Vec2::new(780., 540.),
+                        Vec2::new(width, 900.),
                     )),
                     ..Default::default()
                 },
@@ -5195,64 +6048,155 @@ mod tests {
                 },
             );
             output.textures_delta.clear();
-            (output, extent)
+            (output, extent.y, ctx.cumulative_pass_nr() - passes)
         };
-        // Warm the actual row measurements and scrollbar width.
-        for _ in 0..3 {
-            render(app);
-        }
-        let (output, extent) = render(app);
-        assert_eq!(app.peer_rows.rows.len(), 80);
+        let settle = |app: &mut App, width: f32| {
+            for _ in 0..3 {
+                render(app, width);
+            }
+            render(app, width)
+        };
+        let (output, extent, passes) = settle(app, 780.);
+        assert_eq!(passes, 1, "a settled list needs no extra pass");
+        assert!(peer_labels(&output) < 20);
+        let row = |output: &egui::FullOutput, rid: u64| {
+            node_rect(output, &format!("Synthetic peer {rid:04}")).top()
+        };
+        let stride = row(&output, 2) - row(&output, 1);
+        assert!(stride > 30.);
+        let (_, stable, _) = render(app, 780.);
+        assert_eq!(stable, extent);
+        // Removing a peer that was never shown shortens the list by exactly
+        // one row: unshown rows reserve the height measured for their kind.
+        app.snapshot.peers.remove(&1500);
+        let (_, shorter, _) = settle(app, 780.);
         assert!(
-            labels(&output)
-                .iter()
-                .filter(|label| label.starts_with("Synthetic peer"))
-                .count()
-                < 20
+            (extent - shorter - stride).abs() < 0.1,
+            "{extent} {shorter} {stride}"
         );
-        let (_, next_extent) = render(app);
-        assert!((extent.y - next_extent.y).abs() < 0.1);
-        let old_height = app.peer_rows.rows[&80].height;
-        let peer = app.snapshot.peers.get_mut(&80).unwrap();
+        // Resizing re-measures only the rows in view instead of every peer.
+        for width in [700., 640., 760., 900.] {
+            let (output, _, passes) = render(app, width);
+            assert!(passes <= 2);
+            assert!(peer_labels(&output) < 20, "{width}");
+        }
+        // Lines added to a visible row move the rows below it.
+        let output = settle(app, 780.).0;
+        let below = row(&output, 3);
+        let peer = app.snapshot.peers.get_mut(&2).unwrap();
         peer.transport = Some(openrad::peer::TransportPath::DirectUdp);
-        peer.endpoint = Some("192.0.2.80:12345".parse().unwrap());
+        peer.endpoint = Some("192.0.2.2:12345".parse().unwrap());
         app.settings.show_peer_ip = true;
-        render(app);
-        assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
-        app.settings.show_peer_ip = false;
-        render(app);
-        assert!((app.peer_rows.rows[&80].height - old_height).abs() < 0.1);
-        app.snapshot.peers.get_mut(&80).unwrap().endpoint =
-            Some("[2001:db8::80]:23456".parse().unwrap());
-        assert!(!app.peer_rows.rows[&80].matches(
-            &app.snapshot.peers[&80],
-            None,
-            None,
-            None,
-            false
-        ));
-        render(app);
-        app.settings.show_internal_ids = true;
-        render(app);
-        assert!(app.peer_rows.rows[&80].height >= old_height + 14.);
-        let old_height = app.peer_rows.rows[&80].height;
-        app.snapshot.peers.get_mut(&80).unwrap().detail =
+        let output = settle(app, 780.).0;
+        assert!(labels(&output).contains(&"Peer IP: 192.0.2.2:12345".to_owned()));
+        assert!(row(&output, 3) >= below + 14.);
+        assert!((row(&output, 5) - row(&output, 4) - stride).abs() < 0.1);
+        let below = row(&output, 3);
+        app.settings.show_peer_details = true;
+        app.snapshot.peers.get_mut(&2).unwrap().detail =
             "Long synthetic connection detail that wraps across several lines. ".repeat(6);
         app.pings
-            .insert(80, PingState::Failed("Synthetic ping failure".into()));
-        render(app);
-        assert!(app.peer_rows.rows[&80].height > old_height);
-        let cached = &app.peer_rows.rows[&80];
-        assert!(cached.matches(
-            &app.snapshot.peers[&80],
-            app.pings.get(&80),
-            None,
-            None,
-            false
-        ));
-        app.snapshot.peers.remove(&80);
-        render(app);
-        assert!(!app.peer_rows.rows.contains_key(&80));
+            .insert(2, PingState::Failed("Synthetic ping failure".into()));
+        let (output, extent, _) = settle(app, 780.);
+        assert!(labels(&output).contains(&"Synthetic ping failure".to_owned()));
+        assert!(row(&output, 3) > below + 28.);
+        assert!(peer_labels(&output) < 20);
+        app.snapshot.peers.remove(&2);
+        let (output, shorter, _) = settle(app, 780.);
+        assert!(!labels(&output).contains(&"Synthetic peer 0002".to_owned()));
+        assert!(extent - shorter > stride + 28.);
+    }
+
+    #[test]
+    fn open_peer_menu_stays_open_when_a_roster_update_moves_its_row_out_of_view() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        app.phase = Phase::Connected;
+        app.settings.language = LanguagePreference::English;
+        app.settings.show_traffic = false;
+        app.identity = Some((1, "Synthetic device".into()));
+        app.selected_network = Some("a".into());
+        app.snapshot.networks = vec![Network {
+            name: "LAN".into(),
+            network_id: "a".into(),
+        }];
+        let mut roles = BTreeMap::from([(1, 2)]);
+        for rid in 2..=400 {
+            app.snapshot.peers.insert(
+                rid,
+                cached_peer(rid, &format!("Synthetic peer {rid:04}"), &["a"]),
+            );
+            roles.insert(rid, 1);
+        }
+        app.snapshot.roles.insert("a".into(), roles);
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        ctx.enable_accesskit();
+        let size = Vec2::new(780., 1100.);
+        sized_frame(&ctx, app, size, vec![]);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        let manage = output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter(|(_, node)| {
+                node.role() == egui::accesskit::Role::Button && node.label() == Some("Manage")
+            })
+            .filter_map(|(_, node)| node.bounds())
+            .min_by(|a, b| a.y0.total_cmp(&b.y0))
+            .expect("the first peer row is in view");
+        let pos = egui::pos2(
+            ((manage.x0 + manage.x1) / 2.) as f32,
+            ((manage.y0 + manage.y1) / 2.) as f32,
+        );
+        for pressed in [true, false] {
+            sized_frame(
+                &ctx,
+                app,
+                size,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(labels(&output).contains(&"Remove member".to_owned()));
+        assert_eq!(app.peer_menu, Some(2));
+        // Renaming sorts the peer last, far below the view. Its row alone is
+        // still built, so egui keeps its menu open.
+        app.snapshot.peers.get_mut(&2).unwrap().peer.name = "Synthetic peer zz".into();
+        sized_frame(&ctx, app, size, vec![]);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(egui::Popup::is_any_open(&ctx));
+        assert!(labels(&output).contains(&"Remove member".to_owned()));
+        assert!(labels(&output).contains(&"Synthetic peer zz".to_owned()));
+        assert!(peer_labels(&output) < 40);
+        // Closing the menu releases the row.
+        sized_frame(
+            &ctx,
+            app,
+            size,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+        );
+        sized_frame(&ctx, app, size, vec![]);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert_eq!(app.peer_menu, None);
+        let output = sized_frame(&ctx, app, size, vec![]);
+        assert!(!labels(&output).contains(&"Synthetic peer zz".to_owned()));
     }
 
     #[test]
@@ -6079,6 +7023,18 @@ mod tests {
                 LanguagePreference::Portuguese,
                 768,
             ),
+            (
+                Page::Networks,
+                "networks-light",
+                LanguagePreference::English,
+                1152,
+            ),
+            (
+                Page::Settings,
+                "settings-light",
+                LanguagePreference::English,
+                1152,
+            ),
         ] {
             app.settings.show_peer_ip = filename.starts_with("peer-ip");
             let height = if page == Page::Settings { 2600 } else { 1000 };
@@ -6087,8 +7043,14 @@ mod tests {
                 "TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.".into());
             app.page = page;
             app.settings.language = language;
+            app.settings.theme = if filename.ends_with("-light") {
+                ThemePreference::Light
+            } else {
+                ThemePreference::Dark
+            };
             let ctx = egui::Context::default();
             configure(&ctx);
+            apply_theme(&ctx, app.settings.theme);
             let mut textures = egui::TexturesDelta::default();
             let mut final_output = None;
             for _ in 0..2 {
@@ -6116,6 +7078,7 @@ mod tests {
             }
             std::fs::write(directory.join(format!("{filename}.ppm")), ppm).unwrap();
         }
+        use_light_palette(false);
     }
     #[test]
     fn broadcast_controls_include_exclude_multiple_peers_and_restore_in_every_language() {
@@ -6309,6 +7272,206 @@ mod tests {
                 }
                 std::fs::write(directory.join(format!("{name}-{width}.ppm")), ppm).unwrap();
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "renders synthetic server settings with a Vulkan CPU driver"]
+    fn capture_server_settings_without_profiles_credentials_or_a_display() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        app.server = Some(
+            openrad::daemon::CustomServer::new(std::net::Ipv4Addr::new(192, 0, 2, 10), 18301)
+                .unwrap(),
+        );
+        app.server_host = "192.0.2.10".into();
+        app.server_port = "18301".into();
+        app.server_modulus = "/synthetic/modulus.bin".into();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reports/server-settings");
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, preference) in [
+            ("en", LanguagePreference::English),
+            ("pt", LanguagePreference::Portuguese),
+            ("ru", LanguagePreference::Russian),
+            ("vi", LanguagePreference::Vietnamese),
+        ] {
+            app.settings.language = preference;
+            for width in [448, 832] {
+                let height = 620;
+                let ctx = egui::Context::default();
+                configure(&ctx);
+                let mut textures = egui::TexturesDelta::default();
+                let mut final_output = None;
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width as f32, height as f32),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.server_settings(ui),
+                    );
+                    textures.append(std::mem::take(&mut output.textures_delta));
+                    final_output = Some(output);
+                }
+                let mut output = final_output.unwrap();
+                output.textures_delta = textures;
+                let pixels =
+                    crate::graphics::software_test::render_offscreen(&ctx, output, width, height);
+                let mut ppm = format!("P6\n{width} {height}\n255\n").into_bytes();
+                for pixel in pixels.as_chunks::<4>().0 {
+                    ppm.extend(&pixel[..3]);
+                }
+                std::fs::write(directory.join(format!("{name}-{width}.ppm")), ppm).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn server_settings_validate_input_and_request_switches_in_every_language() {
+        fn frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(780., 1200.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.server_settings(ui),
+            );
+            output.textures_delta.clear();
+            output
+        }
+        // Click a button by label; returns false when it is absent or disabled.
+        fn click(ctx: &egui::Context, app: &mut App, label: &str) -> bool {
+            frame(ctx, app, vec![]);
+            let output = frame(ctx, app, vec![]);
+            let Some((_, node)) = output
+                .platform_output
+                .accesskit_update
+                .unwrap()
+                .nodes
+                .into_iter()
+                .find(|(_, node)| {
+                    node.role() == egui::accesskit::Role::Button && node.label() == Some(label)
+                })
+            else {
+                return false;
+            };
+            if node.is_disabled() {
+                return false;
+            }
+            let bounds = node.bounds().unwrap();
+            let pos = egui::pos2(
+                ((bounds.x0 + bounds.x1) / 2.) as f32,
+                ((bounds.y0 + bounds.y1) / 2.) as f32,
+            );
+            for pressed in [true, false] {
+                frame(
+                    ctx,
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+            }
+            true
+        }
+        for preference in [
+            LanguagePreference::English,
+            LanguagePreference::Portuguese,
+            LanguagePreference::Russian,
+            LanguagePreference::Vietnamese,
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            let (backend, actions) = Backend::recording_fixture();
+            app.backend = backend;
+            app.settings.language = preference;
+            let language = app.language();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output).contains(
+                &language
+                    .text("Using the official OpenRad server")
+                    .to_owned()
+            ));
+
+            // Invalid input shows a localized error and cannot be submitted.
+            app.server_host = "192.168.15.300".into();
+            frame(&ctx, app, vec![]);
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output)
+                .contains(&language.text("Enter the server's IPv4 address").to_owned()));
+            assert!(!click(&ctx, app, language.text("Use this server")));
+            app.server_host = "192.168.15.8".into();
+            app.server_port = "70000".into();
+            assert!(!click(&ctx, app, language.text("Use this server")));
+            assert!(actions.try_recv().is_err());
+            // The official server button needs a custom server to return from.
+            assert!(!click(&ctx, app, language.text("Use the official server")));
+
+            app.server_port = "18301".into();
+            app.server_modulus = "/synthetic/modulus.bin".into();
+            assert!(click(&ctx, app, language.text("Use this server")));
+            match actions.try_recv().unwrap() {
+                Action::SetServer(Some(choice)) => {
+                    assert_eq!(choice.host, std::net::Ipv4Addr::new(192, 168, 15, 8));
+                    assert_eq!(choice.port, 18301);
+                    assert_eq!(
+                        choice.modulus,
+                        Some(PathBuf::from("/synthetic/modulus.bin"))
+                    );
+                }
+                _ => panic!("expected a custom server switch"),
+            }
+            // An empty port means the default; an empty modulus reuses the saved one.
+            app.server_port.clear();
+            app.server_modulus.clear();
+            assert_eq!(
+                app.server_choice()
+                    .ok()
+                    .map(|choice| (choice.port, choice.modulus)),
+                Some((openrad::DEFAULT_CONTROL_PORT, None))
+            );
+
+            app.backend.notices.send(Notice::Server(Some(
+                openrad::daemon::CustomServer::new(std::net::Ipv4Addr::new(192, 168, 15, 8), 18301)
+                    .unwrap(),
+            )));
+            app.backend.notices.send(Notice::NoIdentity);
+            app.identity = Some((123, "synthetic".into()));
+            app.consume(&ctx);
+            assert_eq!(app.identity, None);
+            assert_eq!(app.server_port, "18301");
+            let output = frame(&ctx, app, vec![]);
+            assert!(labels(&output).contains(&language.format(
+                "Using custom server {address}",
+                &[("address", "192.168.15.8:18301")]
+            )));
+            // Switching is unavailable while another identity operation runs.
+            app.phase = Phase::Resetting;
+            assert!(!click(&ctx, app, language.text("Use the official server")));
+            app.phase = Phase::Disconnected;
+            assert!(click(&ctx, app, language.text("Use the official server")));
+            assert!(matches!(
+                actions.try_recv().unwrap(),
+                Action::SetServer(None)
+            ));
         }
     }
 
@@ -6558,5 +7721,179 @@ mod tests {
         }));
         app.consume(&ctx);
         assert!(matches!(app.pings.get(&2), Some(PingState::Measured(ms)) if *ms == 17.));
+    }
+    /// Render settled frames with advancing time; return the last output.
+    fn timed_frames(ctx: &egui::Context, app: &mut App, frames: u32) -> egui::FullOutput {
+        let start = ctx.input(|i| i.time);
+        let mut last = None;
+        for frame in 1..=frames {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1120., 1600.),
+                    )),
+                    time: Some(start + f64::from(frame) / 60.),
+                    ..Default::default()
+                },
+                |ui| app.show(ui),
+            );
+            output.textures_delta.clear();
+            last = Some(output);
+        }
+        last.unwrap()
+    }
+    fn repaint_delay(output: &egui::FullOutput) -> Duration {
+        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+    }
+
+    #[test]
+    fn switching_palettes_preserves_configured_typography_and_control_sizes() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let configured = ctx.style_of(egui::Theme::Dark);
+        for preference in [
+            ThemePreference::Light,
+            ThemePreference::Dark,
+            ThemePreference::Light,
+        ] {
+            apply_theme(&ctx, preference);
+            let style = ctx.global_style();
+            assert_eq!(style.spacing, configured.spacing);
+            assert_eq!(style.text_styles, configured.text_styles);
+            assert_eq!(style.visuals.dark_mode, preference == ThemePreference::Dark);
+        }
+        use_light_palette(false);
+    }
+
+    #[test]
+    fn pending_work_animates_without_repainting_every_frame() {
+        type Setup = fn(&mut App);
+        let cases: [(&str, Setup); 6] = [
+            ("connecting", |app| app.phase = Phase::Connecting),
+            ("loading", |app| app.phase = Phase::Loading),
+            ("RTT probe", |app| {
+                app.pings.insert(
+                    2,
+                    PingState::Pending {
+                        id: 1,
+                        started: Instant::now(),
+                    },
+                );
+            }),
+            ("search", |app| {
+                app.page = Page::Discover;
+                app.search_in_flight = Some(String::new());
+                app.has_searched = true;
+            }),
+            ("auto join", |app| {
+                app.page = Page::AutoJoin;
+                app.join_run.pending.insert(1, "LAN".into());
+            }),
+            ("closing", |app| app.closing = true),
+        ];
+        for (name, setup) in cases {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.phase = Phase::Connected;
+            app.settings.language = LanguagePreference::English;
+            app.snapshot.networks = vec![Network {
+                name: "LAN".into(),
+                network_id: "a".into(),
+            }];
+            app.snapshot
+                .peers
+                .insert(2, cached_peer(2, "Synthetic peer", &["a"]));
+            setup(app);
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let output = timed_frames(&ctx, app, 60);
+            assert!(
+                output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .any(|(_, node)| node.role() == egui::accesskit::Role::ProgressIndicator),
+                "{name} shows a loading indicator"
+            );
+            // Animated, but at a bounded rate rather than every display refresh.
+            let delay = repaint_delay(&output);
+            assert!(
+                delay >= SPINNER_FRAME - Duration::from_millis(17) && delay <= SPINNER_FRAME,
+                "{name}: {delay:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_due_search_waits_for_wake_ups_instead_of_polling() {
+        for (connected, in_flight) in [(false, false), (true, true)] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.settings.language = LanguagePreference::English;
+            app.page = Page::Discover;
+            app.has_searched = true;
+            if connected {
+                app.phase = Phase::Connected;
+            }
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            timed_frames(&ctx, app, 30);
+            app.search_due = Some(Instant::now() - Duration::from_millis(1));
+            app.search_in_flight = in_flight.then(String::new);
+            let output = timed_frames(&ctx, app, 30);
+            assert!(app.search_due.is_some(), "the search stays due");
+            if in_flight {
+                // The in-flight spinner animates; the search does not add work.
+                assert!(repaint_delay(&output) >= SPINNER_FRAME - Duration::from_millis(17));
+            } else {
+                assert!(repaint_delay(&output) >= SEARCH_RETRY - Duration::from_millis(17));
+            }
+        }
+    }
+
+    #[test]
+    fn long_network_lists_build_only_rows_in_view_and_short_lists_build_every_row() {
+        for (count, page) in [
+            (EAGER_ROWS, Page::Discover),
+            (EAGER_ROWS, Page::AutoJoin),
+            (600, Page::Discover),
+            (600, Page::AutoJoin),
+        ] {
+            let mut fixture = Fixture::new();
+            let app = fixture.app();
+            app.phase = Phase::Connected;
+            app.settings.language = LanguagePreference::English;
+            app.page = page;
+            app.has_searched = true;
+            app.catalog = (0..count)
+                .map(|index| PublicNetwork {
+                    name: format!("Synthetic lobby {index:04}"),
+                    reported_count: index as u32,
+                })
+                .collect();
+            let ctx = egui::Context::default();
+            configure(&ctx);
+            ctx.enable_accesskit();
+            let size = Vec2::new(780., 1200.);
+            sized_frame(&ctx, app, size, vec![]);
+            let output = sized_frame(&ctx, app, size, vec![]);
+            let built = labels(&output)
+                .iter()
+                .filter(|label| label.starts_with("Synthetic lobby"))
+                .count();
+            // The first rows are in view; the list starts below the page header.
+            assert!(labels(&output).contains(&"Synthetic lobby 0000".to_owned()));
+            assert!(labels(&output).contains(&"Synthetic lobby 0002".to_owned()));
+            if count <= EAGER_ROWS {
+                assert!(built >= count, "{count}: {built}");
+            } else {
+                assert!(built < 40, "{count}: {built}");
+            }
+        }
     }
 }

@@ -13,8 +13,9 @@ import java.util.*;
 
 /**
  * Edits {@code config.yml} and {@code secrets.properties} for the in-game setup commands. Every
- * edit is validated with {@link VpnSettings#from} before it replaces the file, and both files are
- * replaced atomically so a failed write never leaves a half-written configuration behind.
+ * edit is validated with {@link VpnSettings#from} before it replaces the file. Each file is
+ * replaced atomically; password changes publish a fresh secret before switching the YAML
+ * reference, so a failed YAML write preserves the previously referenced password.
  */
 public final class ConfigEditor {
     private static final int MAX_FILE = 256 * 1024;
@@ -39,7 +40,7 @@ public final class ConfigEditor {
         YamlConfiguration yaml = load();
         List<Map<String, Object>> networks = networks(yaml);
         Map<String, Object> entry = null;
-        for (Map<String, Object> n : networks) if (name.equals(n.get("name"))) entry = n;
+        for (Map<String, Object> n : networks) if (name.equals(Objects.toString(n.get("name"), ""))) entry = n;
         boolean added = entry == null;
         if (added) {
             require(networks.size() < 128, "limite de 128 redes atingido");
@@ -51,15 +52,26 @@ public final class ConfigEditor {
             networks.add(entry);
         }
         String secret = Objects.toString(entry.get("secret"), "");
+        String previousSecret = secret;
         if (password != null) {
-            if (secret.isEmpty()) secret = freshSecretKey(name, networks);
+            secret = freshSecretKey(name, networks, storedSecretKeys());
             entry.put("secret", secret);
         }
         yaml.set("vpn.networks", networks);
         yaml.set("bridge.enabled", true);
-        VpnSettings.from(yaml);
+        VpnSettings settings = VpnSettings.from(yaml);
         if (password != null) writeSecret(secret, password);
-        save(yaml);
+        try {
+            save(yaml);
+        } catch (IOException failure) {
+            if (password != null) removeUnusedSecretBestEffort(secret);
+            throw failure;
+        }
+        if (password != null
+                && !previousSecret.isEmpty()
+                && settings.networks().stream().noneMatch(n -> previousSecret.equals(n.secret()))) {
+            removeUnusedSecretBestEffort(previousSecret);
+        }
         return new JoinResult(added, secret);
     }
 
@@ -68,7 +80,7 @@ public final class ConfigEditor {
         YamlConfiguration yaml = load();
         List<Map<String, Object>> networks = networks(yaml);
         Map<String, Object> entry = null;
-        for (Map<String, Object> n : networks) if (name.equals(n.get("name"))) entry = n;
+        for (Map<String, Object> n : networks) if (name.equals(Objects.toString(n.get("name"), ""))) entry = n;
         if (entry == null) return false;
         networks.remove(entry);
         String secret = Objects.toString(entry.get("secret"), "");
@@ -113,14 +125,15 @@ public final class ConfigEditor {
         save(yaml);
     }
 
-    static String freshSecretKey(String name, List<Map<String, Object>> networks) {
+    static String freshSecretKey(
+            String name, List<Map<String, Object>> networks, Set<String> storedKeys) {
         String slug =
                 name.toLowerCase(Locale.ROOT)
                         .replaceAll("[^a-z0-9_.-]+", "-")
                         .replaceAll("^-+|-+$", "");
         if (slug.length() > 40) slug = slug.substring(0, 40);
         if (slug.isEmpty()) slug = Integer.toHexString(name.hashCode());
-        Set<String> used = new HashSet<>();
+        Set<String> used = new HashSet<>(storedKeys);
         for (Map<String, Object> n : networks) used.add(Objects.toString(n.get("secret"), ""));
         String key = "rede-" + slug;
         for (int i = 2; used.contains(key); i++) key = "rede-" + slug + "-" + i;
@@ -181,22 +194,55 @@ public final class ConfigEditor {
 
     private void writeSecret(String key, char[] password) throws IOException {
         List<String> lines = secretLines();
-        lines.removeIf(line -> definesKey(line, key));
+        // The key is fresh. Do not edit physical lines of existing Properties
+        // records: a line resembling a key may be part of a continued value.
+        // A blank line also terminates an EOF continuation before the new key.
+        lines.add("");
         lines.add(key + "=" + escape(password));
-        replace(secretsPath(), String.join("\n", lines) + "\n", true);
+        String content = String.join("\n", lines) + "\n";
+        if (content.getBytes(StandardCharsets.UTF_8).length > 65536)
+            throw new IOException("secrets file exceeds size limit");
+        replace(secretsPath(), content, true);
+    }
+
+    private Set<String> storedSecretKeys() throws IOException {
+        Properties properties = new Properties();
+        properties.load(new java.io.StringReader(String.join("\n", secretLines())));
+        return properties.stringPropertyNames();
+    }
+
+    private void removeUnusedSecretBestEffort(String key) {
+        try {
+            removeSecret(key);
+        } catch (IOException ignored) {
+            // An unreferenced secret may remain for cleanup. Never undo publication
+            // or report a committed configuration as failed because of cleanup.
+        }
     }
 
     private void removeSecret(String key) throws IOException {
         List<String> lines = secretLines();
-        if (lines.removeIf(line -> definesKey(line, key)))
-            replace(secretsPath(), String.join("\n", lines) + "\n", true);
-    }
-
-    private static boolean definesKey(String line, String key) {
-        String trimmed = line.stripLeading();
-        if (!trimmed.startsWith(key)) return false;
-        String rest = trimmed.substring(key.length()).stripLeading();
-        return rest.isEmpty() || rest.charAt(0) == '=' || rest.charAt(0) == ':';
+        List<String> retained = new ArrayList<>();
+        boolean removed = false;
+        for (int at = 0; at < lines.size(); ) {
+            int start = at;
+            StringBuilder record = new StringBuilder();
+            boolean continued;
+            do {
+                String line = lines.get(at++);
+                record.append(line).append('\n');
+                int slashes = 0;
+                for (int i = line.length() - 1; i >= 0 && line.charAt(i) == '\\'; i--) slashes++;
+                continued = (slashes & 1) != 0;
+            } while (continued && at < lines.size());
+            Properties properties = new Properties();
+            properties.load(new java.io.StringReader(record.toString()));
+            // Properties comments may end in a backslash without continuing.
+            // If our group contains multiple keys, retain it conservatively.
+            if (properties.size() == 1 && properties.containsKey(key)) removed = true;
+            else retained.addAll(lines.subList(start, at));
+        }
+        if (removed) replace(secretsPath(), String.join("\n", retained) + "\n", true);
     }
 
     /** java.util.Properties escaping for a value: backslash, leading space, and separators. */

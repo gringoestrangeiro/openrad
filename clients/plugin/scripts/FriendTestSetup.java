@@ -1,5 +1,5 @@
-import io.github.gringoestrangeiro.openradbridge.crypto.*;
-import io.github.gringoestrangeiro.openradbridge.network.*;
+import io.github.gringoestrangeiro.openradplugin.crypto.*;
+import io.github.gringoestrangeiro.openradplugin.network.*;
 
 import java.io.*;
 import java.nio.channels.*;

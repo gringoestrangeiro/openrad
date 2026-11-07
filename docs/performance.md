@@ -312,10 +312,22 @@ and both barriers remain.
   immutable snapshot after releasing its state lock. Desktop JSON parsing takes
   ownership of subtrees instead of cloning them; the local IPC schema is unchanged.
 - Desktop lists cache normalized names, formatted addresses, sorted peer IDs,
-  and network counts. Row layout measurements allow offscreen rows to reserve
-  their space without rebuilding controls. Relevant input changes invalidate
-  the affected caches, including filters, sort order, favorites, peer metadata,
-  status, language, and layout. Traffic-only updates reuse presentation work.
+  and network counts. Relevant input changes invalidate the affected caches,
+  including filters, sort order, favorites, peer metadata, status, language,
+  and layout. Traffic-only updates reuse presentation work.
+- Peer rows, and Discover/Auto join lists longer than 100 entries, build only
+  the rows intersecting the viewport (`desktop/src/virtual_list.rs`). Rows are
+  re-measured when shown; offscreen rows reserve their last measured height,
+  or after a width/scale/style/language change the height measured for a
+  shown row of the same kind, so resizing never lays out offscreen rows. Rows
+  that are not built are absent from keyboard focus and the accessibility
+  tree; shorter lists stay fully built. A peer whose Manage menu is open stays
+  built while scrolled away. Loading spinners animate at 30 frames per second
+  instead of requesting a repaint every display frame, and a due search waits
+  for backend wake-ups instead of polling every 20 ms. Headless measurements
+  with 5000 synthetic peers on one Linux workstation: steady frames 4.6 to 1.3
+  ms, worst frames after a resize 126 to 5.6 ms; 600 Discover results 5.7 to
+  0.1 ms. These isolated figures exclude painting and presentation.
 - Windows TAP writes copy into the persistent overlapped-operation buffer and
   translate Ethernet/ARP MAC fields there before submission. This removes an
   intermediate frame allocation and copy while retaining the existing wire

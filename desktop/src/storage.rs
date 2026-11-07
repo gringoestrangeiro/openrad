@@ -82,11 +82,29 @@ pub enum PeerSort {
     Address,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    Dark,
+    Light,
+}
+
+fn existing_user_onboarded() -> bool {
+    true
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub language: LanguagePreference,
+    pub theme: ThemePreference,
+    // Existing settings files predate the wizard: don't re-onboard upgrades.
+    #[serde(default = "existing_user_onboarded")]
+    pub onboarding_complete: bool,
     pub auto_connect: bool,
+    /// Start only the saved VPN daemon at Windows sign-in; users may opt out.
+    pub start_with_windows: bool,
     pub auto_reconnect: bool,
     pub reconnect_attempts: u32,
     pub reconnect_base_delay_seconds: u64,
@@ -110,7 +128,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             language: LanguagePreference::System,
+            theme: ThemePreference::Dark,
+            onboarding_complete: false,
             auto_connect: true,
+            start_with_windows: cfg!(windows),
             auto_reconnect: true,
             reconnect_attempts: 3,
             reconnect_base_delay_seconds: 2,
@@ -214,8 +235,9 @@ impl Paths {
         );
         atomic_private_json(&self.directory, "network-preferences", &bytes)
     }
-    pub fn entry(&self) -> Result<keyring::Entry> {
-        keyring::Entry::new("org.openrad.desktop", &self.directory.to_string_lossy())
+    /// The credential-store record of the active server's identity slot.
+    pub fn entry(&self, dir: &openrad::daemon::DataDir) -> Result<keyring::Entry> {
+        keyring::Entry::new("org.openrad.desktop", &dir.identity_root().to_string_lossy())
             .map_err(|_| anyhow::anyhow!(if cfg!(windows) {
                 "Windows Credential Manager is unavailable. Check your Windows account's credential store, then restart OpenRad."
             } else {
@@ -311,6 +333,28 @@ pub fn save(vault: &impl Vault, id: &Identity) -> Result<()> {
     let bytes = Zeroizing::new(serde_json::to_vec(id)?);
     vault.set(&bytes)
 }
+
+/// Retry saving an issued first identity only while the original registration
+/// marker (or no record) remains. The caller holds the profile ownership lock.
+pub fn save_initial(vault: &impl Vault, id: &Identity) -> Result<()> {
+    if let Some(saved) = load_for_import(vault)? {
+        ensure!(
+            Zeroizing::new(serde_json::to_vec(&saved)?)
+                == Zeroizing::new(serde_json::to_vec(id)?),
+            "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
+        );
+    }
+    save(vault, id)
+}
+
+/// Explicit recovery may replace a registration marker, but not a saved identity.
+pub fn load_for_import(vault: &impl Vault) -> Result<Option<Identity>> {
+    match vault.get()? {
+        None => Ok(None),
+        Some(bytes) if bytes.as_slice() == PENDING => Ok(None),
+        Some(bytes) => Ok(Some(Identity::from_secret(&bytes)?)),
+    }
+}
 pub fn provision_once(
     vault: &impl Vault,
     provision: impl FnOnce(&mut dyn FnMut() -> Result<()>) -> Result<Identity>,
@@ -346,7 +390,25 @@ impl Replacement {
             .pending
             .as_ref()
             .context("No replacement identity to save")?;
-        save(vault, next)?;
+        // The profile lock excludes writers during this attempt, but another
+        // frontend may have changed the identity since a failed save released it.
+        let saved = load(vault)?;
+        let next_bytes = Zeroizing::new(serde_json::to_vec(next)?);
+        let expected = current
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()?
+            .map(Zeroizing::new);
+        let unchanged = match saved {
+            Some(saved) => {
+                let saved = Zeroizing::new(serde_json::to_vec(&saved)?);
+                // Also admit a write that succeeded before reporting an error.
+                saved == next_bytes || expected.as_ref() == Some(&saved)
+            }
+            None => current.is_none(),
+        };
+        ensure!(unchanged, "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.");
+        vault.set(&next_bytes)?;
         *current = self.pending.take();
         Ok(())
     }
@@ -447,6 +509,35 @@ mod tests {
         );
     }
     #[test]
+    fn initial_save_retries_preserve_concurrent_identities_and_corrupt_records() {
+        let issued = identity();
+        let encoded = serde_json::to_vec(&issued).unwrap();
+        for previous in [None, Some(PENDING.to_vec()), Some(encoded.clone())] {
+            let vault = MemoryVault {
+                data: RefCell::new(previous),
+                ..Default::default()
+            };
+            save_initial(&vault, &issued).unwrap();
+            assert_eq!(vault.data.borrow().as_ref(), Some(&encoded));
+        }
+        let mut replaced = issued.clone();
+        replaced.rid += 1;
+        let mut renamed = issued.clone();
+        renamed.node_name = "concurrent rename".into();
+        for previous in [
+            serde_json::to_vec(&replaced).unwrap(),
+            serde_json::to_vec(&renamed).unwrap(),
+            b"corrupt-record".to_vec(),
+        ] {
+            let vault = MemoryVault {
+                data: RefCell::new(Some(previous.clone())),
+                ..Default::default()
+            };
+            assert!(save_initial(&vault, &issued).is_err());
+            assert_eq!(vault.data.borrow().as_ref(), Some(&previous));
+        }
+    }
+    #[test]
     fn interrupted_registration_never_provisions_a_second_identity() {
         let vault = MemoryVault::default();
         assert!(provision_once(&vault, |commit| {
@@ -455,6 +546,35 @@ mod tests {
         })
         .is_err());
         assert!(provision_once(&vault, |_| panic!("must not register twice")).is_err());
+    }
+    #[test]
+    fn explicit_import_recovers_pending_registration_without_registering_again() {
+        let vault = MemoryVault::default();
+        assert!(provision_once(&vault, |commit| {
+            commit()?;
+            bail!("synthetic registration interruption")
+        })
+        .is_err());
+        assert!(
+            load(&vault).is_err(),
+            "ordinary startup must remain blocked"
+        );
+        assert!(load_for_import(&vault).unwrap().is_none());
+        assert_eq!(vault.data.borrow().as_deref(), Some(PENDING));
+        save(&vault, &identity()).unwrap();
+        assert_eq!(load(&vault).unwrap().unwrap().rid, 123);
+        assert_eq!(load_for_import(&vault).unwrap().unwrap().rid, 123);
+        assert_eq!(
+            provision_once(&vault, |_| panic!("recovery must not provision"))
+                .unwrap()
+                .rid,
+            123
+        );
+        *vault.data.borrow_mut() = Some(b"broken".to_vec());
+        assert!(
+            load_for_import(&vault).is_err(),
+            "corruption is not a marker"
+        );
     }
     #[test]
     fn failure_before_registration_is_sent_allows_a_later_attempt() {
@@ -599,9 +719,20 @@ mod tests {
         let old = r#"{"auto_connect":false,"auto_reconnect":true,"node_name":"test","scale":1.25}"#;
         let settings: Settings = serde_json::from_str(old).unwrap();
         assert!(!settings.auto_connect);
+        assert_eq!(settings.start_with_windows, cfg!(windows));
+        let opted_out: Settings = serde_json::from_str(r#"{"start_with_windows":false}"#).unwrap();
+        assert!(!opted_out.start_with_windows);
+        assert!(
+            !serde_json::from_str::<Settings>(&serde_json::to_string(&opted_out).unwrap())
+                .unwrap()
+                .start_with_windows
+        );
         assert_eq!(settings.reconnect_attempts, 3);
         assert_eq!(settings.start_page, StartPage::Networks);
         assert_eq!(settings.language, LanguagePreference::System);
+        assert_eq!(settings.theme, ThemePreference::Dark);
+        assert!(settings.onboarding_complete);
+        assert!(!Settings::default().onboarding_complete);
         assert!(settings.show_offline_peers);
         assert!(!settings.show_peer_ip);
         assert!(!Settings::default().show_peer_ip);
@@ -609,7 +740,10 @@ mod tests {
         changed.start_page = StartPage::Discover;
         changed.peer_sort = PeerSort::Status;
         changed.show_diagnostics = true;
+        changed.theme = ThemePreference::Light;
+        changed.onboarding_complete = true;
         changed.show_peer_ip = true;
+        changed.start_with_windows = true;
         changed.language = LanguagePreference::Vietnamese;
         let restored: Settings =
             serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
@@ -630,6 +764,60 @@ mod tests {
         assert_eq!(settings.reconnect_base_delay_seconds, 1);
         assert_eq!(settings.recent_activity_count, 40);
     }
+    #[test]
+    fn replacement_retry_preserves_an_identity_changed_by_another_frontend() {
+        let original = identity();
+        let mut issued = original.clone();
+        issued.rid = 456;
+        let mut concurrent = original.clone();
+        concurrent.rid = 789;
+        let mut renamed = original.clone();
+        renamed.node_name = "changed in another frontend".into();
+        for external in [
+            Some(serde_json::to_vec(&concurrent).unwrap()),
+            Some(serde_json::to_vec(&renamed).unwrap()),
+            Some(b"corrupt saved identity".to_vec()),
+            None,
+        ] {
+            let vault = MemoryVault::default();
+            save(&vault, &original).unwrap();
+            let mut current = Some(original.clone());
+            let mut replacement = Replacement::default();
+            replacement.prepare(|| Ok(issued.clone())).unwrap();
+            vault.fail.set(true);
+            assert!(replacement.commit(&vault, &mut current).is_err());
+            vault.fail.set(false);
+            *vault.data.borrow_mut() = external.clone();
+
+            assert!(replacement.commit(&vault, &mut current).is_err());
+            assert_eq!(*vault.data.borrow(), external);
+            assert_eq!(current.as_ref().unwrap().rid, original.rid);
+            assert!(replacement.is_pending());
+            replacement
+                .prepare(|| panic!("must keep the issued identity"))
+                .unwrap();
+
+            save(&vault, &original).unwrap();
+            replacement.commit(&vault, &mut current).unwrap();
+            assert_eq!(current.as_ref().unwrap().rid, issued.rid);
+        }
+    }
+
+    #[test]
+    fn replacement_retry_accepts_the_same_identity_already_saved() {
+        let vault = MemoryVault::default();
+        let mut current = Some(identity());
+        let mut issued = identity();
+        issued.rid = 456;
+        let mut replacement = Replacement::default();
+        replacement.prepare(|| Ok(issued.clone())).unwrap();
+        // A credential-store write can take effect even if its caller sees an error.
+        save(&vault, &issued).unwrap();
+        replacement.commit(&vault, &mut current).unwrap();
+        assert_eq!(current.unwrap().rid, issued.rid);
+        assert!(!replacement.is_pending());
+    }
+
     #[test]
     fn replacement_preserves_old_identity_until_success_and_retries_only_storage() {
         let vault = MemoryVault::default();

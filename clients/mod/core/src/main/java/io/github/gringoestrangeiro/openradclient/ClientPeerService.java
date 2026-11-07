@@ -33,6 +33,10 @@ final class ClientPeerService implements AutoCloseable {
     private final LanServerRegistry lan = new LanServerRegistry();
     private final OutboundTcpStack stack;
     private volatile Map<Long, PeerAuthorization.Grant> authorized = Map.of();
+    /** Same grants indexed by VIP for the per-frame send path; republished with authorized. */
+    private volatile Map<Inet4Address, PeerAuthorization.Grant> authorizedByVip = Map.of();
+    private static final Duration IDLE_POLL = Duration.ofMillis(20), ACTIVE_POLL = Duration.ofMillis(2);
+    private static final long ACTIVE_WINDOW = TimeUnit.MILLISECONDS.toNanos(250);
 
     private record Attempt(int failures, long retryAt, long lastStarted) {}
 
@@ -56,7 +60,10 @@ final class ClientPeerService implements AutoCloseable {
     void tick(Membership membership) throws IOException {
         if (closed.get()) return;
         Map<Long, PeerAuthorization.Grant> next = PeerAuthorization.select(membership, selectedNames);
+        Map<Inet4Address, PeerAuthorization.Grant> byVip = new HashMap<>();
+        for (PeerAuthorization.Grant grant : next.values()) byVip.putIfAbsent(grant.peer().vip(), grant);
         authorized = next;
+        authorizedByVip = Map.copyOf(byVip);
         attempts.keySet().retainAll(next.keySet());
         for (PeerWorker worker : List.copyOf(workers.values())) {
             if (!PeerAuthorization.stillBound(worker.grant, next.get(worker.grant.peer().rid()))) {
@@ -145,9 +152,9 @@ final class ClientPeerService implements AutoCloseable {
                 || timeout.compareTo(Duration.ofMinutes(2)) > 0)
             throw new IllegalArgumentException("invalid virtual TCP destination or timeout");
         long until = System.nanoTime() + timeout.toNanos();
-        PeerAuthorization.Grant grant = authorized.values().stream()
-                .filter(g -> g.peer().vip().equals(destination)).findFirst()
-                .orElseThrow(() -> new ConnectException("destination is not an authorized online member of a selected network"));
+        PeerAuthorization.Grant grant = authorizedByVip.get(destination);
+        if (grant == null)
+            throw new ConnectException("destination is not an authorized online member of a selected network");
         long rid = grant.peer().rid();
         PeerChannel selectedChannel;
         try {
@@ -190,14 +197,11 @@ final class ClientPeerService implements AutoCloseable {
 
     private void sendFrame(Inet4Address destination, byte[] frame) throws IOException {
         if (closed.get()) throw new IOException("OpenRad session closed");
-        for (PeerAuthorization.Grant grant : authorized.values()) {
-            if (!grant.peer().vip().equals(destination)) continue;
-            PeerWorker worker = workers.get(grant.peer().rid());
-            if (worker == null || worker.channel == null || !worker.offer(frame))
-                throw new IOException("OpenRad peer unavailable or outbound frame queue full");
-            return;
-        }
-        throw new IOException("OpenRad destination authorization revoked");
+        PeerAuthorization.Grant grant = authorizedByVip.get(destination);
+        if (grant == null) throw new IOException("OpenRad destination authorization revoked");
+        PeerWorker worker = workers.get(grant.peer().rid());
+        if (worker == null || worker.channel == null || !worker.offer(frame))
+            throw new IOException("OpenRad peer unavailable or outbound frame queue full");
     }
 
     private void signalChanged() { synchronized (changed) { changed.notifyAll(); } }
@@ -225,7 +229,8 @@ final class ClientPeerService implements AutoCloseable {
             // Called by a networking worker. Never hold the monitor while a transport joins its jobs.
             if (reject) closeQuietly(resource);
         }
-        synchronized boolean offer(byte[] frame) { return !stopped && frames.offer(frame.clone()); }
+        // The stack hands over a freshly encoded frame it never touches again: no copy needed.
+        synchronized boolean offer(byte[] frame) { return !stopped && frames.offer(frame); }
         synchronized boolean stopped() { return stopped; }
         boolean authorized() { return PeerAuthorization.stillBound(grant, authorized.get(grant.peer().rid())); }
 
@@ -254,27 +259,35 @@ final class ClientPeerService implements AutoCloseable {
                 attempts.computeIfPresent(rid, (key, old) -> new Attempt(0, 0, old.lastStarted()));
                 signalChanged();
                 int sequence = 0;
+                byte[] peerMac = connected.peerMac();
                 long keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos(), lastPacket = System.nanoTime();
+                long lastTraffic = 0;
                 while (!stopped() && !closed.get() && authorized()) {
-                    for (int i = 0; i < 32; i++) {
+                    for (int i = 0; i < 256; i++) {
                         if (stopped() || closed.get() || !authorized()) break;
                         byte[] frame = frames.peek();
                         if (frame == null || !connected.sendFrame(frame)) break;
                         frames.poll();
+                        lastTraffic = System.nanoTime();
                     }
                     if (System.nanoTime() >= keepalive && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
                         sequence++;
                         keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos();
                     }
-                    if (connected.ready(Duration.ofMillis(20))) {
+                    // Outbound frames are drained only between reads: poll briefly while traffic
+                    // flows so client-to-server packets are not held for a full 20 ms wait.
+                    boolean busy = !frames.isEmpty() || System.nanoTime() - lastTraffic < ACTIVE_WINDOW;
+                    if (connected.ready(busy ? ACTIVE_POLL : IDLE_POLL)) {
                         TunnelCodec.Packet packet = connected.receivePacket();
                         lastPacket = System.nanoTime();
                         if (packet instanceof TunnelCodec.Keepalive alive && !alive.reply())
                             connected.send(TunnelCodec.keepalive(alive.sequence(), true));
                         else if (packet instanceof TunnelCodec.Frames batch && authorized()) {
-                            for (byte[] frame : batch.frames()) {
+                            lastTraffic = lastPacket;
+                            // Freshly decoded arrays owned by this worker alone: no defensive copies.
+                            for (byte[] frame : batch.ownedFrames()) {
                                 if (!authorized()) break;
-                                if (!lan.accept(grant.peer().vip(), connected.peerMac(), frame))
+                                if (!lan.accept(grant.peer().vip(), peerMac, frame))
                                     stack.acceptEthernet(grant.peer().vip(), frame);
                             }
                         }
@@ -317,6 +330,7 @@ final class ClientPeerService implements AutoCloseable {
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
         authorized = Map.of();
+        authorizedByVip = Map.of();
         stack.close();
         workers.values().forEach(PeerWorker::close);
         workers.clear();

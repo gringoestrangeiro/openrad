@@ -12,6 +12,8 @@ O GitHub Actions gera **somente o APK sem assinatura**; ele nao recebe chaves pr
 
    Para garantir que o APK sem assinatura corresponde ao commit que sera lancado, acrescente `-ExpectedCommit <SHA completo de 40 caracteres>`: o script compara com a linha `Source commit` de `README-FIRST.txt` (extraido junto do APK) e recusa um APK construido de outro commit. O script tambem recusa um `-OutputApk` que seja o keystore ou qualquer arquivo de entrada.
 
+   Tanto o APK de saida quanto o manifesto `SHA256SUMS` sao protegidos contra colisao com qualquer entrada. Use caminhos sem junctions ou links simbolicos para entradas e saidas: o assinador recusa reparse points, inclusive nos diretorios ancestrais. A regressao sintetica pode ser executada com `./scripts/test-sign-android-paths.ps1`, sem chaves ou SDK.
+
    O script pede **duas senhas no proprio terminal**, ocultando a digitacao. Elas sao entregues ao assinador via entrada padrao; nao coloque senhas em comandos, tickets, commits, arquivos compartilhados ou no chat.
 
 4. O script baixa o APK oficial v2.0.1 do repositorio, verifica o certificado antigo, o pacote `com.openrad.mobile`, `versionCode=7`, `versionName=2.2.0`, a assinatura v2/v3 e a integridade SHA-256. Ele **bloqueia** a saida se o certificado do APK novo for diferente.
