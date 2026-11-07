@@ -772,8 +772,8 @@ fn manager(
                             next.start_with_windows,
                         )?;
                     }
+                    #[cfg(windows)]
                     if let Err(error) = paths.save_settings(&next) {
-                        #[cfg(windows)]
                         if update_startup {
                             if let Err(rollback) = crate::windows_startup::set_start_with_windows(
                                 &paths,
@@ -786,6 +786,8 @@ fn manager(
                         }
                         return Err(error);
                     }
+                    #[cfg(not(windows))]
+                    paths.save_settings(&next)?;
                     settings = next.clone();
                     report(Notice::Settings(next));
                     if let Some(id) = &mut identity {
