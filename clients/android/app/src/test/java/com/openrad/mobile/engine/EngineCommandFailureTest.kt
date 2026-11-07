@@ -20,6 +20,8 @@ class EngineCommandFailureTest {
             val engine = Engine(EngineConfig(), MemoryIdentityStore(), object : EngineListener {})
             Engine::class.java.getDeclaredField("phase").apply { isAccessible = true }
                 .set(engine, EngineState.Phase.ONLINE)
+            (Engine::class.java.getDeclaredField("running").apply { isAccessible = true }
+                .get(engine) as java.util.concurrent.atomic.AtomicBoolean).set(true)
             val responses = ArrayList<CommandResult>()
             submit(engine) { responses.add(it) }
             val socket = object : Socket() {

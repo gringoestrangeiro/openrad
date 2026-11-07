@@ -377,28 +377,84 @@ fn receive_fd(socket: RawFd) -> Result<File> {
     msg.msg_control = control.as_mut_ptr().cast();
     msg.msg_controllen = std::mem::size_of_val(&control);
     unsafe {
+        let received = libc::recvmsg(socket, &mut msg, libc::MSG_CMSG_CLOEXEC);
+        // recvmsg installs every delivered SCM_RIGHTS descriptor immediately,
+        // even when the payload or ancillary record is later rejected. Own all
+        // of them before checking the protocol so every error closes them.
+        let mut descriptors = Vec::new();
+        let mut c = libc::CMSG_FIRSTHDR(&msg);
+        while received >= 0 && !c.is_null() {
+            if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                let bytes = (*c).cmsg_len.saturating_sub(libc::CMSG_LEN(0) as usize);
+                for index in 0..bytes / std::mem::size_of::<RawFd>() {
+                    let fd =
+                        std::ptr::read_unaligned(libc::CMSG_DATA(c).cast::<RawFd>().add(index));
+                    descriptors.push(OwnedFd::from_raw_fd(fd));
+                }
+            }
+            c = libc::CMSG_NXTHDR(&msg, c);
+        }
         ensure!(
-            libc::recvmsg(socket, &mut msg, libc::MSG_CMSG_CLOEXEC) == 1 && payload == *b"F",
+            received == 1 && payload == *b"F",
             "TAP helper ended before descriptor transfer"
         );
-        let c = libc::CMSG_FIRSTHDR(&msg);
         ensure!(
-            !c.is_null()
-                && (*c).cmsg_level == libc::SOL_SOCKET
-                && (*c).cmsg_type == libc::SCM_RIGHTS
-                && (*c).cmsg_len == libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as usize
-                && msg.msg_flags & libc::MSG_CTRUNC == 0,
+            descriptors.len() == 1 && msg.msg_flags & libc::MSG_CTRUNC == 0,
             "invalid TAP descriptor transfer"
         );
-        Ok(File::from_raw_fd(std::ptr::read_unaligned(
-            libc::CMSG_DATA(c).cast::<RawFd>(),
-        )))
+        Ok(File::from(descriptors.pop().unwrap()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejected_descriptor_transfers_close_all_delivered_descriptors() {
+        // A retained descriptor keeps this socket alive. EOF proves that all
+        // copies delivered by recvmsg were closed, without counting process
+        // descriptors (which other parallel tests may open).
+        for (payload, count) in [(b'X', 1), (b'F', 2), (b'F', 32)] {
+            let (sender, receiver) = UnixStream::pair().unwrap();
+            let (passed, mut observer) = UnixStream::pair().unwrap();
+            observer.set_nonblocking(true).unwrap();
+            let mut payload = [payload];
+            let mut iov = libc::iovec {
+                iov_base: payload.as_mut_ptr().cast(),
+                iov_len: 1,
+            };
+            let size =
+                unsafe { libc::CMSG_SPACE((count * std::mem::size_of::<RawFd>()) as u32) } as usize;
+            let mut control = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+            let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = control.as_mut_ptr().cast();
+            msg.msg_controllen = size;
+            unsafe {
+                let c = libc::CMSG_FIRSTHDR(&msg);
+                (*c).cmsg_level = libc::SOL_SOCKET;
+                (*c).cmsg_type = libc::SCM_RIGHTS;
+                (*c).cmsg_len =
+                    libc::CMSG_LEN((count * std::mem::size_of::<RawFd>()) as u32) as usize;
+                for index in 0..count {
+                    std::ptr::write_unaligned(
+                        libc::CMSG_DATA(c).cast::<RawFd>().add(index),
+                        passed.as_raw_fd(),
+                    );
+                }
+                assert_eq!(
+                    libc::sendmsg(sender.as_raw_fd(), &msg, libc::MSG_NOSIGNAL),
+                    1
+                );
+            }
+            drop(passed);
+            assert!(receive_fd(receiver.as_raw_fd()).is_err());
+            let mut byte = [0];
+            assert_eq!(observer.read(&mut byte).unwrap(), 0, "count={count}");
+        }
+    }
 
     fn synthetic(mode: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());

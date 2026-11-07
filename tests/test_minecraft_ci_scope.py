@@ -1,4 +1,4 @@
-"""Regression tests for Minecraft CI event-delta classification."""
+"""Regression tests for Minecraft CI change classification."""
 
 from __future__ import annotations
 
@@ -166,6 +166,84 @@ class MinecraftScopeTests(unittest.TestCase):
             )
             self.assertEqual(changed, {"clients/plugin/Old.java"})
             self.assertEqual(module.affected_components(changed), (False, True))
+
+    def test_pr_followup_cannot_skip_unvalidated_component_changes(self):
+        # A previous build may have failed or been cancelled. GitHub evaluates
+        # PR path filters cumulatively, and the scope must do the same.
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+
+            def git(*args: str) -> str:
+                return subprocess.check_output(
+                    ["git", *args], cwd=repo, text=True
+                ).strip()
+
+            git("init", "-q")
+            git("config", "user.email", "ci-tests@example.invalid")
+            git("config", "user.name", "CI Tests")
+            (repo / "README.md").write_text("base")
+            git("add", ".")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            source = repo / "clients/mod/Broken.java"
+            source.parent.mkdir(parents=True)
+            source.write_text("does not compile")
+            git("add", ".")
+            git("commit", "-qm", "unvalidated mod change")
+            previous = git("rev-parse", "HEAD")
+            (repo / "README.md").write_text("unrelated follow-up")
+            git("add", ".")
+            git("commit", "-qm", "docs only")
+            head = git("rev-parse", "HEAD")
+
+            paths = module.changed_paths("pull_request", {
+                "action": "synchronize", "before": previous,
+                "pull_request": {"head": {"sha": head}, "base": {"sha": base}},
+            }, repo)
+            self.assertEqual(paths, {"clients/mod/Broken.java", "README.md"})
+            self.assertEqual(module.affected_components(paths), (True, False))
+            # A push event still validates only its new changes.
+            paths = module.changed_paths("push", {"before": previous, "after": head}, repo)
+            self.assertEqual(module.affected_components(paths), (False, False))
+
+    def test_pr_scope_ignores_base_commits_made_after_divergence(self):
+        # The base branch gains a plugin-only commit after the PR branched; a
+        # Fabric-only PR must not rebuild Paper because of the base's progress.
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+
+            def git(*args: str) -> str:
+                return subprocess.check_output(
+                    ["git", *args], cwd=repo, text=True
+                ).strip()
+
+            git("init", "-q", "-b", "main")
+            git("config", "user.email", "ci-tests@example.invalid")
+            git("config", "user.name", "CI Tests")
+            (repo / "README.md").write_text("base")
+            git("add", ".")
+            git("commit", "-qm", "base")
+            git("checkout", "-qb", "feature")
+            mod = repo / "clients/mod/Fabric.java"
+            mod.parent.mkdir(parents=True)
+            mod.write_text("fabric")
+            git("add", ".")
+            git("commit", "-qm", "fabric only")
+            head = git("rev-parse", "HEAD")
+            git("checkout", "-q", "main")
+            plugin = repo / "clients/plugin/Paper.java"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text("paper")
+            git("add", ".")
+            git("commit", "-qm", "plugin only on base")
+            base = git("rev-parse", "HEAD")
+
+            paths = module.changed_paths("pull_request", {
+                "action": "synchronize",
+                "pull_request": {"head": {"sha": head}, "base": {"sha": base}},
+            }, repo)
+            self.assertEqual(paths, {"clients/mod/Fabric.java"})
+            self.assertEqual(module.affected_components(paths), (True, False))
 
 
 if __name__ == "__main__":

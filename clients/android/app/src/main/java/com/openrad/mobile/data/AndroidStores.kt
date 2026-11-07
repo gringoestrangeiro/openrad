@@ -64,7 +64,9 @@ class EncryptedIdentityStore(context: Context) : IdentityStore {
 class PreferencesStore(context: Context) {
     private val prefs = context.getSharedPreferences("openrad_preferences", Context.MODE_PRIVATE)
 
-    private fun <T> read(key: String, default: T, decode: (String) -> T): T {
+    // SharedPreferences publishes a commit to its process cache before the disk result is known.
+    // Readers share this lock with saveString so they never observe a value that is rolled back.
+    private fun <T> read(key: String, default: T, decode: (String) -> T): T = synchronized(LOCK) {
         val raw = prefs.getString(key, null) ?: return default
         return try {
             decode(raw)
@@ -77,21 +79,28 @@ class PreferencesStore(context: Context) {
 
     fun settings(): AppSettings = read(SETTINGS, AppSettings(), Codecs::decodeSettings)
 
-    fun saveSettings(value: AppSettings) = prefs.edit().putString(SETTINGS, Codecs.encodeSettings(value)).apply()
+    private fun saveString(key: String, value: String): Boolean = synchronized(LOCK) {
+        commitPreferenceString(value,
+            { prefs.getString(key, null) },
+            { previous -> prefs.edit().putString(key, previous).commit() })
+    }
+
+    fun saveSettings(value: AppSettings): Boolean = saveString(SETTINGS, Codecs.encodeSettings(value))
 
     fun favorites(): Set<String> = read(FAVORITES, emptySet(), Codecs::decodeFavorites)
 
-    fun saveFavorites(value: Set<String>) = prefs.edit().putString(FAVORITES, Codecs.encodeFavorites(value)).apply()
+    fun saveFavorites(value: Set<String>): Boolean = saveString(FAVORITES, Codecs.encodeFavorites(value))
 
     fun configurations(): List<JoinConfiguration> = read(CONFIGS, emptyList(), Codecs::decodeConfigurations)
 
-    fun saveConfigurations(value: List<JoinConfiguration>) =
-        prefs.edit().putString(CONFIGS, Codecs.encodeConfigurations(value)).apply()
+    fun saveConfigurations(value: List<JoinConfiguration>): Boolean =
+        saveString(CONFIGS, Codecs.encodeConfigurations(value))
 
     fun hasCorruptValues(): Boolean = prefs.all.keys.any { it.endsWith(".corrupt") }
 
     companion object {
         private const val TAG = "OpenRad"
+        private val LOCK = Any()
         private const val SETTINGS = "settings"
         private const val FAVORITES = "favorites"
         private const val CONFIGS = "join_configurations"

@@ -407,5 +407,107 @@ class WorkerBindingTests(unittest.TestCase):
         self.assertTrue(self.worker.tx.empty())
 
 
+class UDPRequestLifetimeTests(unittest.TestCase):
+    def test_receive_deadline_includes_subscription_refresh(self):
+        from collections import deque
+        from openrad import LocalClient, RESPONSE, STATUS, json_bytes
+        for refresh_replies in (False, True):
+            with self.subTest(refresh_replies=refresh_replies):
+                clock = [100.0]
+                client = object.__new__(LocalClient)
+                client.timeout, client.last_touch = 40, 0
+                client.sequence, client.token, client.events = 1, bytes(16), deque()
+                client.sock = SimpleNamespace(send=lambda data: None)
+                def read(timeout):
+                    if refresh_replies and clock[0] == 100:
+                        clock[0] += .04
+                        return dict(opcode=STATUS | RESPONSE, flags=0, request=2,
+                            peer=0, payload=json_bytes(dict(ok=True)))
+                    clock[0] += max(0, timeout)
+                    raise TimeoutError('synthetic receive timeout')
+                client._read = read
+                with patch('openrad.time.monotonic', side_effect=lambda: clock[0]):
+                    with self.assertRaises(TimeoutError):
+                        client.receive(timeout=.1)
+                self.assertLessEqual(clock[0] - 100, .100001)
+
+    def test_api_cache_expiry_preserves_packet_and_extended_command_windows(self):
+        from openrad import COMMAND, HELLO, STATUS, UDPServer, encode_message, json_bytes
+        callbacks, clock = [], [1000.0]
+        engine = SimpleNamespace(add_frame_listener=lambda callback: None,
+            remove_frame_listener=lambda callback: None, count=lambda *args: None,
+            snapshot=lambda: {}, command=lambda body, callback: callbacks.append(callback))
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        server = UDPServer(engine, Profile(directory.name))
+        self.addCleanup(server.close)
+        server.send = lambda address, data: True
+        address = ('127.0.0.1', 12345)
+        with patch('openrad.time.monotonic', side_effect=lambda: clock[0]):
+            server.request(encode_message(HELLO, 1, server.token), address)
+            server.request(encode_message(STATUS, 2, server.token), address)
+            server.request(encode_message(COMMAND, 3, server.token, json_bytes(dict(op='search'))), address)
+            clock[0] = 1010.0
+            server.poll(0)
+            self.assertIn((address, 2), server.cache)  # Boundary remains inclusive.
+            clock[0] += .001
+            server.poll(0)
+            self.assertNotIn((address, 2), server.cache)
+            self.assertIn((address, 3), server.cache)
+            clock[0] = 1089.0
+            callbacks[0](dict(ok=True))
+            server.poll(0)
+            clock[0] = 1090.001
+            server.poll(0)  # Original command deadline cannot evict its reply.
+            self.assertIn((address, 3), server.cache)
+            clock[0] = 1179.0
+            server.poll(0)
+            self.assertIn((address, 3), server.cache)
+            clock[0] += .001
+            server.poll(0)
+            self.assertNotIn((address, 3), server.cache)
+            # A newly inserted short-lived reply resets an empty cache's bound.
+            server.request(encode_message(HELLO, 4, server.token), address)
+            clock[0] += 10.001
+            server.poll(0)
+            self.assertNotIn((address, 4), server.cache)
+
+    def test_expired_command_reply_cannot_complete_a_reused_request_id(self):
+        from openrad import COMMAND, HELLO, UDPServer, decode_message, encode_message, json_bytes, json_object
+        for queued_before_reuse in (False, True):
+            with self.subTest(queued_before_reuse=queued_before_reuse), tempfile.TemporaryDirectory() as directory:
+                callbacks, sent, clock = [], [], [1000.0]
+                engine = SimpleNamespace(add_frame_listener=lambda callback: None,
+                    remove_frame_listener=lambda callback: None, count=lambda *args: None,
+                    snapshot=lambda: {}, command=lambda body, callback: callbacks.append(callback))
+                server = UDPServer(engine, Profile(directory))
+                self.addCleanup(server.close)
+                server.send = lambda address, data: sent.append(decode_message(data, server.token))
+                address = ('127.0.0.1', 12345)
+                with patch('openrad.time.monotonic', side_effect=lambda: clock[0]):
+                    server.request(encode_message(HELLO, 1, server.token), address)
+                    original = encode_message(COMMAND, 2, server.token, json_bytes(dict(op='search', query='old')))
+                    server.request(original, address)
+                    server.request(original, address)
+                    self.assertEqual(len(callbacks), 1)  # Retry stays deduplicated.
+                    clock[0] += 91
+                    server.poll(0)  # Expire the command, while retaining its client.
+                    sent.clear()
+                    if queued_before_reuse:
+                        callbacks[0](dict(ok=True, result='old'))
+                    newer = encode_message(COMMAND, 2, server.token, json_bytes(dict(op='search', query='new')))
+                    server.request(newer, address)
+                    if not queued_before_reuse:
+                        callbacks[0](dict(ok=True, result='old'))
+                    server.poll(0)
+                    self.assertEqual(sent, [], 'late completion must not answer the newer command')
+                    callbacks[1](dict(ok=True, result='new'))
+                    server.poll(0)
+                    self.assertEqual(json_object(sent[-1][-1])['result'], 'new')
+                    server.request(newer, address)
+                    self.assertEqual(sent[-1], sent[-2])  # New completion is cached.
+                    self.assertEqual(len(callbacks), 2)
+
+
 if __name__ == '__main__':
     unittest.main()

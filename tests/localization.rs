@@ -148,6 +148,7 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         "VPN stop request failed; attempt={attempts}; error={error}",
         "VPN service stopped; attempts={attempts}",
         "Identity save retry; attempt={attempt}; error={error}",
+        "Windows startup task skipped; the desktop is not installed under Program Files",
         "Recovered stale VPN service endpoint",
     ];
     let mut missing = Vec::new();

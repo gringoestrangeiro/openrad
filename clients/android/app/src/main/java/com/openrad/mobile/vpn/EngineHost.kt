@@ -76,7 +76,15 @@ object EngineHost {
      * Direct peer paths follow [WifiNetworkPolicy]: network changes are pushed
      * to the engine, which retires direct channels when Wi-Fi is lost.
      */
-    fun start(context: Context, config: EngineConfig, protector: SocketProtector?): Engine = synchronized(this) {
+    fun start(context: Context, config: EngineConfig, protector: SocketProtector?): Engine =
+        start(context, { config }, protector)
+
+    /**
+     * Reads [readConfig] under the same lock as [updateConfig]: a settings save that
+     * lands between reading preferences and starting the engine is never lost.
+     */
+    fun start(context: Context, readConfig: () -> EngineConfig, protector: SocketProtector?): Engine = synchronized(this) {
+        val config = readConfig()
         engine?.takeIf { it.isRunning && it !== stoppingEngine }?.let {
             it.updateConfig(config)
             return it
@@ -123,8 +131,10 @@ object EngineHost {
         }
     }
 
-    fun updateConfig(config: EngineConfig) {
-        engine?.takeIf { it.isRunning }?.updateConfig(config)
+    fun updateConfig(config: EngineConfig) = updateConfig { config }
+
+    fun updateConfig(config: () -> EngineConfig) {
+        synchronized(this) { engine?.takeIf { it.isRunning }?.updateConfig(config()) }
     }
 
     fun setInterface(ready: Boolean, error: String?) {

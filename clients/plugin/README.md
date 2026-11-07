@@ -86,7 +86,7 @@ minecraft-network=your-network-password
 
 Para rede pública, use `secret: ""`. A lista de redes precisa existir no serviço; o plugin não cria automaticamente redes a partir de nomes na configuração. Redes pendentes de aprovação administrativa não recebem acesso. Uma lista de RIDs permitidos vazia libera membros autenticados das redes configuradas; a lista de bloqueio tem precedência. IDs sem sinal devem ser escritos entre aspas no YAML.
 
-O backend é fixado pelo administrador, não pelo peer. O Paper enxerga a origem como loopback, não como o IP virtual do jogador. `online-mode` e o protocolo Minecraft não são alterados. Não habilite IP forwarding de proxies esperando que o plugin forneça o IP real.
+O backend é fixado pelo administrador, não pelo peer. Com `bridge.forward-player-address: true` (padrão), o Paper recebe o IP virtual do jogador; veja os requisitos acima. `online-mode` e o protocolo Minecraft não são alterados. Não é necessário habilitar IP forwarding de proxies.
 
 ## Force relay
 

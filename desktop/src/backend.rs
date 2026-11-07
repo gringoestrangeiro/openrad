@@ -377,6 +377,19 @@ fn manager(
             }));
         }
     };
+    // Implicit logon-task registration runs at most once per frontend session;
+    // explicit Settings changes always apply.
+    #[cfg(windows)]
+    let mut startup_task_checked = false;
+    #[cfg(windows)]
+    if loaded.is_ok() {
+        operation(register_startup_task_once(
+            &paths,
+            &settings,
+            persisted || (service_running && dir.load_identity().is_ok()),
+            &mut startup_task_checked,
+        ));
+    }
     let mut connect = should_autoconnect(&settings, loaded.is_ok(), service_running);
     let mut next_status = Instant::now();
     #[cfg(unix)]
@@ -445,6 +458,13 @@ fn manager(
                 drop(profile_lock);
                 daemon::spawn_with_executable(&dir, options.disable_interface, &executable)?;
                 service_running = true;
+                #[cfg(windows)]
+                operation(register_startup_task_once(
+                    &paths,
+                    &settings,
+                    persisted,
+                    &mut startup_task_checked,
+                ));
                 Ok(())
             })();
             if let Err(error) = result {
@@ -723,41 +743,68 @@ fn manager(
                 operation(result);
             }
             Ok(Action::Save(next)) => {
+                #[cfg(windows)]
+                let startup_change = crate::windows_startup::requested_change(
+                    &settings,
+                    &next,
+                    persisted || (service_running && dir.load_identity().is_ok()),
+                );
                 let result = (|| -> Result<()> {
                     openrad::protocol::validate_node_name(&next.node_name)?;
-                    if service_running {
-                        let reply = daemon::request(
-                            &dir,
-                            &Request::Configure {
-                                preferences: configure(&next)?,
-                            },
-                        )?;
-                        ensure!(reply.ok, "{}", reply.message);
-                        if next.node_name != settings.node_name {
+                    // Apply a requested logon-task change before any other write,
+                    // so a Task Scheduler failure leaves the service and saved
+                    // settings untouched.
+                    #[cfg(windows)]
+                    if let Some(enabled) = startup_change {
+                        crate::windows_startup::set_start_with_windows(&paths, enabled)?;
+                        startup_task_checked |= enabled;
+                    }
+                    let saved = (|| -> Result<()> {
+                        if service_running {
                             let reply = daemon::request(
                                 &dir,
-                                &Request::Rename {
-                                    node_name: next.node_name.clone(),
+                                &Request::Configure {
+                                    preferences: configure(&next)?,
                                 },
                             )?;
                             ensure!(reply.ok, "{}", reply.message);
+                            if next.node_name != settings.node_name {
+                                let reply = daemon::request(
+                                    &dir,
+                                    &Request::Rename {
+                                        node_name: next.node_name.clone(),
+                                    },
+                                )?;
+                                ensure!(reply.ok, "{}", reply.message);
+                            }
+                        } else {
+                            // Status is only a cached observation. Exclude identity
+                            // replacement and a newly started service before offline writes.
+                            let _profile_lock = dir.try_profile_lock()?;
+                            let _service_lock = dir.stopped_lock()?;
+                            dir.save_preferences(&configure(&next)?)?;
+                            if (identity.is_some() || last_identity.is_some())
+                                && next.node_name != settings.node_name
+                            {
+                                let mut renamed = dir.load_identity()?;
+                                renamed.node_name = next.node_name.clone();
+                                dir.save_identity(&renamed)?;
+                                identity = Some(renamed);
+                            }
                         }
-                    } else {
-                        // Status is only a cached observation. Exclude identity
-                        // replacement and a newly started service before offline writes.
-                        let _profile_lock = dir.try_profile_lock()?;
-                        let _service_lock = dir.stopped_lock()?;
-                        dir.save_preferences(&configure(&next)?)?;
-                        if (identity.is_some() || last_identity.is_some())
-                            && next.node_name != settings.node_name
+                        paths.save_settings(&next)
+                    })();
+                    #[cfg(windows)]
+                    if let (Err(error), Some(enabled)) = (&saved, startup_change) {
+                        if let Err(rollback) =
+                            crate::windows_startup::set_start_with_windows(&paths, !enabled)
                         {
-                            let mut renamed = dir.load_identity()?;
-                            renamed.node_name = next.node_name.clone();
-                            dir.save_identity(&renamed)?;
-                            identity = Some(renamed);
+                            return Err(anyhow::anyhow!(
+                                "Settings were not saved: {error:#}. The Windows startup task could not be rolled back: {rollback:#}"
+                            ));
                         }
                     }
-                    paths.save_settings(&next)?;
+                    saved?;
                     settings = next.clone();
                     report(Notice::Settings(next));
                     if let Some(id) = &mut identity {
@@ -788,6 +835,13 @@ fn manager(
                     });
                     identity = Some(imported);
                     persisted = true;
+                    #[cfg(windows)]
+                    operation(register_startup_task_once(
+                        &paths,
+                        &settings,
+                        persisted,
+                        &mut startup_task_checked,
+                    ));
                     report(Notice::Phase(
                         Phase::Disconnected,
                         "Identity imported securely. Ready to connect.".into(),
@@ -911,6 +965,29 @@ fn commit_shutdown_initial_identity(
         "The saved identity changed in another frontend. Keep this window open to recover the pending identity."
     );
     storage::save_initial(vault, identity)
+}
+
+/// Register the logon task once per frontend session after an identity is
+/// saved. Installs outside Program Files are skipped: the elevated task would
+/// be refused there, and the user did not explicitly request it.
+#[cfg(windows)]
+fn register_startup_task_once(
+    paths: &Paths,
+    settings: &Settings,
+    identity_persisted: bool,
+    checked: &mut bool,
+) -> Result<()> {
+    if *checked || !crate::windows_startup::ready_to_register(settings, identity_persisted) {
+        return Ok(());
+    }
+    *checked = true;
+    if !crate::windows_startup::install_supported() {
+        crate::startup_log::event(format_args!(
+            "Windows startup task skipped; the desktop is not installed under Program Files"
+        ));
+        return Ok(());
+    }
+    crate::windows_startup::set_start_with_windows(paths, true)
 }
 
 fn commit_shutdown_replacement(

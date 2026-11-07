@@ -424,6 +424,36 @@
     "Подключаться при запуске OpenRad",
     "Kết nối khi khởi chạy OpenRad"
   ],
+  "Settings were not saved: {error}. The Windows startup task could not be rolled back: {rollback}": [
+    "Não foi possível salvar as configurações: {error}. Não foi possível reverter a tarefa de inicialização do Windows: {rollback}",
+    "Не удалось сохранить настройки: {error}. Не удалось откатить задачу автозапуска Windows: {rollback}",
+    "Không thể lưu cài đặt: {error}. Không thể hoàn tác tác vụ khởi động cùng Windows: {rollback}"
+  ],
+  "Cannot start OpenRad at login without a saved identity": [
+    "Não é possível iniciar o OpenRad ao entrar no Windows sem uma identidade salva",
+    "Невозможно запустить OpenRad при входе в Windows без сохранённых данных устройства",
+    "Không thể khởi động OpenRad khi đăng nhập nếu chưa có danh tính đã lưu"
+  ],
+  "OpenRad CLI is missing: {0}": [
+    "A CLI do OpenRad não foi encontrada: {0}",
+    "Не найден CLI OpenRad: {0}",
+    "Không tìm thấy CLI của OpenRad: {0}"
+  ],
+  "Start VPN with Windows (without opening the interface)": [
+    "Iniciar a VPN com o Windows (sem abrir a interface)",
+    "Запускать VPN вместе с Windows (без открытия интерфейса)",
+    "Khởi động VPN cùng Windows (không mở giao diện)"
+  ],
+  "Automatic VPN startup is configured after the first identity is saved.": [
+    "A inicialização automática da VPN é configurada depois que a primeira identidade é salva.",
+    "Автозапуск VPN настраивается после сохранения первых данных устройства.",
+    "Khởi động VPN tự động sẽ được thiết lập sau khi lưu danh tính đầu tiên."
+  ],
+  "Starts only the VPN in the background after Windows sign-in. Requires a saved identity and Windows Task Scheduler. Closing this window keeps the connection active.": [
+    "Inicia apenas a VPN em segundo plano após entrar no Windows. Requer uma identidade salva e o Agendador de Tarefas do Windows. Fechar esta janela mantém a conexão ativa.",
+    "Запускает только VPN в фоновом режиме после входа в Windows. Требуются сохранённые данные устройства и Планировщик заданий Windows. Закрытие этого окна не разрывает соединение.",
+    "Chỉ khởi động VPN chạy nền sau khi đăng nhập Windows. Yêu cầu danh tính đã lưu và Trình lập lịch tác vụ của Windows. Đóng cửa sổ này vẫn giữ kết nối."
+  ],
   "Reconnect after a connection failure": [
     "Reconectar após uma falha de conexão",
     "Переподключаться при сбое соединения",

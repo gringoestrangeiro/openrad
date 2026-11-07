@@ -188,4 +188,5 @@
     <string name="block_limit">Скрытая блокировка поддерживает не более %1$d адресов</string>
     <string name="block_added">Скрытая блокировка применена к %1$s</string>
     <string name="block_removed">Скрытая блокировка снята с %1$s</string>
+    <string name="preferences_save_failed">Не удалось сохранить настройки. Предыдущие значения сохранены.</string>
 </resources>

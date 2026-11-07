@@ -90,7 +90,7 @@ class OpenRadVpnService : VpnService() {
                 return START_STICKY
             }
             ACTION_UPDATE_CONFIG -> {
-                EngineHost.updateConfig(debugEndpoint(this, engineConfig(PreferencesStore(this).settings())))
+                EngineHost.updateConfig { debugEndpoint(this, engineConfig(PreferencesStore(this).settings())) }
                 return START_STICKY
             }
             else -> connect()
@@ -100,8 +100,7 @@ class OpenRadVpnService : VpnService() {
 
     private fun connect() {
         startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
-        val settings = PreferencesStore(this).settings()
-        EngineHost.start(this, debugEndpoint(this, engineConfig(settings)), protector)
+        EngineHost.start(this, { debugEndpoint(this, engineConfig(PreferencesStore(this).settings())) }, protector)
         if (watcher?.isActive != true) {
             watcher = scope.launch {
                 EngineHost.state

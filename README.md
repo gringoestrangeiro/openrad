@@ -1,14 +1,17 @@
 # OpenRad
 
-[![OpenRad intro animation](docs/assets/openrad-intro.gif)](docs/assets/openrad-intro.mp4)
+[![OpenRad animated logo — click to watch the full video](docs/assets/openrad-intro.gif)](docs/assets/openrad-intro.mp4)
 
-[Watch the OpenRad intro animation (silent MP4)](docs/assets/openrad-intro.mp4)
+[Watch the full OpenRad logo animation (1080p, 24 FPS, 9 seconds, no audio)](docs/assets/openrad-intro.mp4)
 
-The Windows desktop shows the OpenRad logo animation on first launch, then
+The Windows desktop also shows its native OpenRad logo animation on first launch, then
 offers a quick setup to choose a dark/light theme, configure auto-connection,
 and optionally create the **OpenRad** desktop shortcut. The theme can be
-changed at any time in **Settings > Workspace**. These choices are saved to
-the user's existing profile; no additional identity or VPN is created.
+changed at any time in **Settings > Workspace**. On Windows, **Settings > Connection**
+starts the VPN in the background by default at Windows sign-in once an identity
+is saved, without opening the GUI; users may disable this in Settings. Closing
+the GUI leaves the background VPN active. These choices are
+saved to the user's existing profile; no additional identity or VPN is created.
 
 
 OpenRad is an open-source Rust reimplementation of Radmin VPN. It provides a

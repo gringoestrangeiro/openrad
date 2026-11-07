@@ -1,9 +1,9 @@
-"""Select Minecraft CI components from the *latest event's* changed files.
+"""Select Minecraft CI components from the changes requiring validation.
 
-Pull-request path filters consider the cumulative PR diff. For synchronize
-events, use before..head instead, so unrelated follow-up commits do not
-rebuild every Minecraft target. Unknown, rewritten, or inaccessible history
-fails closed: both component matrices run.
+Pull requests use their cumulative diff, like GitHub's path filters. An earlier
+run may have failed or been cancelled, so a follow-up commit cannot inherit its
+validation. Push events use their event delta. Unknown, rewritten, or
+inaccessible history fails closed: both component matrices run.
 """
 
 from __future__ import annotations
@@ -56,12 +56,9 @@ def changed_paths(event: str, payload: dict[str, Any], cwd: Path) -> set[str] | 
         elif event == "pull_request":
             request = payload["pull_request"]
             head = _sha(request["head"]["sha"])
-            if payload.get("action") == "synchronize":
-                before = _sha(payload["before"])
-            else:
-                base = _sha(request["base"]["sha"])
-                before = _git(cwd, "merge-base", base, head).decode("ascii").strip()
-                before = _sha(before)
+            base = _sha(request["base"]["sha"])
+            before = _git(cwd, "merge-base", base, head).decode("ascii").strip()
+            before = _sha(before)
         else:
             return None
 
