@@ -32,6 +32,8 @@
   "openrad.menu.timeout": "Connection timeout (seconds)",
   "openrad.menu.max_networks": "Maximum networks",
   "openrad.menu.exact_networks": "Additional network names",
+  "openrad.menu.force_relay": "Relay only: %s",
+  "openrad.menu.force_relay.tooltip": "Connect to peers only through the OpenRad relay, with no direct TCP/UDP paths (like force-relay in the desktop client). Slower, but works behind strict NAT and hides your address. Applies on the next connection.",
   "openrad.menu.selectors_technical": "Advanced network filters",
   "openrad.phase.offline": "Offline",
   "openrad.phase.connecting": "Connecting...",

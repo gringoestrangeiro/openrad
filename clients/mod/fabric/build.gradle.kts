@@ -62,7 +62,7 @@ sourceSets.main {
 if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19", "1.19.1", "1.19.2", "1.19.3", "1.19.4")) {
     val generated1194 = layout.buildDirectory.dir("generated/java1194")
     val generate1194 by tasks.registering(Sync::class) {
-        inputs.property("compatibilityAdapterVersion", "1182-v5")
+        inputs.property("compatibilityAdapterVersion", "1182-v6")
         // Filters differ across 1.17/1.18, 1.19.2 and 1.19.3/4. Without this
         // input a matrix build can reuse source transformed for the prior target.
         inputs.property("minecraftTarget", minecraftTarget)
@@ -78,6 +78,9 @@ if (minecraftTarget in setOf("1.17", "1.17.1", "1.18", "1.18.1", "1.18.2", "1.19
                         .replace("save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr(\"openrad.menu.reconnect_note\")) : null);", ";")
                         .replace("option.setTooltip(Tooltip.create(Component.literal(item.entry().name())));", ";")
                         .replace("button.setTooltip(Tooltip.create(OpenRadI18n.tr(\"openrad.menu.status\", phase(current))));", ";")
+                        .replace("relayButton.setTooltip(Tooltip.create(Component.translatable(\"openrad.menu.force_relay.tooltip\")));", ";")
+                        .replace("existing.setX(width - 112);", "existing.x = width - 112;")
+                        .replace("existing.setY(5);", "existing.y = 5;")
                         .replace("box.getX()", "box.x")
                         .replace("box.getY()", "box.y")
                 }

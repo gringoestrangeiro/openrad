@@ -54,6 +54,9 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private volatile ClientPeerService peers;
     private volatile Set<String> activeNetworkNames = Set.of();
     private volatile CatalogSnapshot catalog = new CatalogSnapshot("OFFLINE", List.of(), Set.of(), List.of());
+    private final AtomicLong lastIncomingRejectLog = new AtomicLong();
+    /** What the attachment was doing; reported with a service disconnect to explain it. */
+    private volatile String controlStage = "authenticating";
 
     public ClientVpnRuntime(ClientConfig config, Path dataDirectory, Consumer<String> logger) {
         this.config = Objects.requireNonNull(config);
@@ -129,15 +132,27 @@ public final class ClientVpnRuntime implements AutoCloseable {
         }
     }
 
+    /** A session that stayed attached this long was healthy: restart backoff (Rust daemon). */
+    static final Duration STABLE_SESSION = Duration.ofSeconds(60);
+    static final int RETRY_BASE_SECONDS = 3, RETRY_MAX_SECONDS = 60;
+
+    /** Reconnect delay after the given number of consecutive failures (1-based). */
+    static long retrySeconds(int failures) {
+        int exponent = Math.max(0, Math.min(failures - 1, 5));
+        return Math.min(RETRY_MAX_SECONDS, (long) RETRY_BASE_SECONDS << exponent);
+    }
+
     private void workerLocked() {
-        int retrySeconds = 3;
+        int failures = 0;
         while (!stopped.get()) {
+            long attachedAt = 0;
             try {
                 Files.createDirectories(dataDirectory);
                 // Closing or interrupting a registration after registration.pending is written
                 // would discard an issued identity and block this profile for good. Disconnect
                 // only flags it; the worker stops once the bounded registration has finished.
                 Identity provisioned;
+                controlStage = "authenticating";
                 provisioning.set(true);
                 try {
                     if (stopped.get()) break;
@@ -156,7 +171,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                      Attachment connection = Attachment.connect(
                         identity, ServiceConfig.PORT, identity.nodeName(), this::own)) {
                     own(connection.session());
-                    retrySeconds = 3;
+                    attachedAt = System.nanoTime();
                     update("JOINING_NETWORKS", connection.vip().getHostAddress(),
                             connection.membership(), "");
                     runConnected(identity, connection);
@@ -172,17 +187,34 @@ public final class ClientVpnRuntime implements AutoCloseable {
                             "Registration outcome unknown: keep registration.pending and recover identity.");
                     break;
                 }
-                update("RETRY_WAIT", "", null, "Reconnect in " + retrySeconds
-                        + " s (" + ex.getClass().getSimpleName() + ")");
-                logger.accept("Control connection interrupted ("
-                        + ex.getClass().getSimpleName() + "), retry in " + retrySeconds + "s");
+                if (ex instanceof ServerDisconnect disconnect && disconnect.replaced()) {
+                    // Reconnecting would disconnect the other client, which would reconnect and
+                    // disconnect this one: both would flap every few seconds. Wait for the user.
+                    update("FAILED", "", null,
+                            "This OpenRad identity connected from another client. Close the other"
+                                    + " copy (or give it its own identity) and press Connect.");
+                    logger.accept("OpenRad stopped: the same identity is attached from another"
+                            + " client (copied state/identity.json?). Not reconnecting automatically.");
+                    break;
+                }
+                if (attachedAt != 0 && System.nanoTime() - attachedAt >= STABLE_SESSION.toNanos())
+                    failures = 0;
+                failures = Math.min(failures + 1, 16);
+                long delay = retrySeconds(failures);
+                String reason = safeReason(ex);
+                if (ex instanceof ServerDisconnect) reason += " during " + controlStage;
+                update("RETRY_WAIT", "", null, "Reconnect in " + delay + " s (" + reason + ")");
+                logger.accept("Control connection interrupted (" + reason + "), retry in " + delay + "s");
+                // Jitter spreads reconnects of many clients after a service restart.
+                long until = System.nanoTime() + Duration.ofSeconds(delay).toNanos()
+                        + java.util.concurrent.ThreadLocalRandom.current().nextLong(250_000_000L);
                 try {
-                    Thread.sleep(retrySeconds * 1_000L);
+                    while (!stopped.get() && System.nanoTime() < until)
+                        Thread.sleep(Math.max(1, Math.min(100, (until - System.nanoTime()) / 1_000_000L)));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                retrySeconds = Math.min(retrySeconds * 2, 60);
             } finally {
                 active.set(null);
             }
@@ -191,21 +223,60 @@ public final class ClientVpnRuntime implements AutoCloseable {
             state = new Snapshot("STOPPED", "", List.of(), 0, "");
     }
 
-    private void handle(byte[] record, Membership membership, ClientPeerService peerService) throws IOException {
-        int op = TlvCodec.operation(record);
-        switch (op) {
-            case 38 -> membership.snapshot(record);
-            case 41, 42 -> membership.changes(record);
-            case 16, 44 -> {
-                PeerConnector.serverObjected();
-                throw new AttachmentClosed();
-            }
-            default -> peerService.ingest(record);
-        }
+    /** Class name plus this client's own bounded message; never remote record content. */
+    static String safeReason(Exception error) {
+        String name = error.getClass().getSimpleName();
+        String message = error.getMessage();
+        if (!(error instanceof IOException) || message == null || message.isBlank()) return name;
+        message = message.replaceAll("\\p{Cntrl}", " ");
+        if (message.length() > 160) message = message.substring(0, 160) + "...";
+        return name + ": " + message;
     }
 
-    private static final class AttachmentClosed extends IOException {
-        AttachmentClosed() { super("service closed VPN attachment"); }
+    /** Outcome of one attachment record that is neither a catalog page nor a join reply. */
+    enum ControlEvent { MEMBERSHIP, REFUSAL, PEER_RECORD }
+
+    /**
+     * Shared attachment dispatch, matching the Rust engine and the Paper plugin: operation 16 ends
+     * the session, while a refusal (44) only answers one request (for example an acceptor relay
+     * request) and keeps the session, its channels and players.
+     */
+    static ControlEvent classify(byte[] record) throws ServerDisconnect {
+        return switch (TlvCodec.operation(record)) {
+            case 38, 41, 42 -> ControlEvent.MEMBERSHIP;
+            case ServerDisconnect.OPERATION -> {
+                PeerConnector.serverObjected();
+                throw ServerDisconnect.of(record);
+            }
+            case 44 -> ControlEvent.REFUSAL;
+            default -> ControlEvent.PEER_RECORD;
+        };
+    }
+
+    private void handle(byte[] record, Membership membership, ClientPeerService peerService) throws IOException {
+        switch (classify(record)) {
+            case MEMBERSHIP -> {
+                if (TlvCodec.operation(record) == 38) membership.snapshot(record);
+                else membership.changes(record);
+            }
+            case REFUSAL -> {
+                if (PeerConnector.serverObjected())
+                    logger.accept(config.forceRelay()
+                            ? "Service refused an acceptor relay request; incoming peers now depend on a relay offer of their own."
+                            : "Service refused an acceptor relay request; using direct paths.");
+            }
+            case PEER_RECORD -> {
+                try {
+                    peerService.ingest(record);
+                } catch (IllegalArgumentException malformed) {
+                    // One malformed peer setup record must not end the shared session.
+                    long now = System.nanoTime(), last = lastIncomingRejectLog.get();
+                    if ((last == 0 || now - last >= Duration.ofSeconds(10).toNanos())
+                            && lastIncomingRejectLog.compareAndSet(last, now))
+                        logger.accept("Incoming peer request rejected (" + safeReason(malformed) + ")");
+                }
+            }
+        }
     }
 
     private void runConnected(Identity identity, Attachment connection) throws IOException {
@@ -253,13 +324,14 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private Set<String> resolveNetworks(Attachment connection, ClientPeerService peerService) throws IOException {
         CatalogSnapshot previous = catalog;
         catalog = new CatalogSnapshot("LOADING", previous.entries(), Set.copyOf(config.networks()), List.of());
+        controlStage = "Minecraft catalog query";
         List<MinecraftNetworks.Entry> entries;
         try {
             entries = MinecraftCatalogQuery.fetch(connection.session(),
                     record -> handle(record, connection.membership(), peerService), stopped::get);
         } catch (IOException | IllegalArgumentException failure) {
             if (stopped.get()) throw new InterruptedIOException("OpenRad catalog cancelled");
-            if (failure instanceof AttachmentClosed || failure instanceof EOFException
+            if (failure instanceof ServerDisconnect || failure instanceof EOFException
                     || failure instanceof java.net.SocketException)
                 throw (IOException) failure;
             // Selector-only profiles have nothing to join without the catalog: reconnect with
@@ -289,10 +361,14 @@ public final class ClientVpnRuntime implements AutoCloseable {
         long id = 1;
         int sequence = 1;
         List<String> problems = new ArrayList<>(catalog.problems());
-        for (String network : targets.stream().sorted().toList()) {
+        List<String> ordered = targets.stream().sorted().toList();
+        int joinIndex = 0;
+        for (String network : ordered) {
             if (stopped.get()) return;
+            joinIndex++;
             if (membership.networks().values().stream()
                     .anyMatch(n -> n.name().equals(network))) continue;
+            controlStage = "join of network \"" + network + "\" (" + joinIndex + "/" + ordered.size() + ")";
             try (NetworkJoin join = new NetworkJoin(network, null, id++, sequence++)) {
                 session.send(join.start());
                 long until = System.nanoTime() + Duration.ofSeconds(12).toNanos();
@@ -324,6 +400,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
             update("JOINING_NETWORKS", connection.vip().getHostAddress(),
                     membership, "");
         }
+        controlStage = "connected session";
         String ip = connection.vip().getHostAddress();
         update("CONNECTED", ip, membership,
                 problems.isEmpty() ? "Control authenticated; " + peerService.connectedCount() + " authenticated peer channel(s)"

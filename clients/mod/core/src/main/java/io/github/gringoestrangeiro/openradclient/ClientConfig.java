@@ -9,14 +9,27 @@ import java.util.*;
 /** Explicit opt-in: the mod does not contact the remote service on a fresh install. */
 public record ClientConfig(boolean autoConnect, List<String> networks,
                            int maxPeers, int maxConnections, int connectionTimeoutSeconds,
-                           List<String> minecraftSelectors, int maxNetworks) {
+                           List<String> minecraftSelectors, int maxNetworks, boolean forceRelay) {
     public ClientConfig(boolean autoConnect, List<String> networks) {
-        this(autoConnect, networks, 256, 16, 20, List.of(), 256);
+        this(autoConnect, networks, 256, 16, 20, List.of(), 256, false);
+    }
+
+    public ClientConfig(boolean autoConnect, List<String> networks,
+                        int maxPeers, int maxConnections, int connectionTimeoutSeconds,
+                        List<String> minecraftSelectors, int maxNetworks) {
+        this(autoConnect, networks, maxPeers, maxConnections, connectionTimeoutSeconds,
+                minecraftSelectors, maxNetworks, false);
     }
 
     public ClientConfig(boolean autoConnect, List<String> networks,
                         int maxPeers, int maxConnections, int connectionTimeoutSeconds) {
-        this(autoConnect, networks, maxPeers, maxConnections, connectionTimeoutSeconds, List.of(), 256);
+        this(autoConnect, networks, maxPeers, maxConnections, connectionTimeoutSeconds, List.of(), 256, false);
+    }
+
+    /** Same configuration with relay-only peer transport switched on or off. */
+    public ClientConfig withForceRelay(boolean relayOnly) {
+        return new ClientConfig(autoConnect, networks, maxPeers, maxConnections,
+                connectionTimeoutSeconds, minecraftSelectors, maxNetworks, relayOnly);
     }
 
     public ClientConfig {
@@ -56,13 +69,17 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
         String autostart = p.getProperty("auto-connect","false").trim();
         if (!autostart.equals("true") && !autostart.equals("false"))
             throw new IllegalArgumentException("auto-connect must be true or false");
+        String relay = p.getProperty("force-relay", "false").trim();
+        if (!relay.equals("true") && !relay.equals("false"))
+            throw new IllegalArgumentException("force-relay must be true or false");
         String raw = p.getProperty("network-names","").trim();
         List<String> items = raw.isEmpty() ? List.of()
                 : Arrays.asList(raw.split(";", -1));
         return new ClientConfig(Boolean.parseBoolean(autostart), items,
                 integer(p, "max-peers", 256), integer(p, "max-connections", 16),
                 integer(p, "connection-timeout-seconds", 20),
-                list(p.getProperty("minecraft-selectors", "")), integer(p, "max-networks", 256));
+                list(p.getProperty("minecraft-selectors", "")), integer(p, "max-networks", 256),
+                Boolean.parseBoolean(relay));
     }
 
     private static List<String> list(String raw) {
@@ -82,6 +99,7 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
         properties.setProperty("max-peers", Integer.toString(maxPeers));
         properties.setProperty("max-connections", Integer.toString(maxConnections));
         properties.setProperty("connection-timeout-seconds", Integer.toString(connectionTimeoutSeconds));
+        properties.setProperty("force-relay", Boolean.toString(forceRelay));
         Path temporary = Files.createTempFile(directory, ".openrad-client-", ".tmp");
         try {
             try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8,
@@ -128,6 +146,10 @@ public record ClientConfig(boolean autoConnect, List<String> networks,
                         max-connections=16
                         # Includes waiting for an authorized peer and the virtual TCP handshake.
                         connection-timeout-seconds=20
+                        # true = peers only through the OpenRad relay (no direct TCP/UDP paths),
+                        # like the desktop client's force-relay. Slower, but hides your address
+                        # from peers and works behind restrictive NAT/firewalls.
+                        force-relay=false
                         """, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
             } catch (FileAlreadyExistsException ignored) {
                 // Concurrent launch: read existing configuration below.

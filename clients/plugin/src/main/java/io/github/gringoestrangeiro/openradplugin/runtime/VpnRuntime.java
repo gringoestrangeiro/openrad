@@ -137,6 +137,9 @@ public final class VpnRuntime implements AutoCloseable {
                 : current.snapshot();
     }
 
+    /** What the attachment was doing; reported with a service disconnect to explain it. */
+    private volatile String controlStage = "authenticating";
+
     private void own(ControlSession session) {
         control.set(session);
         if (stopped.get()) closeQuietly(session);
@@ -165,6 +168,7 @@ public final class VpnRuntime implements AutoCloseable {
                 while (!stopped.get()) {
                     long attachedAt = 0;
                     try {
+                        controlStage = "authenticating";
                         publish("AUTHENTICATING", "", List.of(), "");
                         try (Identity identity =
                                         Provisioner.loadOrRegister(
@@ -189,9 +193,26 @@ public final class VpnRuntime implements AutoCloseable {
                     } catch (Exception e) {
                         if (stopped.get()) break;
                         String reason = safeFailure(e);
+                        if (e instanceof ServerDisconnect) reason += " during " + controlStage;
                         publish("RETRY_WAIT", "", List.of(), reason);
                         log.accept("VPN session interrupted: " + reason);
                         cleanupSession();
+                        if (e instanceof ServerDisconnect disconnect && disconnect.replaced()) {
+                            // Retrying would disconnect the other client, which then retries and
+                            // disconnects this one: both would flap forever. Wait for an operator.
+                            publish(
+                                    "FAILED",
+                                    "",
+                                    List.of(),
+                                    "This OpenRad identity connected from another client; stop the"
+                                            + " other copy (or give it its own identity) and use"
+                                            + " /orb reconnect.");
+                            log.accept(
+                                    "VPN stopped: the same OpenRad identity is attached elsewhere"
+                                            + " (copied identity.json or a second server). Not"
+                                            + " reconnecting automatically.");
+                            break;
+                        }
                         if (Files.exists(
                                         directory.resolve("registration.pending"),
                                         LinkOption.NOFOLLOW_LINKS)
@@ -260,6 +281,7 @@ public final class VpnRuntime implements AutoCloseable {
             Set<String> automatic = new HashSet<>();
             if (settings.minecraftNetworks().enabled()) {
                 minecraftCatalog = new MinecraftCatalog("LOADING", List.of(), Set.of(), List.of());
+                controlStage = "Minecraft catalog query";
                 try {
                     var entries = discoverMinecraft(session, membership, hub);
                     var selected =
@@ -319,10 +341,14 @@ public final class VpnRuntime implements AutoCloseable {
             long id = 1;
             int seq = 1;
             long lastJoinHeartbeat = System.nanoTime();
+            int joinIndex = 0;
             for (var n : targets.values()) {
                 if (stopped.get()) return;
+                joinIndex++;
                 if (membership.networks().values().stream()
                         .anyMatch(v -> v.name().equals(n.name()))) continue;
+                controlStage = "join of network \"" + n.name() + "\" (" + joinIndex + "/"
+                        + targets.size() + ")";
                 try (NetworkJoin join =
                         new NetworkJoin(n.name(), secrets.password(n.secret()), id++, seq++)) {
                     session.send(join.start());
@@ -409,6 +435,7 @@ public final class VpnRuntime implements AutoCloseable {
                                 catalog.selected(),
                                 catalog.problems());
             }
+            controlStage = "connected session";
             int ip = ipInt(attached.vip());
             var b = settings.bridge();
             var limits =
@@ -636,9 +663,9 @@ public final class VpnRuntime implements AutoCloseable {
         switch (TlvCodec.operation(data)) {
             case 38 -> membership.snapshot(data);
             case 41, 42 -> membership.changes(data);
-            case 16 -> {
+            case ServerDisconnect.OPERATION -> {
                 PeerConnector.serverObjected();
-                throw new IOException("service disconnected session");
+                throw ServerDisconnect.of(data);
             }
             // A refusal on the shared session (for example of an acceptor relay request) is
             // not a disconnect: keep the session, its channels and Minecraft players (Rust).

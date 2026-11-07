@@ -1,10 +1,10 @@
-> **Download (2.3.0, alpha):** [release 2.3.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.0),
-> arquivos `OpenRadClientMod-2.3.0-fabric-<versões>.jar` para Minecraft 1.17–1.21.11 e 26.1–26.3. O nome traz
+> **Download (2.3.1, alpha):** [release 2.3.1](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.1),
+> arquivos `OpenRadClientMod-2.3.1-fabric-<versões>.jar` para Minecraft 1.17–1.21.11 e 26.1–26.3. O nome traz
 > só a versão do Minecraft: um JAR por versão principal, dividido onde os patches precisam de builds diferentes
 > (por exemplo `-1.18-1.18.2`, `-1.21-1.21.5`, `-1.21.6-1.21.10`, `-1.21.11`, `-26.1-26.3`). Cada patch é compilado e
 > testado separadamente no CI; patches só compartilham um JAR quando os builds são idênticos byte a byte, e o
 > `fabric.mod.json` lista cada patch coberto. Instale **um** JAR, o que inclui a versão do seu jogo, com a Fabric API.
-> O build nao comprova gameplay; consulte as [notas da 2.3.0](../../docs/releases/2.3.0.md). As secoes abaixo
+> O build nao comprova gameplay; consulte as [notas da 2.3.1](../../docs/releases/2.3.1.md). As secoes abaixo
 > descrevem geracoes anteriores.
 
 # OpenRad Client Mod — Minecraft Java 1.21 a 26.3
@@ -42,7 +42,7 @@ Para apenas a 1.21.4, execute:
 ## Instalação
 
 1. Use uma das versões validadas (**1.20.6, 1.21, 1.21.1 ou 1.21.4**), Java **21**, Fabric Loader compatível e a Fabric API da mesma versão. Confira a matriz no documento de compatibilidade.
-2. Coloque somente o JAR correspondente ao seu Minecraft na pasta mods/ (por exemplo `OpenRadClientMod-2.3.0-fabric-1.21-1.21.5.jar` para 1.21.1).
+2. Coloque somente o JAR correspondente ao seu Minecraft na pasta mods/ (por exemplo `OpenRadClientMod-2.3.1-fabric-1.21-1.21.5.jar` para 1.21.1).
 3. Abra o jogo uma vez. O mod cria `config/openrad-client/openrad-client.properties` com a conexão desligada.
 4. Feche o jogo e configure nomes **exatos** das redes públicas, separados por ponto e vírgula. Exemplo:
 
@@ -52,6 +52,7 @@ network-names=Minecraft [Português 1];Minecraft [English 2]
 max-peers=256
 max-connections=16
 connection-timeout-seconds=20
+force-relay=false
 ```
 
 5. Abra o jogo e clique **OpenRad** na tela Multiplayer. Aguarde a autenticação e o estabelecimento de um canal com o peer do servidor.
@@ -62,6 +63,10 @@ O servidor precisa estar acessível na VPN e escutando na porta anunciada. No Op
 ## Configuração e limites
 
 `max-peers` aceita 1..4096; no máximo oito novas negociações acontecem simultaneamente. `max-connections` aceita 1..64 e inclui status/pings e conexões de jogo. `connection-timeout-seconds` aceita 1..120. Configurações antigas sem essas opções mantêm os valores padrão.
+
+`force-relay=true` (ou o botão **Somente relay** em Avançado) conecta aos peers apenas pelo relay do OpenRad, sem caminhos diretos TCP/UDP em nenhuma direção, como o `force-relay` do cliente desktop. Vale a partir da próxima conexão.
+
+Se o servidor encerrar a sessão porque a mesma identidade (`state/identity.json`) conectou de outro cliente, o mod mostra FALHA e não reconecta sozinho: senão as duas cópias ficariam derrubando uma à outra a cada poucos segundos. Feche a outra cópia (ou dê a ela sua própria identidade) e clique em Conectar.
 
 A identidade fica em `config/openrad-client/state/` e é exclusiva do mod. Nunca copie a identidade do plugin/cliente VPN para esse diretório nem compartilhe `identity.json` ou `registration.pending`. Um lock impede uso simultâneo do mesmo perfil. O registro remoto só ocorre após conectar explicitamente ou configurar `auto-connect=true` com redes selecionadas.
 

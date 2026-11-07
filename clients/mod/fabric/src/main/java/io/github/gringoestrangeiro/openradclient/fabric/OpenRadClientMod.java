@@ -27,6 +27,8 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.lit
 public final class OpenRadClientMod implements ClientModInitializer {
     private static final Logger LOG = Logger.getLogger("OpenRad Client Mod");
     private static volatile OpenRadController controller;
+    /** Render-thread only; weak so closed screens and their buttons are collected. */
+    private static final java.util.Map<Screen, Button> MENU_BUTTONS = new java.util.WeakHashMap<>();
 
     public static OpenRadController controller() { return controller; }
     /** Without an OpenRad session, 26.x addresses keep the normal path (e.g. official Radmin VPN). */
@@ -64,12 +66,23 @@ public final class OpenRadClientMod implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> controller.close());
         ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
             if (!(screen instanceof JoinMultiplayerScreen || screen instanceof TitleScreen || screen instanceof PauseScreen)) return;
+            // A window resize re-runs AFTER_INIT, but screens that only reposition their layout
+            // (JoinMultiplayerScreen on 1.21+/26.x) keep their widgets: move the existing button
+            // instead of stacking another one at every resize.
+            Button existing = MENU_BUTTONS.get(screen);
+            if (existing != null && screen.children().contains(existing)) {
+                existing.setX(width - 112);
+                existing.setY(5);
+                return;
+            }
             Button button = Button.builder(Component.literal("OpenRad"), clicked -> openMenu(screen))
                     .bounds(width - 112, 5, 106, 20).build();
             Screens.getButtons(screen).add(button);
+            MENU_BUTTONS.put(screen, button);
             // Rebuild the tooltip only when the phase changes, not on every client tick.
             String[] shown = {null};
             ScreenEvents.afterTick(screen).register(ignored -> {
+                if (MENU_BUTTONS.get(screen) != button) return; // replaced by a full re-init
                 String current = controller.status().phase();
                 if (current.equals(shown[0])) return;
                 shown[0] = current;

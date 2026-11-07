@@ -32,6 +32,8 @@
   "openrad.menu.timeout": "接続タイムアウト（秒）",
   "openrad.menu.max_networks": "ネットワークの最大数",
   "openrad.menu.exact_networks": "追加のネットワーク名",
+  "openrad.menu.force_relay": "リレーのみ: %s",
+  "openrad.menu.force_relay.tooltip": "ピアへの接続を OpenRad リレー経由のみにし、直接の TCP/UDP 経路を使いません(デスクトップ版の force-relay と同じ)。遅くなりますが、厳しい NAT の内側でも動作し、アドレスを隠せます。次回の接続から適用されます。",
   "openrad.menu.selectors_technical": "高度なネットワークフィルター",
   "openrad.phase.offline": "オフライン",
   "openrad.phase.connecting": "接続中...",

@@ -16,7 +16,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** One attachment generation. A single worker owns each encrypted channel and its cipher state. */
 final class ClientPeerService implements AutoCloseable {
-    private static final PeerConnector.Policy TRANSPORTS = new PeerConnector.Policy(true, true, true);
+    private static final PeerConnector.Policy ALL_TRANSPORTS = new PeerConnector.Policy(true, true, true);
+    /** Force relay suppresses direct transport setup in both directions (Rust relay-only mode). */
+    private static final PeerConnector.Policy RELAY_ONLY = new PeerConnector.Policy(false, false, true);
+    private final PeerConnector.Policy transports;
     private final Identity identity;
     private final Attachment attachment;
     private final int maxPeers;
@@ -44,11 +47,16 @@ final class ClientPeerService implements AutoCloseable {
         this.identity = identity;
         this.attachment = attachment;
         this.maxPeers = config.maxPeers();
+        this.transports = transports(config);
         this.selectedNames = Set.copyOf(config.networks());
         resourceCloser = new AsyncResourceCloser(maxPeers);
         executor = new ThreadPoolExecutor(0, maxPeers, 0, TimeUnit.SECONDS,
                 new SynchronousQueue<>(), io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("openrad-client-peer-"));
         stack = new OutboundTcpStack(attachment.vip(), this::sendFrame, config.maxConnections());
+    }
+
+    static PeerConnector.Policy transports(ClientConfig config) {
+        return config.forceRelay() ? RELAY_ONLY : ALL_TRANSPORTS;
     }
 
     void ingest(byte[] record) { incoming.ingest(record); }
@@ -129,7 +137,14 @@ final class ClientPeerService implements AutoCloseable {
         for (long rid : candidates) {
             AsyncResourceCloser.Lease cleanup = resourceCloser.reserve();
             if (cleanup == null) break;
-            IncomingHub.Setup setup = offers.contains(rid) ? incoming.take(rid).orElse(null) : null;
+            boolean offered = offers.contains(rid);
+            IncomingHub.Setup setup = offered ? incoming.take(rid).orElse(null) : null;
+            // Every setup route is busy: keep the offer for a later scan instead of dialling out,
+            // which the pending offer would cancel again immediately (Paper plugin parity).
+            if (offered && setup == null) {
+                cleanup.finish(List.of());
+                continue;
+            }
             PeerWorker worker = new PeerWorker(next.get(rid), setup, cleanup);
             workers.put(rid, worker);
             attempts.compute(rid, (key, old) -> new Attempt(old == null ? 0 : old.failures(), 0, now));
@@ -241,12 +256,12 @@ final class ClientPeerService implements AutoCloseable {
                 PeerChannel connected;
                 if (setup == null) {
                     var result = PeerConnector.connect(identity, attachment.vip(), grant.peer(),
-                            ServiceConfig.PORT, TRANSPORTS, this::own);
+                            ServiceConfig.PORT, transports, this::own);
                     own(result);
                     connected = result.channel();
                 } else {
                     connected = PeerConnector.accept(setup, identity, attachment.vip(), grant.peer(),
-                            attachment.session().localAddress(), TRANSPORTS, record -> {
+                            attachment.session().localAddress(), transports, record -> {
                                 if (!controlOutbound.offer(record)) throw new IllegalStateException("control advertisement queue full");
                             }, this::own, attachment.uesHosts());
                     own(connected);

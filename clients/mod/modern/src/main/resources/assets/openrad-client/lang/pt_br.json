@@ -32,6 +32,8 @@
   "openrad.menu.timeout": "Tempo limite de conexão (segundos)",
   "openrad.menu.max_networks": "Máximo de redes",
   "openrad.menu.exact_networks": "Nomes de outras redes",
+  "openrad.menu.force_relay": "Somente relay: %s",
+  "openrad.menu.force_relay.tooltip": "Conecta aos peers somente pelo relay do OpenRad, sem caminhos diretos TCP/UDP (como o force-relay do cliente desktop). Mais lento, mas funciona atrás de NAT restrito e oculta seu endereço. Vale na próxima conexão.",
   "openrad.menu.selectors_technical": "Filtros avançados de redes",
   "openrad.phase.offline": "Desconectado",
   "openrad.phase.connecting": "Conectando...",

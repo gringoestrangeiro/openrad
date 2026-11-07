@@ -3,6 +3,7 @@ package io.github.gringoestrangeiro.openradclient.fabric;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -15,6 +16,9 @@ public final class OpenRadAdvancedScreen extends Screen {
     private final OpenRadMenuDraft draft;
     private EditBox peers, connections, timeout, maxNetworks, names, selectors;
     private boolean invalid;
+    /** Pending until Done; Cancel leaves the draft untouched. */
+    private Boolean forceRelay;
+    private Button relayButton;
 
     OpenRadAdvancedScreen(OpenRadMenuScreen parent, OpenRadMenuDraft draft) {
         super(Component.literal("OpenRad"));
@@ -35,11 +39,22 @@ public final class OpenRadAdvancedScreen extends Screen {
         maxNetworks = field(left + half + 12, 87, half, "openrad.menu.max_networks", oldMax, 4);
         names = field(left, 131, panel, "openrad.menu.exact_networks", oldNames, 4096);
         selectors = field(left, 175, panel, "openrad.menu.selectors_technical", oldSelectors, 4096);
+        if (forceRelay == null) forceRelay = draft.forceRelay;
+        int third = (panel - 16) / 3;
         addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> apply())
-                .bounds(left, height - 27, half, 20).build());
+                .bounds(left, height - 27, third, 20).build());
+        relayButton = addRenderableWidget(Button.builder(relayLabel(), button -> {
+                    forceRelay = !forceRelay;
+                    relayButton.setMessage(relayLabel());
+                }).bounds(left + third + 8, height - 27, third, 20).build());
+        relayButton.setTooltip(Tooltip.create(Component.translatable("openrad.menu.force_relay.tooltip")));
         addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), button -> onClose())
-                .bounds(left + half + 12, height - 27, half, 20).build());
+                .bounds(left + 2 * (third + 8), height - 27, panel - 2 * (third + 8), 20).build());
         setInitialFocus(peers);
+    }
+    private Component relayLabel() {
+        return Component.translatable("openrad.menu.force_relay",
+                Component.translatable(forceRelay ? "options.on" : "options.off"));
     }
     private EditBox field(int x, int y, int width, String key, String value, int limit) {
         EditBox box = new EditBox(font, x, y, width, 20, Component.translatable(key));
@@ -55,13 +70,14 @@ public final class OpenRadAdvancedScreen extends Screen {
         try {
             var config = new io.github.gringoestrangeiro.openradclient.ClientConfig(draft.autoConnect,
                     split(names.getValue()), Integer.parseInt(peers.getValue()), Integer.parseInt(connections.getValue()),
-                    Integer.parseInt(timeout.getValue()), split(selectors.getValue()), Integer.parseInt(maxNetworks.getValue()));
+                    Integer.parseInt(timeout.getValue()), split(selectors.getValue()), Integer.parseInt(maxNetworks.getValue()), forceRelay);
             draft.maxPeers = config.maxPeers();
             draft.maxConnections = config.maxConnections();
             draft.timeout = config.connectionTimeoutSeconds();
             draft.maxNetworks = config.maxNetworks();
             draft.networks = config.networks();
             draft.selectors = config.minecraftSelectors();
+            draft.forceRelay = config.forceRelay();
             minecraft.setScreenAndShow(parent);
         } catch (IllegalArgumentException failure) { invalid = true; }
     }

@@ -9,6 +9,7 @@ public final class OpenRadMenuDraft {
     List<String> networks;
     List<String> selectors;
     int maxPeers, maxConnections, timeout, maxNetworks;
+    boolean forceRelay;
 
     public OpenRadMenuDraft(ClientConfig config) {
         autoConnect = config.autoConnect();
@@ -18,9 +19,10 @@ public final class OpenRadMenuDraft {
         maxConnections = config.maxConnections();
         timeout = config.connectionTimeoutSeconds();
         maxNetworks = config.maxNetworks();
+        forceRelay = config.forceRelay();
     }
     public ClientConfig config() {
-        return new ClientConfig(autoConnect, networks, maxPeers, maxConnections, timeout, selectors, maxNetworks);
+        return new ClientConfig(autoConnect, networks, maxPeers, maxConnections, timeout, selectors, maxNetworks, forceRelay);
     }
     public void select(List<String> selection) {
         List<String> next = List.copyOf(selection);
