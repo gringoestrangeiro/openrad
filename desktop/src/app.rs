@@ -34,75 +34,100 @@ fn light_palette() -> bool {
     LIGHT_PALETTE.with(|flag| flag.get())
 }
 
-fn bg() -> Color32 {
+/// One palette entry per theme: `(dark, light)`.
+fn pick(dark: Color32, light: Color32) -> Color32 {
     if light_palette() {
-        Color32::from_rgb(245, 248, 251)
+        light
     } else {
-        Color32::from_rgb(13, 18, 25)
+        dark
     }
+}
+fn bg() -> Color32 {
+    pick(
+        Color32::from_rgb(11, 12, 16),
+        Color32::from_rgb(246, 247, 249),
+    )
 }
 fn surface() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(255, 255, 255)
-    } else {
-        Color32::from_rgb(20, 27, 37)
-    }
+    pick(
+        Color32::from_rgb(18, 19, 25),
+        Color32::from_rgb(255, 255, 255),
+    )
 }
 fn raised() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(232, 238, 244)
-    } else {
-        Color32::from_rgb(26, 35, 47)
-    }
+    pick(
+        Color32::from_rgb(28, 30, 38),
+        Color32::from_rgb(239, 240, 244),
+    )
+}
+fn hover() -> Color32 {
+    pick(
+        Color32::from_rgb(37, 40, 51),
+        Color32::from_rgb(228, 230, 236),
+    )
 }
 fn border() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(205, 215, 228)
-    } else {
-        Color32::from_rgb(39, 51, 65)
-    }
+    pick(
+        Color32::from_rgb(38, 40, 51),
+        Color32::from_rgb(224, 226, 233),
+    )
 }
 fn text() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(30, 45, 60)
-    } else {
-        Color32::from_rgb(230, 237, 244)
-    }
+    pick(
+        Color32::from_rgb(222, 225, 233),
+        Color32::from_rgb(28, 31, 41),
+    )
+}
+fn strong() -> Color32 {
+    pick(
+        Color32::from_rgb(246, 247, 251),
+        Color32::from_rgb(10, 11, 16),
+    )
 }
 fn muted() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(90, 105, 125)
-    } else {
-        Color32::from_rgb(141, 157, 176)
-    }
+    pick(
+        Color32::from_rgb(134, 140, 158),
+        Color32::from_rgb(104, 110, 128),
+    )
 }
-fn mint() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(20, 135, 101)
-    } else {
-        Color32::from_rgb(98, 226, 181)
-    }
+/// Interactive accent: selection, focus, links and primary actions.
+fn accent() -> Color32 {
+    pick(
+        Color32::from_rgb(139, 146, 255),
+        Color32::from_rgb(79, 70, 229),
+    )
+}
+/// Fill behind white text on primary buttons.
+fn accent_fill() -> Color32 {
+    pick(
+        Color32::from_rgb(99, 102, 241),
+        Color32::from_rgb(79, 70, 229),
+    )
+}
+/// Healthy state only (connected peers, active interface); never decoration.
+fn success() -> Color32 {
+    pick(
+        Color32::from_rgb(74, 222, 128),
+        Color32::from_rgb(22, 150, 74),
+    )
 }
 fn blue() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(58, 92, 191)
-    } else {
-        Color32::from_rgb(132, 164, 255)
-    }
+    pick(
+        Color32::from_rgb(96, 165, 250),
+        Color32::from_rgb(37, 99, 235),
+    )
 }
 fn amber() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(149, 105, 31)
-    } else {
-        Color32::from_rgb(244, 190, 100)
-    }
+    pick(
+        Color32::from_rgb(251, 191, 36),
+        Color32::from_rgb(180, 110, 6),
+    )
 }
 fn red() -> Color32 {
-    if light_palette() {
-        Color32::from_rgb(185, 57, 72)
-    } else {
-        Color32::from_rgb(248, 130, 143)
-    }
+    pick(
+        Color32::from_rgb(248, 113, 113),
+        Color32::from_rgb(214, 40, 40),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1271,6 +1296,7 @@ impl App {
                         muted()
                     }),
                 )
+                .frame_when_inactive(false)
                 .min_size(Vec2::splat(30.)),
             )
             .on_hover_text(&label);
@@ -1516,7 +1542,16 @@ impl App {
             .resizable(true)
             .default_size(240.)
             .size_range(166. ..=max_width)
-            .frame(egui::Frame::new().fill(surface()).inner_margin(20))
+            .frame(
+                egui::Frame::new()
+                    .fill(surface())
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 14,
+                        top: 18,
+                        bottom: 20,
+                    }),
+            )
             .show(ui, |ui| {
                 // Reserve the footer before laying out an arbitrarily long membership list.
                 egui::Panel::bottom("sidebar-footer")
@@ -1534,93 +1569,82 @@ impl App {
                         .auto_shrink([false, false])
                         .min_scrolled_height(0.)
                         .show(ui, |ui| {
-                            ui.add_space(10.);
                             ui.horizontal(|ui| {
+                                ui.add_space(4.);
                                 ui.spacing_mut().item_spacing.x = 8.;
-                                logo(ui, if narrow { 26. } else { 29. });
+                                logo(ui, if narrow { 24. } else { 28. });
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new("openrad")
-                                            .size(if narrow { 20. } else { 24. })
-                                            .strong()
-                                            .color(text()),
+                                            .size(if narrow { 18. } else { 21. })
+                                            .color(strong()),
                                     )
                                     .truncate(),
                                 );
                             });
-                            ui.add_space(8.);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(language.text("YOUR NETWORK, CLOSER"))
-                                        .size(9.)
-                                        .color(muted()),
-                                )
-                                .truncate(),
-                            );
-                            ui.add_space(if compact { 20. } else { 38. });
-                            for (page, label) in [
-                                (Page::Networks, language.text("My networks")),
-                                (Page::Discover, language.text("Discover")),
-                                (Page::AutoJoin, language.text("Auto join")),
-                                (Page::Settings, language.text("Settings")),
+                            ui.add_space(if compact { 14. } else { 24. });
+                            ui.spacing_mut().item_spacing.y = 2.;
+                            for (page, icon, label) in [
+                                (
+                                    Page::Networks,
+                                    NavIcon::Networks,
+                                    language.text("My networks"),
+                                ),
+                                (Page::Discover, NavIcon::Discover, language.text("Discover")),
+                                (
+                                    Page::AutoJoin,
+                                    NavIcon::AutoJoin,
+                                    language.text("Auto join"),
+                                ),
+                                (Page::Settings, NavIcon::Settings, language.text("Settings")),
                             ] {
-                                let selected = self.page == page;
-                                let button = egui::Button::new(
-                                    RichText::new(label).size(14.).color(if selected {
-                                        mint()
-                                    } else {
-                                        muted()
-                                    }),
-                                )
-                                .fill(if selected {
-                                    Color32::from_rgb(29, 56, 51)
-                                } else {
-                                    surface()
-                                })
-                                .stroke(Stroke::NONE)
-                                .min_size(Vec2::new(ui.available_width(), 42.))
-                                .corner_radius(9);
-                                if ui.add(button).on_hover_text(label).clicked() {
+                                if nav_item(ui, icon, label, self.page == page)
+                                    .on_hover_text(label)
+                                    .clicked()
+                                {
                                     self.page = page;
                                 }
-                                ui.add_space(6.);
                             }
-                            ui.add_space(if compact { 16. } else { 24. });
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(language.text("MEMBERSHIPS"))
-                                        .size(10.)
-                                        .color(muted()),
-                                )
-                                .truncate(),
-                            );
-                            ui.add_space(10.);
-                            if self.snapshot.networks.is_empty() {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(language.text("No networks yet"))
-                                            .size(12.)
-                                            .color(muted()),
-                                    )
-                                    .truncate(),
-                                );
-                            }
+                            ui.add_space(if compact { 14. } else { 24. });
+                            egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(10, 0))
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(language.text("MEMBERSHIPS"))
+                                                .size(10.)
+                                                .color(muted()),
+                                        )
+                                        .truncate(),
+                                    );
+                                    ui.add_space(4.);
+                                    if self.snapshot.networks.is_empty() {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(language.text("No networks yet"))
+                                                    .size(12.)
+                                                    .color(muted()),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
+                                });
                             for n in self.joined_networks().iter() {
                                 let name = if self.network_preferences.favorites.contains(&n.name) {
                                     format!("★ {}", n.name)
                                 } else {
                                     n.name.clone()
                                 };
+                                let selected =
+                                    self.selected_network.as_ref() == Some(&n.network_id);
                                 if ui
                                     .push_id(&n.network_id, |ui| {
                                         ui.add(
-                                            egui::Button::new(RichText::new(name).size(12.))
-                                                .selected(
-                                                    self.selected_network.as_ref()
-                                                        == Some(&n.network_id),
-                                                )
+                                            egui::Button::new(RichText::new(name).size(12.5))
+                                                .selected(selected)
+                                                .frame_when_inactive(selected)
                                                 .truncate()
-                                                .min_size(Vec2::new(ui.available_width(), 31.)),
+                                                .min_size(Vec2::new(ui.available_width(), 30.)),
                                         )
                                         .on_hover_text(&n.name)
                                     })
@@ -1639,17 +1663,14 @@ impl App {
     }
     fn sidebar_footer(&self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.add_space(12.);
+        ui.add_space(10.);
+        ui.separator();
+        ui.add_space(6.);
         let name = self
             .identity
             .as_ref()
             .map(|(_, n)| n.as_str())
             .unwrap_or(language.text("This device"));
-        ui.add(egui::Label::new(RichText::new(name).size(12.).color(text())).truncate())
-            .on_hover_text(name);
-        ui.add_space(4.);
-        ui.separator();
-        ui.add_space(4.);
         let status = if self.snapshot.interface_ready {
             language.text(if self.windows_platform() {
                 "OpenRad TAP active"
@@ -1659,25 +1680,41 @@ impl App {
         } else {
             language.text("Interface offline")
         };
-        ui.horizontal(|ui| {
-            dot(
-                ui,
-                if self.snapshot.interface_ready {
-                    mint()
-                } else {
-                    muted()
-                },
-            );
-            ui.add(egui::Label::new(RichText::new(status).size(11.).color(muted())).truncate())
-                .on_hover_text(status);
-        });
         let version = language.message(&if self.windows_platform() {
             format!("Native Windows · v{}", env!("CARGO_PKG_VERSION"))
         } else {
             format!("Native Linux · v{}", env!("CARGO_PKG_VERSION"))
         });
-        ui.add(egui::Label::new(RichText::new(&version).size(10.).color(muted())).truncate())
-            .on_hover_text(version);
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(6, 0))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.;
+                ui.spacing_mut().interact_size.y = 16.;
+                ui.add(egui::Label::new(RichText::new(name).size(13.).color(strong())).truncate())
+                    .on_hover_text(name);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.;
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(8., 14.), egui::Sense::hover());
+                    ui.painter().circle_filled(
+                        rect.center(),
+                        3.5,
+                        if self.snapshot.interface_ready {
+                            success()
+                        } else {
+                            muted()
+                        },
+                    );
+                    ui.add(
+                        egui::Label::new(RichText::new(status).size(11.).color(muted())).truncate(),
+                    )
+                    .on_hover_text(status);
+                });
+                ui.add(
+                    egui::Label::new(RichText::new(&version).size(10.).color(muted())).truncate(),
+                )
+                .on_hover_text(version);
+            });
     }
     fn hero(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
@@ -1715,7 +1752,7 @@ impl App {
             Phase::Connected => (
                 language.text("You’re connected"),
                 language.text("Your devices are within reach"),
-                mint(),
+                success(),
             ),
             Phase::Disconnecting => (
                 language.text("Disconnecting"),
@@ -1758,7 +1795,7 @@ impl App {
                 .painter()
                 .layout(
                     title.to_owned(),
-                    FontId::proportional(25.),
+                    FontId::proportional(22.),
                     text(),
                     text_width,
                 )
@@ -1768,7 +1805,7 @@ impl App {
                 .painter()
                 .layout(
                     caption.to_owned(),
-                    FontId::proportional(12.),
+                    FontId::proportional(13.),
                     muted(),
                     text_width,
                 )
@@ -1783,7 +1820,12 @@ impl App {
                     ui.spacing_mut().item_spacing.x = gap;
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(54.), egui::Sense::hover());
                     ui.painter()
-                        .circle_filled(rect.center(), 26., color.gamma_multiply(0.13));
+                        .circle_filled(rect.center(), 26., color.gamma_multiply(0.14));
+                    ui.painter().circle_stroke(
+                        rect.center(),
+                        26.5,
+                        Stroke::new(1., color.gamma_multiply(0.3)),
+                    );
                     let c = rect.center();
                     let points = vec![
                         c + Vec2::new(-13., -13.),
@@ -1812,8 +1854,8 @@ impl App {
                         |ui| {
                             ui.set_min_width(text_width);
                             ui.spacing_mut().item_spacing.y = 3.;
-                            ui.label(RichText::new(title).size(25.).strong().color(text()));
-                            ui.label(RichText::new(caption).size(12.).color(muted()));
+                            ui.label(RichText::new(title).size(22.).color(strong()));
+                            ui.label(RichText::new(caption).size(13.).color(muted()));
                         },
                     );
                     if !compact {
@@ -1833,35 +1875,18 @@ impl App {
                     |ui| self.connection_button(ui, toggle_label, button_width),
                 );
             }
-            ui.add_space(18.);
+            ui.add_space(16.);
             ui.separator();
-            ui.add_space(12.);
-            let compact_footer = ui.available_width() < 460.;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(language.text("VPN ADDRESS"))
-                        .size(10.)
-                        .color(muted()),
-                );
-                let ip = if self.connected() {
-                    self.snapshot
-                        .vip
-                        .map(|i| i.to_string())
-                        .unwrap_or_else(|| language.text("Awaiting assignment").into())
-                } else {
-                    "—".into()
-                };
-                ui.label(RichText::new(&ip).monospace().size(16.).color(color));
-                if self.connected() && ui.small_button(language.text("Copy")).clicked() {
-                    ui.ctx().copy_text(ip);
-                }
-                if !compact_footer {
-                    self.connection_timing(ui);
-                }
-            });
-            if compact_footer {
+            ui.add_space(10.);
+            if ui.available_width() < 460. {
+                ui.horizontal_wrapped(|ui| self.address(ui));
                 ui.add_space(6.);
                 self.connection_timing(ui);
+            } else {
+                ui.horizontal(|ui| {
+                    self.address(ui);
+                    self.connection_timing(ui);
+                });
             }
         });
         if matches!(self.phase, Phase::Provisioning | Phase::Resetting) {
@@ -1882,11 +1907,36 @@ impl App {
             .filter(|_| self.connected())
         {
             ui.add_space(12.);
-            egui::Frame::new().fill(Color32::from_rgb(49,39,29)).corner_radius(10).inner_margin(16).show(ui, |ui| {
+            egui::Frame::new().fill(amber().gamma_multiply(0.08)).stroke(Stroke::new(1., amber().gamma_multiply(0.3))).corner_radius(10).inner_margin(16).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
                 ui.label(RichText::new(language.message(&error)).color(amber()));
                 ui.label(RichText::new(language.text(if self.windows_platform() { "Windows: run OpenRad-Setup.exe to install or repair the TAP adapter, then retry. Administrator approval is requested automatically." } else { "Linux: allow the system permission dialog for TAP setup, then retry if needed. A running Polkit authentication agent is required. The desktop stays unprivileged." })).size(12.).color(muted()));
                 ui.add_space(6.); if ui.button(language.text("Retry interface setup")).clicked() { self.command(Command::RetryInterface); }
             });
+        }
+    }
+    fn address(&self, ui: &mut egui::Ui) {
+        let language = self.language();
+        ui.label(
+            RichText::new(language.text("VPN ADDRESS"))
+                .size(10.)
+                .color(muted()),
+        );
+        let ip = if self.connected() {
+            self.snapshot
+                .vip
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| language.text("Awaiting assignment").into())
+        } else {
+            "—".into()
+        };
+        ui.label(RichText::new(&ip).monospace().size(15.).color(strong()));
+        if self.connected()
+            && ui
+                .add(egui::Button::new(RichText::new(language.text("Copy")).size(12.)).small())
+                .clicked()
+        {
+            ui.ctx().copy_text(ip);
         }
     }
     fn connection_button(&mut self, ui: &mut egui::Ui, label: &str, width: f32) {
@@ -1969,7 +2019,7 @@ impl App {
                         self.settings.decimal_units
                     )
                 )),
-                mint(),
+                accent(),
                 self.settings.show_traffic_graphs.then_some(&self.download),
             );
             metric(
@@ -2003,7 +2053,7 @@ impl App {
     fn network_selector(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let language = self.language();
         let max_name_width = (ui.available_width() - 60.).clamp(80., 240.);
-        let row_height = ui.spacing().interact_size.y.max(40.);
+        let row_height = ui.spacing().interact_size.y.max(34.);
         ui.scope(|ui| {
             // Allocate space for the scrollbar so it cannot cover the network buttons.
             ui.style_mut().spacing.scroll.floating = false;
@@ -2018,6 +2068,7 @@ impl App {
                             .add(
                                 egui::Button::new(language.text("All networks"))
                                     .selected(self.selected_network.is_none())
+                                    .corner_radius(17)
                                     .min_size(Vec2::new(0., row_height)),
                             )
                             .clicked()
@@ -2026,7 +2077,19 @@ impl App {
                         }
                         for n in self.joined_networks().iter() {
                             ui.push_id(&n.network_id, |ui| {
+                                // One pill per network: the favorite toggle
+                                // sits inside it, split from the name by a
+                                // divider. The background is painted under
+                                // both once their extent is known.
+                                let selected =
+                                    self.selected_network.as_ref() == Some(&n.network_id);
+                                let background = ui.painter().add(egui::Shape::Noop);
+                                let start = ui.cursor().min.x;
+                                ui.spacing_mut().item_spacing.x = 0.;
+                                ui.add_space(3.);
                                 self.favorite_button(ui, &n.name, self.network_is_private(&n.name));
+                                let divider = ui.cursor().min.x + 2.;
+                                ui.add_space(4.);
                                 let font = egui::TextStyle::Button.resolve(ui.style());
                                 let width = (ui
                                     .painter()
@@ -2036,19 +2099,41 @@ impl App {
                                     + 2. * ui.spacing().button_padding.x
                                     + 2.)
                                     .min(max_name_width);
-                                if ui
+                                let response = ui
                                     .add_sized(
                                         Vec2::new(width, row_height),
                                         egui::Button::new(RichText::new(&n.name).font(font))
-                                            .selected(
-                                                self.selected_network.as_ref()
-                                                    == Some(&n.network_id),
-                                            )
+                                            .selected(selected)
+                                            .frame_when_inactive(false)
+                                            .corner_radius(17)
                                             .truncate(),
                                     )
-                                    .on_hover_text(&n.name)
-                                    .clicked()
-                                {
+                                    .on_hover_text(&n.name);
+                                let chip = egui::Rect::from_x_y_ranges(
+                                    start..=response.rect.right(),
+                                    response.rect.y_range(),
+                                );
+                                let (fill, stroke) = if selected {
+                                    (ui.visuals().selection.bg_fill, accent().gamma_multiply(0.6))
+                                } else {
+                                    (raised(), border())
+                                };
+                                ui.painter().set(
+                                    background,
+                                    egui::epaint::RectShape::new(
+                                        chip,
+                                        17,
+                                        fill,
+                                        Stroke::new(1., stroke),
+                                        egui::StrokeKind::Inside,
+                                    ),
+                                );
+                                ui.painter().vline(
+                                    divider,
+                                    chip.y_range().shrink(9.),
+                                    Stroke::new(1., stroke),
+                                );
+                                if response.clicked() {
                                     self.selected_network = Some(n.network_id.clone());
                                 }
                             });
@@ -2064,14 +2149,14 @@ impl App {
         if self.settings.show_traffic {
             self.traffic(ui);
         }
-        ui.add_space(25.);
-        ui.label(
-            RichText::new(language.text("Your networks"))
-                .size(19.)
-                .strong(),
-        );
-        ui.add_space(8.);
+        ui.add_space(28.);
         ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(language.text("Your networks"))
+                    .size(18.)
+                    .color(strong()),
+            );
+            ui.add_space(8.);
             if ui
                 .add_enabled(
                     self.connected() && !self.mutation_busy(),
@@ -2090,26 +2175,19 @@ impl App {
             {
                 self.network_form = Some(NetworkForm::new(Mode::Join));
             }
-            if ui.button(language.text("Browse public")).clicked() {
-                self.page = Page::Discover;
-                self.focus_search = true;
-            }
-            if ui.button(language.text("Auto join")).clicked() {
-                self.page = Page::AutoJoin;
-            }
         });
-        ui.add_space(12.);
+        ui.add_space(14.);
         if self.snapshot.networks.is_empty() {
             card().inner_margin(28).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(RichText::new(if self.connected() { language.text("Make your first connection") } else { language.text("Your networks will appear here") }).size(19.).strong());
+                ui.label(RichText::new(if self.connected() { language.text("Make your first connection") } else { language.text("Your networks will appear here") }).size(17.).color(strong()));
                 ui.add_space(8.); ui.label(RichText::new(language.text("Create a private network, join one with a password, or explore public networks. OpenRad connects to available members.")).color(muted()));
                 ui.add_space(12.); if ui.add_enabled(self.connected(), primary(language.text("Explore public networks"))).clicked() { self.page = Page::Discover; self.focus_search = true; }
             });
             return;
         }
         self.network_selector(ui);
-        ui.add_space(12.);
+        ui.add_space(10.);
         if self.selected_network.is_none() {
             ui.label(
                 RichText::new(
@@ -2121,16 +2199,33 @@ impl App {
             ui.add_space(8.);
         }
         ui.horizontal_wrapped(|ui| {
+            let retry = language.text("Retry failed peers");
+            let retry_width = ui
+                .painter()
+                .layout_no_wrap(
+                    retry.to_owned(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    text(),
+                )
+                .size()
+                .x
+                + 2. * ui.spacing().button_padding.x
+                + ui.spacing().item_spacing.x
+                + 2.;
             ui.add(
                 egui::TextEdit::singleline(&mut self.peer_filter)
                     .hint_text(language.text("Filter peers by name or VPN address"))
-                    .desired_width((ui.available_width() - 130.).max(180.)),
+                    .margin(Vec2::new(10., 7.))
+                    // Share the row when both fit; otherwise the filter takes
+                    // the full width and the action wraps below it.
+                    .desired_width(if ui.available_width() - retry_width - 20. >= 220. {
+                        ui.available_width() - retry_width - 20.
+                    } else {
+                        ui.available_width() - 20.
+                    }),
             );
             if ui
-                .add_enabled(
-                    self.connected(),
-                    egui::Button::new(language.text("Retry failed peers")),
-                )
+                .add_enabled(self.connected(), egui::Button::new(retry))
                 .clicked()
             {
                 self.command(Command::RetryPeers);
@@ -2170,7 +2265,7 @@ impl App {
                     .as_ref()
                     .and_then(|(rid, _)| self.snapshot.roles.get(&n.network_id)?.get(rid).copied());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(&n.name).strong());
+                    ui.label(RichText::new(&n.name).size(15.).color(strong()));
                     if self.settings.show_internal_ids {
                         ui.label(
                             RichText::new(&n.network_id)
@@ -2182,7 +2277,7 @@ impl App {
                     badge(
                         ui,
                         role_label(role, language),
-                        if role == Some(2) { mint() } else { muted() },
+                        if role == Some(2) { accent() } else { muted() },
                     );
                 });
                 ui.horizontal_wrapped(|ui| {
@@ -2299,8 +2394,10 @@ impl App {
                         egui::Layout::top_down(Align::LEFT),
                         |ui| {
                             ui.add(
-                                egui::Label::new(RichText::new(&peer.peer.name).size(13.).strong())
-                                    .truncate(),
+                                egui::Label::new(
+                                    RichText::new(&peer.peer.name).size(13.5).color(strong()),
+                                )
+                                .truncate(),
                             )
                             .on_hover_text(&peer.peer.name);
                             ui.label(
@@ -2326,7 +2423,10 @@ impl App {
                         if ui
                             .add_enabled(
                                 can_ping && peer.status == PeerState::Connected && !pending,
-                                egui::Button::new(language.text("Test RTT")),
+                                egui::Button::new(
+                                    RichText::new(language.text("Test RTT")).size(12.),
+                                )
+                                .small(),
                             )
                             .clicked()
                         {
@@ -2350,7 +2450,12 @@ impl App {
                             }
                             Some(PingState::Measured(ms)) => {
                                 ui.label(
-                                    language.format("RTT: {ms} ms", &[("ms", &format!("{ms:.1}"))]),
+                                    RichText::new(
+                                        language
+                                            .format("RTT: {ms} ms", &[("ms", &format!("{ms:.1}"))]),
+                                    )
+                                    .size(12.)
+                                    .color(text()),
                                 );
                             }
                             _ => {}
@@ -2396,7 +2501,7 @@ impl App {
                             badge(
                                 ui,
                                 role_label(role, language),
-                                if role == Some(2) { mint() } else { muted() },
+                                if role == Some(2) { accent() } else { muted() },
                             );
                         }
                         badge(
@@ -2406,7 +2511,13 @@ impl App {
                                     .map(|p| p.label())
                                     .unwrap_or(peer.status.label()),
                             ),
-                            color,
+                            // The dot already shows a healthy state; keep the
+                            // transport tag quiet and color only problems.
+                            if peer.status == PeerState::Connected {
+                                muted()
+                            } else {
+                                color
+                            },
                         )
                         .on_hover_text(language.message(
                             if peer.detail.is_empty() {
@@ -2469,39 +2580,21 @@ impl App {
     }
     fn discover(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.label(
-            RichText::new(language.text("Find your people."))
-                .size(29.)
-                .strong(),
+        page_title(
+            ui,
+            language.text("Find your people."),
+            language.text("Explore public networks and bring everyone onto the same LAN."),
         );
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language.text("Explore public networks and bring everyone onto the same LAN."),
-            )
-            .color(muted()),
-        );
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(language.text("Auto join")).clicked() {
-                self.page = Page::AutoJoin;
-            }
-            ui.label(
-                RichText::new(language.format(
-                    "{count} networks selected",
-                    &[("count", &self.join_draft.len().to_string())],
-                ))
-                .size(11.)
-                .color(muted()),
-            );
-        });
-        ui.add_space(24.);
         let available = self.connected();
-        card().inner_margin(18).show(ui, |ui| {
+        card().inner_margin(16).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 let response = ui.add_enabled(
                     available,
                     egui::TextEdit::singleline(&mut self.query)
                         .hint_text(language.text("Search games, communities, or a network name"))
+                        .margin(Vec2::new(12., 9.))
+                        .font(FontId::proportional(15.))
                         .desired_width((ui.available_width() - 28.).max(180.)),
                 );
                 if self.focus_search {
@@ -2516,11 +2609,27 @@ impl App {
                     spinner(ui);
                 }
             });
-            ui.label(
-                RichText::new(language.text("Results update as you type."))
-                    .size(11.)
-                    .color(muted()),
-            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(language.text("Results update as you type."))
+                        .size(11.)
+                        .color(muted()),
+                );
+                ui.label(RichText::new("·").size(11.).color(muted()));
+                if ui
+                    .link(
+                        RichText::new(language.format(
+                            "{count} networks selected",
+                            &[("count", &self.join_draft.len().to_string())],
+                        ))
+                        .size(11.),
+                    )
+                    .on_hover_text(language.text("Auto join"))
+                    .clicked()
+                {
+                    self.page = Page::AutoJoin;
+                }
+            });
         });
         if self.connected()
             && !self.has_searched
@@ -2565,7 +2674,8 @@ impl App {
         if !self.has_searched && self.search_in_flight.is_none() {
             ui.label(
                 RichText::new(language.text("Start with a name, or browse what’s available."))
-                    .size(18.),
+                    .size(16.)
+                    .color(muted()),
             );
         } else if self.catalog.is_empty()
             && self.search_in_flight.is_none()
@@ -2573,8 +2683,8 @@ impl App {
         {
             ui.label(
                 RichText::new(language.text("No networks found"))
-                    .size(21.)
-                    .strong(),
+                    .size(18.)
+                    .color(strong()),
             );
             ui.label(
                 RichText::new(language.text("Try a shorter name or a different search."))
@@ -2612,7 +2722,7 @@ impl App {
             rows.show(ui, egui::Id::new("catalog-rows"), plan, |ui, index| {
                 let network = &public[matching[index]].network;
                 let joined = self.network_list.joined_names.contains(&network.name);
-                card().inner_margin(18).show(ui, |ui| {
+                card().inner_margin(14).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         self.favorite_button(ui, &network.name, false);
                         let width = (ui.available_width() - 110.).max(150.);
@@ -2622,12 +2732,12 @@ impl App {
                             |ui| {
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&network.name).size(16.).strong(),
+                                        RichText::new(&network.name).size(15.).color(strong()),
                                     )
                                     .truncate(),
                                 )
                                 .on_hover_text(&network.name);
-                                ui.add_space(5.);
+                                ui.add_space(3.);
                                 ui.label(
                                     RichText::new(language.message(&format!(
                                         "Public network  ·  {} members reported",
@@ -2640,7 +2750,7 @@ impl App {
                         );
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                             if joined {
-                                badge(ui, language.text("Joined"), mint());
+                                badge(ui, language.text("Joined"), success());
                             } else if ui
                                 .add_enabled(
                                     !self.mutation_busy(),
@@ -2654,7 +2764,7 @@ impl App {
                     });
                     self.join_selection_button(ui, &network.name, false);
                 });
-                ui.add_space(9.);
+                ui.add_space(8.);
             });
             self.catalog_rows = rows;
             if self.cursor != 0
@@ -2678,20 +2788,14 @@ impl App {
     fn auto_join(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
         let active = self.join_run.active();
-        ui.label(RichText::new(language.text("Auto join")).size(29.).strong());
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language
-                    .text("Select networks and join them together, with 50 ms between requests."),
-            )
-            .color(muted()),
+        page_title(
+            ui,
+            language.text("Auto join"),
+            language.text("Select networks and join them together, with 50 ms between requests."),
         );
-        ui.add_space(18.);
-        card().inner_margin(18).show(ui, |ui| {
+        card().inner_margin(20).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Saved configurations")).size(17.).strong());
-            ui.add_space(10.);
+            section_title(ui, language.text("Saved configurations"));
             ui.add_enabled_ui(!active, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     egui::ComboBox::from_id_salt("join-configuration")
@@ -2720,6 +2824,7 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.join_config_name)
                         .hint_text(language.text("Configuration name"))
+                        .margin(Vec2::new(8., 6.))
                         .char_limit(80).desired_width(240.));
                     if ui.add_enabled(!self.join_draft.is_empty() && self.network_preferences_error.is_none(), egui::Button::new(language.text("Save configuration"))).clicked() {
                         if let Err(error) = self.save_join_configuration() { self.notify_error(error); }
@@ -2729,18 +2834,14 @@ impl App {
             ui.add_space(8.);
             ui.label(RichText::new(language.text("Saved lists stay available after changing identity. Private passwords are requested again and never saved.")).size(11.).color(muted()));
         });
-        ui.add_space(18.);
-        ui.label(
-            RichText::new(language.text("Select networks"))
-                .size(19.)
-                .strong(),
-        );
-        ui.add_space(8.);
+        ui.add_space(24.);
+        section_title(ui, language.text("Select networks"));
         ui.add_enabled_ui(!active, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.join_new_name)
                         .hint_text(language.text("Exact network name"))
+                        .margin(Vec2::new(8., 6.))
                         .char_limit(255)
                         .desired_width(240.),
                 );
@@ -2887,7 +2988,7 @@ impl App {
                             } else {
                                 "Joined"
                             }),
-                            if pending { amber() } else { mint() },
+                            if pending { amber() } else { success() },
                         );
                     }
                 });
@@ -2914,6 +3015,7 @@ impl App {
                         ui.add(
                             egui::TextEdit::singleline(&mut **password)
                                 .password(true)
+                                .margin(Vec2::new(8., 6.))
                                 .char_limit(256)
                                 .desired_width(f32::INFINITY),
                         )
@@ -2924,7 +3026,7 @@ impl App {
                     ui.label(
                         RichText::new(language.message(message))
                             .size(12.)
-                            .color(if *error { red() } else { mint() }),
+                            .color(if *error { red() } else { success() }),
                     );
                 } else if self
                     .join_run
@@ -2956,8 +3058,7 @@ impl App {
             .refresh(&self.snapshot, None, "", &self.settings);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Outgoing broadcasts")).size(18.).strong());
-            ui.add_space(8.);
+            section_title(ui, language.text("Outgoing broadcasts"));
             let summary = match &self.broadcast_selection {
                 runtime::BroadcastSelection::All => language.text("Outgoing broadcasts: all peers").to_owned(),
                 runtime::BroadcastSelection::Include(peers) => language.format("Outgoing broadcasts: {count} selected peers", &[("count", &peers.len().to_string())]),
@@ -3000,6 +3101,7 @@ impl App {
             self.broadcast_dirty |= ui.add(egui::TextEdit::multiline(&mut self.broadcast_input)
                 .hint_text(language.text("Peer RID, name or VPN IP"))
                 .char_limit(32768).desired_rows(2)
+                .margin(Vec2::new(8., 6.))
                 .desired_width(ui.available_width())).changed();
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!self.broadcast_selected.is_empty() || !self.broadcast_input.trim().is_empty(), primary(language.text("Apply broadcast selection"))).clicked() {
@@ -3020,8 +3122,7 @@ impl App {
         let language = self.language();
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Stealth block")).size(18.).strong());
-            ui.add_space(8.);
+            section_title(ui, language.text("Stealth block"));
             ui.label(RichText::new(language.text("Blocked VPN addresses act as if they did not exist: packets from them are ignored and nothing is sent to them. The peer stays connected.")).size(11.).color(muted()));
             ui.add_space(8.);
             let address = self.block_input.trim().parse::<std::net::Ipv4Addr>().ok()
@@ -3029,6 +3130,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.block_input)
                     .hint_text(language.text("VPN IP, e.g. 26.1.2.3"))
+                    .margin(Vec2::new(8., 6.))
                     .char_limit(15).desired_width(160.));
                 egui::ComboBox::from_id_salt("block_direction")
                     .selected_text(language.text(self.block_direction.label()))
@@ -3088,24 +3190,14 @@ impl App {
     /// Render the Settings page, including Windows-only uninstall confirmation.
     fn settings(&mut self, ui: &mut egui::Ui) {
         let language = self.language();
-        ui.label(
-            RichText::new(language.text("Make yourself at home."))
-                .size(28.)
-                .strong(),
+        page_title(
+            ui,
+            language.text("Make yourself at home."),
+            language.text("Tune connection behavior, the workspace, and developer diagnostics."),
         );
-        ui.add_space(8.);
-        ui.label(
-            RichText::new(
-                language
-                    .text("Tune connection behavior, the workspace, and developer diagnostics."),
-            )
-            .color(muted()),
-        );
-        ui.add_space(25.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            let label = ui.label(RichText::new(language.text("Language")).size(18.).strong());
-            ui.add_space(12.);
+            let label = section_title(ui, language.text("Language"));
             egui::ComboBox::from_id_salt("language")
                 .selected_text(self.settings.language.label(language))
                 .show_ui(ui, |ui| {
@@ -3131,8 +3223,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Connection")).size(18.).strong());
-            ui.add_space(12.);
+            section_title(ui, language.text("Connection"));
             ui.checkbox(
                 &mut self.settings.auto_connect,
                 language.text("Connect when OpenRad launches"),
@@ -3171,7 +3262,7 @@ impl App {
             ui.label(RichText::new(language.text("Use relays only. Saving reconnects the session without direct UDP or TCP attempts.")).size(11.).color(muted()));
             ui.add_space(14.);
             ui.label(language.text("Device name"));
-            ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).desired_width(300.));
+            ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).margin(Vec2::new(8., 6.)).desired_width(300.));
             ui.label(RichText::new(language.text("Save preferences to change the name peers see. Your identity and memberships are preserved.")).size(11.).color(muted()));
         });
         ui.add_space(16.);
@@ -3179,8 +3270,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text("Workspace")).size(18.).strong());
-            ui.add_space(12.);
+            section_title(ui, language.text("Workspace"));
             ui.label(language.text("Open to"));
             egui::ComboBox::from_id_salt("start_page")
                 .selected_text(match self.settings.start_page {
@@ -3298,12 +3388,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(language.text("Developer view"))
-                    .size(18.)
-                    .strong(),
-            );
-            ui.add_space(12.);
+            section_title(ui, language.text("Developer view"));
             ui.checkbox(&mut self.settings.show_peer_ip, language.text("Peer IP"));
             ui.label(RichText::new(language.text("Show the relay IP or the direct peer IP and port under each connected peer for debugging.")).size(11.).color(muted()));
             ui.checkbox(
@@ -3400,12 +3485,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(language.text("Private device identity"))
-                    .size(18.)
-                    .strong(),
-            );
-            ui.add_space(12.);
+            section_title(ui, language.text("Private device identity"));
             if let Some((rid, name)) = &self.identity {
                 ui.label(language.format(
                     "{name}  ·  Device {rid}",
@@ -3448,12 +3528,15 @@ impl App {
                 }
             }
             ui.add_space(12.);
-            ui.label(RichText::new(language.text("Import an existing OpenRad identity")).strong());
+            ui.label(
+                RichText::new(language.text("Import an existing OpenRad identity")).color(strong()),
+            );
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_path)
                         .hint_text("/path/to/identity.json")
-                        .desired_width((ui.available_width() - 90.).max(160.)),
+                        .margin(Vec2::new(8., 6.))
+                        .desired_width((ui.available_width() - 106.).max(160.)),
                 );
                 if ui
                     .add_enabled(
@@ -3472,7 +3555,7 @@ impl App {
         ui.add_space(16.);
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" })).size(18.).strong()); ui.add_space(10.);
+            section_title(ui, language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" }));
             ui.label(if self.windows_platform() { "OpenRad · TAP-Windows6 · MTU 1500" } else { "radminvpn0 · Ethernet TAP · MTU 1500" });
             ui.label(RichText::new(language.text(if self.windows_platform() { "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains." } else { "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running." })).size(12.).color(muted()));
             ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup." })).size(12.).color(muted()));
@@ -3497,8 +3580,8 @@ impl App {
             ui.add_space(22.);
             card().inner_margin(22).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.label(RichText::new(language.text("Uninstall OpenRad")).size(18.).strong().color(red()));
-                ui.add_space(9.);
+                ui.label(RichText::new(language.text("Uninstall OpenRad")).size(16.).color(red()));
+                ui.add_space(10.);
                 ui.label(RichText::new(language.text("Remove the OpenRad app and its dedicated TAP adapter. Your saved identity, profiles and personal settings will be preserved.")).size(12.).color(muted()));
                 ui.add_space(12.);
                 if ui.add_enabled(!self.closing, egui::Button::new(RichText::new(language.text("Uninstall OpenRad")).color(red()))).clicked() {
@@ -3647,7 +3730,7 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(if splash {
-                        Color32::from_rgb(13, 18, 25)
+                        Color32::from_rgb(11, 12, 16)
                     } else {
                         bg()
                     })
@@ -3688,13 +3771,22 @@ impl App {
                         }
                         return;
                     }
-                    logo(ui, 112.);
-                    ui.add_space(10.);
-                    ui.heading(language.text("Welcome to OpenRad"));
+                    logo(ui, 96.);
+                    ui.add_space(12.);
+                    ui.label(
+                        RichText::new(language.text("Welcome to OpenRad"))
+                            .size(26.)
+                            .color(strong()),
+                    );
                     ui.add_space(6.);
-                    ui.label(language.text("Choose your preferences before getting started."));
-                    ui.add_space(24.);
-                    ui.label(language.text("Appearance"));
+                    ui.label(
+                        RichText::new(
+                            language.text("Choose your preferences before getting started."),
+                        )
+                        .color(muted()),
+                    );
+                    ui.add_space(28.);
+                    ui.label(RichText::new(language.text("Appearance")).color(muted()));
                     ui.horizontal(|ui| {
                         ui.selectable_value(
                             &mut self.settings.theme,
@@ -3731,8 +3823,11 @@ impl App {
                             .color(muted()),
                         );
                     }
-                    ui.add_space(20.);
-                    if ui.add(primary(language.text("Get started"))).clicked() {
+                    ui.add_space(24.);
+                    if ui
+                        .add(primary(language.text("Get started")).min_size(Vec2::new(180., 40.)))
+                        .clicked()
+                    {
                         #[cfg(windows)]
                         if self.welcome_create_shortcut {
                             if let Err(err) = crate::shortcut::create_desktop_shortcut() {
@@ -3769,50 +3864,11 @@ impl App {
             self.page = Page::Settings;
         }
         self.sidebar(ui);
-        egui::Panel::top("page_header")
-            .frame(
-                egui::Frame::new()
-                    .fill(bg())
-                    .inner_margin(egui::Margin::symmetric(28, 16)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(match self.page {
-                            Page::Networks => language.text("WORKSPACE / MY NETWORKS"),
-                            Page::Discover => language.text("WORKSPACE / DISCOVER"),
-                            Page::AutoJoin => language.text("WORKSPACE / AUTO JOIN"),
-                            Page::Settings => language.text("WORKSPACE / SETTINGS"),
-                        })
-                        .size(10.)
-                        .color(muted()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        badge(
-                            ui,
-                            if self.snapshot.interface_ready {
-                                language.text("Connected")
-                            } else {
-                                language.text(if self.windows_platform() {
-                                    "Windows preview"
-                                } else {
-                                    "Linux preview"
-                                })
-                            },
-                            if self.snapshot.interface_ready {
-                                mint()
-                            } else {
-                                muted()
-                            },
-                        );
-                    });
-                });
-            });
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(bg())
-                    .inner_margin(egui::Margin::symmetric(28, 12)),
+                    .inner_margin(egui::Margin::symmetric(28, 0)),
             )
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
@@ -3820,6 +3876,7 @@ impl App {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
+                        ui.add_space(24.);
                         self.update_notice(ui);
                         if let Some(error) = &self.network_preferences_error { self.banner(ui, error, red()); }
                         if self.snapshot.restricted_traffic {
@@ -3842,7 +3899,23 @@ impl App {
                     .order(egui::Order::Foreground)
                     .show(&ctx, |ui| {
                         ui.set_max_width(420.);
-                        self.banner(ui, &message, if error { red() } else { mint() });
+                        let color = if error { red() } else { success() };
+                        egui::Frame::popup(ui.style())
+                            .fill(surface())
+                            .inner_margin(egui::Margin::symmetric(14, 11))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    dot(ui, color);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(self.language().message(&message))
+                                                .size(12.5)
+                                                .color(text()),
+                                        )
+                                        .wrap(),
+                                    );
+                                });
+                            });
                     });
             } else {
                 self.toast = None;
@@ -3928,28 +4001,16 @@ pub(crate) fn configure(ctx: &egui::Context) {
         .or_default()
         .push("openrad_noto".into());
     ctx.set_fonts(fonts);
-    let mut style = egui::Style {
-        visuals: egui::Visuals::dark(),
-        ..Default::default()
-    };
-    style.visuals.override_text_color = Some(text());
-    style.visuals.panel_fill = bg();
-    style.visuals.window_fill = surface();
-    style.visuals.extreme_bg_color = bg();
-    style.visuals.faint_bg_color = raised();
-    style.visuals.selection.bg_fill = Color32::from_rgb(37, 79, 67);
-    style.visuals.selection.stroke = Stroke::new(1., mint());
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1., border());
-    style.visuals.widgets.inactive.weak_bg_fill = raised();
-    style.visuals.widgets.inactive.bg_fill = raised();
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1., border());
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(41, 56, 68);
-    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(41, 56, 68);
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1., mint());
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1., mint());
+    let mut style = egui::Style::default();
+    use_light_palette(false);
+    style.visuals = visuals(false);
     style.spacing.item_spacing = Vec2::new(10., 8.);
-    style.spacing.button_padding = Vec2::new(13., 8.);
+    style.spacing.button_padding = Vec2::new(14., 7.);
     style.spacing.interact_size = Vec2::new(40., 32.);
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.spacing.icon_width = 17.;
+    style.spacing.icon_width_inner = 9.;
+    style.spacing.icon_spacing = 7.;
     style
         .text_styles
         .insert(egui::TextStyle::Body, FontId::proportional(14.));
@@ -3962,9 +4023,71 @@ pub(crate) fn configure(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     ctx.set_style_of(egui::Theme::Dark, style);
 }
+/// The shared widget look for both palettes; reads the active palette.
+fn visuals(light: bool) -> egui::Visuals {
+    let mut visuals = if light {
+        egui::Visuals::light()
+    } else {
+        egui::Visuals::dark()
+    };
+    // Shared by buttons and checkboxes; larger radii turn checkboxes into circles.
+    let radius = egui::CornerRadius::same(6);
+    visuals.override_text_color = None;
+    visuals.panel_fill = bg();
+    visuals.window_fill = surface();
+    visuals.window_stroke = Stroke::new(1., border());
+    visuals.window_corner_radius = egui::CornerRadius::same(14);
+    visuals.menu_corner_radius = egui::CornerRadius::same(10);
+    let shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: Color32::from_black_alpha(if light { 28 } else { 110 }),
+    };
+    visuals.window_shadow = shadow;
+    visuals.popup_shadow = shadow;
+    visuals.extreme_bg_color = pick(Color32::from_rgb(14, 15, 20), Color32::WHITE);
+    visuals.text_edit_bg_color = Some(pick(Color32::from_rgb(14, 15, 20), Color32::WHITE));
+    visuals.faint_bg_color = raised();
+    visuals.code_bg_color = raised();
+    visuals.hyperlink_color = accent();
+    visuals.warn_fg_color = amber();
+    visuals.error_fg_color = red();
+    visuals.slider_trailing_fill = true;
+    visuals.selection.bg_fill = accent().gamma_multiply(if light { 0.16 } else { 0.22 });
+    visuals.selection.stroke = Stroke::new(1., accent());
+    let widgets = &mut visuals.widgets;
+    widgets.noninteractive.bg_fill = surface();
+    widgets.noninteractive.weak_bg_fill = surface();
+    widgets.noninteractive.bg_stroke = Stroke::new(1., border());
+    widgets.noninteractive.fg_stroke = Stroke::new(1., text());
+    widgets.noninteractive.corner_radius = radius;
+    let control_border = pick(
+        Color32::from_rgb(48, 51, 64),
+        Color32::from_rgb(208, 211, 220),
+    );
+    for (state, fill, stroke, fg) in [
+        (&mut widgets.inactive, raised(), control_border, text()),
+        (&mut widgets.hovered, hover(), hover(), strong()),
+        (&mut widgets.active, hover(), accent(), strong()),
+        (&mut widgets.open, hover(), border(), strong()),
+    ] {
+        state.bg_fill = fill;
+        state.weak_bg_fill = fill;
+        state.bg_stroke = Stroke::new(1., stroke);
+        state.fg_stroke = Stroke::new(1.5, fg);
+        state.corner_radius = radius;
+        state.expansion = 0.;
+    }
+    // Checkboxes, radios and slider rails use `bg_fill`; buttons use
+    // `weak_bg_fill`. Give the small controls more contrast on cards.
+    widgets.inactive.bg_fill = pick(Color32::from_rgb(38, 41, 52), Color32::WHITE);
+    visuals
+}
 fn apply_theme(ctx: &egui::Context, preference: ThemePreference) {
-    use_light_palette(preference == ThemePreference::Light);
-    let theme = if preference == ThemePreference::Light {
+    let light = preference == ThemePreference::Light;
+    use_light_palette(light);
+    let theme = if light {
         egui::Theme::Light
     } else {
         egui::Theme::Dark
@@ -3973,35 +4096,7 @@ fn apply_theme(ctx: &egui::Context, preference: ThemePreference) {
     // The light theme otherwise starts from egui's defaults (including much
     // smaller buttons), because configure installs our metrics on Dark.
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
-    style.visuals = if preference == ThemePreference::Light {
-        egui::Visuals::light()
-    } else {
-        egui::Visuals::dark()
-    };
-    style.visuals.override_text_color = Some(text());
-    style.visuals.panel_fill = bg();
-    style.visuals.window_fill = surface();
-    style.visuals.extreme_bg_color = bg();
-    style.visuals.faint_bg_color = raised();
-    style.visuals.selection.bg_fill = if preference == ThemePreference::Dark {
-        Color32::from_rgb(37, 79, 67)
-    } else {
-        mint().gamma_multiply(0.27)
-    };
-    style.visuals.selection.stroke = Stroke::new(1., mint());
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1., border());
-    style.visuals.widgets.inactive.bg_fill = raised();
-    style.visuals.widgets.inactive.weak_bg_fill = raised();
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1., border());
-    let hover_fill = if preference == ThemePreference::Dark {
-        Color32::from_rgb(41, 56, 68)
-    } else {
-        raised()
-    };
-    style.visuals.widgets.hovered.bg_fill = hover_fill;
-    style.visuals.widgets.hovered.weak_bg_fill = hover_fill;
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1., mint());
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1., mint());
+    style.visuals = visuals(light);
     ctx.set_style_of(theme, style);
     ctx.set_theme(theme);
 }
@@ -4009,28 +4104,139 @@ fn card() -> egui::Frame {
     egui::Frame::new()
         .fill(surface())
         .stroke(Stroke::new(1., border()))
-        .corner_radius(12)
+        .corner_radius(14)
         .inner_margin(18)
 }
+/// Large page heading with a muted one-line description.
+fn page_title(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.label(RichText::new(title).size(24.).color(strong()));
+    ui.add_space(2.);
+    ui.label(RichText::new(subtitle).size(13.).color(muted()));
+    ui.add_space(20.);
+}
+/// Heading at the top of a card.
+fn section_title(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    let response = ui.label(RichText::new(title).size(16.).color(strong()));
+    ui.add_space(8.);
+    response
+}
 fn primary(label: &str) -> egui::Button<'_> {
-    egui::Button::new(
-        RichText::new(label)
-            .color(Color32::from_rgb(14, 42, 33))
-            .strong(),
-    )
-    .fill(mint())
-    .corner_radius(8)
-    .stroke(Stroke::NONE)
+    egui::Button::new(RichText::new(label).color(Color32::WHITE))
+        .fill(accent_fill())
+        .corner_radius(8)
+        .stroke(Stroke::NONE)
 }
 fn badge(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
     egui::Frame::new()
-        .fill(color.gamma_multiply(0.12))
-        .corner_radius(6)
-        .inner_margin(egui::Margin::symmetric(9, 5))
+        .fill(color.gamma_multiply(0.13))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(9, 3))
         .show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 0.;
             ui.label(RichText::new(text).size(11.).color(color))
         })
         .response
+}
+#[derive(Clone, Copy)]
+enum NavIcon {
+    Networks,
+    Discover,
+    AutoJoin,
+    Settings,
+}
+/// A sidebar destination: a painted icon and label on a full-width row.
+fn nav_item(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let painter = ui.painter();
+    let fill = if selected {
+        accent().gamma_multiply(0.14)
+    } else if hovered {
+        hover()
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, 8., fill);
+    let color = if selected {
+        accent()
+    } else if hovered {
+        strong()
+    } else {
+        muted()
+    };
+    let c = egui::pos2(rect.left() + 20., rect.center().y);
+    let stroke = Stroke::new(1.6, color);
+    let at = |x: f32, y: f32| c + Vec2::new(x, y);
+    match icon {
+        NavIcon::Networks => {
+            let nodes = [at(0., -5.5), at(-5.5, 4.5), at(5.5, 4.5)];
+            for (a, b) in [(0, 1), (1, 2), (2, 0)] {
+                painter.line_segment([nodes[a], nodes[b]], stroke);
+            }
+            for node in nodes {
+                painter.circle_filled(node, 2.6, color);
+            }
+        }
+        NavIcon::Discover => {
+            painter.circle_stroke(at(-1.5, -1.5), 5., stroke);
+            painter.line_segment([at(2.3, 2.3), at(6., 6.)], Stroke::new(2., color));
+        }
+        NavIcon::AutoJoin => {
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    at(1.5, -7.),
+                    at(-4.5, 1.),
+                    at(-0.5, 1.),
+                    at(-1.5, 7.),
+                    at(4.5, -1.),
+                    at(0.5, -1.),
+                ],
+                stroke,
+            ));
+        }
+        NavIcon::Settings => {
+            for (y, knob) in [(-5., -2.5), (0., 3.), (5., -0.5)] {
+                painter.line_segment([at(-6.5, y), at(6.5, y)], stroke);
+                painter.circle_filled(at(knob, y), 2.4, bg_behind(selected, hovered));
+                painter.circle_stroke(at(knob, y), 2.4, stroke);
+            }
+        }
+    }
+    let galley = egui::WidgetText::from(RichText::new(label).size(13.5)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        (rect.width() - 50.).max(0.),
+        egui::TextStyle::Button,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 38., rect.center().y - galley.size().y / 2.),
+        galley,
+        color,
+    );
+    response
+}
+/// The opaque color under a nav icon, so slider knobs hide their track.
+fn bg_behind(selected: bool, hovered: bool) -> Color32 {
+    if selected {
+        // A 14% accent tint over the sidebar surface.
+        let (a, s) = (accent(), surface());
+        let mix = |x: u8, y: u8| (f32::from(y) + (f32::from(x) - f32::from(y)) * 0.14) as u8;
+        Color32::from_rgb(mix(a.r(), s.r()), mix(a.g(), s.g()), mix(a.b(), s.b()))
+    } else if hovered {
+        hover()
+    } else {
+        surface()
+    }
 }
 /// Loading indicators animate at this interval. egui's spinner requests a
 /// repaint every frame, redrawing the whole window at the display refresh rate
@@ -4134,7 +4340,7 @@ fn metric(
 }
 fn peer_color(state: &PeerState) -> Color32 {
     match state {
-        PeerState::Connected => mint(),
+        PeerState::Connected => success(),
         PeerState::Online | PeerState::Connecting => blue(),
         PeerState::Refused => amber(),
         PeerState::Failed => red(),
@@ -6679,6 +6885,18 @@ mod tests {
                 LanguagePreference::Portuguese,
                 768,
             ),
+            (
+                Page::Networks,
+                "networks-light",
+                LanguagePreference::English,
+                1152,
+            ),
+            (
+                Page::Settings,
+                "settings-light",
+                LanguagePreference::English,
+                1152,
+            ),
         ] {
             app.settings.show_peer_ip = filename.starts_with("peer-ip");
             let height = if page == Page::Settings { 2600 } else { 1000 };
@@ -6687,8 +6905,14 @@ mod tests {
                 "TAP authorization failed; allow the system permission dialog and retry. A running Polkit authentication agent is required.".into());
             app.page = page;
             app.settings.language = language;
+            app.settings.theme = if filename.ends_with("-light") {
+                ThemePreference::Light
+            } else {
+                ThemePreference::Dark
+            };
             let ctx = egui::Context::default();
             configure(&ctx);
+            apply_theme(&ctx, app.settings.theme);
             let mut textures = egui::TexturesDelta::default();
             let mut final_output = None;
             for _ in 0..2 {
@@ -6716,6 +6940,7 @@ mod tests {
             }
             std::fs::write(directory.join(format!("{filename}.ppm")), ppm).unwrap();
         }
+        use_light_palette(false);
     }
     #[test]
     fn broadcast_controls_include_exclude_multiple_peers_and_restore_in_every_language() {
