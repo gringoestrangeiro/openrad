@@ -20,11 +20,11 @@ sharing one wire format:
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
 | Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
-| Android | [`clients/android/`](clients/android/README.md) | beta | 2.3.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | research | 2.3.0 |
+| Android | [`clients/android/`](clients/android/README.md) | stable | 2.3.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.3.0 |
 | Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.0 |
 | Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.0 |
-| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | alpha | 2.3.0 |
+| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | beta | 2.3.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
