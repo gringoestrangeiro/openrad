@@ -98,7 +98,14 @@ PowerShell setup/recovery tests mock Windows cmdlets. Wine installer-flow tests 
 
 Use focused imperative subjects with `fix:`, `docs:`, or `release:` prefixes. PRs describe the problem and resulting behavior, link issues, report validation, and include screenshots for UI changes. Update affected guides and preserve the user's authorized scope.
 
-For a release, compare against a freshly fetched remote, account for every changed/new file, synchronize both Cargo package versions and `Cargo.lock`, and update `README.md`, `CHANGELOG.md`, and `docs/releases/VERSION.md`. Keep a file-by-file inventory for broad releases. Record Windows support limitations even when the release uses a stable version tag.
+For a release, compare against a freshly fetched remote, account for every changed/new file, synchronize both Cargo package versions and `Cargo.lock`, and update `README.md`, `CHANGELOG.md`, and `docs/releases/VERSION.md`. Keep a file-by-file inventory for broad releases.
+
+Keep `README.md` short and current: it describes only the latest release (one
+line naming the version, linking its `docs/releases/VERSION.md` and
+`CHANGELOG.md`). Never accumulate per-version changelogs, "new in X.Y"
+sections, or links to older release notes/inventories in the README; version
+history belongs in `CHANGELOG.md` and `docs/releases/` only. When releasing,
+replace the previous version's README references instead of appending. Record Windows support limitations even when the release uses a stable version tag.
 
 Build fresh binaries for both platforms from the release source. Prefer the established Debian 12/Rust 1.95 Linux builder to retain its glibc baseline. Use `scripts/package-linux.py` with truthful build provenance and the builder's standard-library notice; use `scripts/package-windows-installer.py` with NSIS/7-Zip and pinned driver inputs. Include release guides, screenshots, dependency notices, build/import metadata, corresponding driver source, and SHA-256 checksums. Verify binary versions, archive checksums, and extracted installer payloads before publishing. Never label unexecuted native-platform checks as passed.
 
