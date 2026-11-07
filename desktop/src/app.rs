@@ -3717,6 +3717,20 @@ impl App {
                         &mut self.settings.auto_connect,
                         language.text("Connect when OpenRad launches"),
                     );
+                    #[cfg(windows)]
+                    {
+                        ui.checkbox(
+                            &mut self.settings.start_with_windows,
+                            language.text("Start VPN with Windows (without opening the interface)"),
+                        );
+                        ui.label(
+                            RichText::new(language.text(
+                                "Automatic VPN startup is configured after the first identity is saved."
+                            ))
+                            .size(11.)
+                            .color(muted()),
+                        );
+                    }
                     ui.add_space(20.);
                     if ui.add(primary(language.text("Get started"))).clicked() {
                         #[cfg(windows)]

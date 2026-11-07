@@ -8,8 +8,9 @@ The Windows desktop also shows its native OpenRad logo animation on first launch
 offers a quick setup to choose a dark/light theme, configure auto-connection,
 and optionally create the **OpenRad** desktop shortcut. The theme can be
 changed at any time in **Settings > Workspace**. On Windows, **Settings > Connection**
-also offers an optional headless VPN startup at Windows sign-in, without opening
-the GUI; closing the GUI leaves the background VPN active. These choices are
+starts the VPN in the background by default at Windows sign-in once an identity
+is saved, without opening the GUI; users may disable this in Settings. Closing
+the GUI leaves the background VPN active. These choices are
 saved to the user's existing profile; no additional identity or VPN is created.
 
 

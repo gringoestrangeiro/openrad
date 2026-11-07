@@ -122,9 +122,11 @@ and stop CLI background processes before repair, upgrade or uninstall. Use
 only an adapter created by this setup. The last option in Desktop Settings,
 **Uninstall OpenRad**, opens this same Windows uninstaller after a confirmation.
 The desktop closes gracefully; the uninstaller waits for the window to exit
-before continuing. When using optional **Start VPN with Windows**, disable it
-in **Desktop Settings → Connection** and save to remove the per-user task at
-any time. The Windows uninstaller also removes OpenRad startup tasks that point
+before continuing. **Start VPN with Windows** is on by default for new Windows
+profiles: after first-use provisioning saves the VPN identity, OpenRad registers
+a background logon task, without opening its interface on subsequent logins.
+Disable it in **Desktop Settings → Connection** and save to remove the
+per-user task at any time. The Windows uninstaller also removes OpenRad startup tasks that point
 to the installed desktop executable before deleting it. The background VPN remains active
 after closing the desktop; use **Disconnect** or `openrad stop` to stop it.
 This scheduled task starts the daemon after a Windows user signs in and does

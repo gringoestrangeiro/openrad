@@ -1,5 +1,6 @@
-//! Windows opt-in logon task for starting the existing VPN daemon without a GUI.
-//! The desktop is elevated when users save this preference. Registration uses
+//! Windows logon task for starting the existing VPN daemon without a GUI.
+//! Enabled by default on Windows, and users can turn it off in Settings.
+//! Registration occurs only after a saved identity is available and uses
 //! Task Scheduler's interactive, highest-available token; no password is stored.
 use crate::storage::{Paths, Settings};
 use anyhow::{bail, ensure, Context, Result};
@@ -92,6 +93,12 @@ pub fn background_allowed(settings: &Settings) -> bool {
     settings.onboarding_complete && settings.start_with_windows
 }
 
+/// Never schedule a privileged VPN launcher before provisioning has saved an
+/// identity. The first-run welcome page may save preferences before Connect.
+pub fn ready_to_register(settings: &Settings, identity_persisted: bool) -> bool {
+    background_allowed(settings) && identity_persisted
+}
+
 fn system_powershell() -> Result<PathBuf> {
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     let mut buffer = [0u16; 32768];
@@ -181,15 +188,18 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn only_explicitly_enabled_onboarded_profiles_start_headlessly() {
+    fn windows_default_starts_only_after_onboarding_and_identity_persistence() {
         let mut settings = Settings::default();
+        assert!(settings.start_with_windows);
         assert!(!background_allowed(&settings));
+        assert!(!ready_to_register(&settings, true));
         settings.onboarding_complete = true;
-        assert!(!background_allowed(&settings));
-        settings.start_with_windows = true;
         assert!(background_allowed(&settings));
-        settings.onboarding_complete = false;
+        assert!(!ready_to_register(&settings, false));
+        assert!(ready_to_register(&settings, true));
+        settings.start_with_windows = false;
         assert!(!background_allowed(&settings));
+        assert!(!ready_to_register(&settings, true));
     }
 
     #[test]

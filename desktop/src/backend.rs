@@ -377,6 +377,15 @@ fn manager(
             }));
         }
     };
+    #[cfg(windows)]
+    if loaded.is_ok()
+        && crate::windows_startup::ready_to_register(
+            &settings,
+            persisted || (service_running && dir.load_identity().is_ok()),
+        )
+    {
+        operation(crate::windows_startup::set_start_with_windows(&paths, true));
+    }
     let mut connect = should_autoconnect(&settings, loaded.is_ok(), service_running);
     let mut next_status = Instant::now();
     #[cfg(unix)]
@@ -445,6 +454,10 @@ fn manager(
                 drop(profile_lock);
                 daemon::spawn_with_executable(&dir, options.disable_interface, &executable)?;
                 service_running = true;
+                #[cfg(windows)]
+                if crate::windows_startup::ready_to_register(&settings, persisted) {
+                    operation(crate::windows_startup::set_start_with_windows(&paths, true));
+                }
                 Ok(())
             })();
             if let Err(error) = result {
@@ -758,23 +771,21 @@ fn manager(
                         }
                     }
                     #[cfg(windows)]
-                    let update_startup = next.start_with_windows
-                        || next.start_with_windows != settings.start_with_windows;
-                    #[cfg(windows)]
-                    if update_startup {
-                        if next.start_with_windows && !settings.start_with_windows {
-                            dir.load_identity().context(
-                                "Connect at least once to save your VPN identity before enabling Windows startup",
-                            )?;
-                        }
-                        crate::windows_startup::set_start_with_windows(
-                            &paths,
-                            next.start_with_windows,
-                        )?;
-                    }
+                    let startup_task_updated = if crate::windows_startup::ready_to_register(
+                        &next,
+                        persisted || (service_running && dir.load_identity().is_ok()),
+                    ) {
+                        crate::windows_startup::set_start_with_windows(&paths, true)?;
+                        true
+                    } else if !next.start_with_windows && settings.start_with_windows {
+                        crate::windows_startup::set_start_with_windows(&paths, false)?;
+                        true
+                    } else {
+                        false
+                    };
                     #[cfg(windows)]
                     if let Err(error) = paths.save_settings(&next) {
-                        if update_startup {
+                        if startup_task_updated {
                             if let Err(rollback) = crate::windows_startup::set_start_with_windows(
                                 &paths,
                                 settings.start_with_windows,
@@ -818,6 +829,10 @@ fn manager(
                     });
                     identity = Some(imported);
                     persisted = true;
+                    #[cfg(windows)]
+                    if crate::windows_startup::ready_to_register(&settings, persisted) {
+                        operation(crate::windows_startup::set_start_with_windows(&paths, true));
+                    }
                     report(Notice::Phase(
                         Phase::Disconnected,
                         "Identity imported securely. Ready to connect.".into(),

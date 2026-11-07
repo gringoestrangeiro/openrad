@@ -103,7 +103,7 @@ pub struct Settings {
     #[serde(default = "existing_user_onboarded")]
     pub onboarding_complete: bool,
     pub auto_connect: bool,
-    /// Register an opt-in Windows logon task that starts only the VPN daemon.
+    /// Start only the saved VPN daemon at Windows sign-in; users may opt out.
     pub start_with_windows: bool,
     pub auto_reconnect: bool,
     pub reconnect_attempts: u32,
@@ -131,7 +131,7 @@ impl Default for Settings {
             theme: ThemePreference::Dark,
             onboarding_complete: false,
             auto_connect: true,
-            start_with_windows: false,
+            start_with_windows: cfg!(windows),
             auto_reconnect: true,
             reconnect_attempts: 3,
             reconnect_base_delay_seconds: 2,
@@ -718,7 +718,14 @@ mod tests {
         let old = r#"{"auto_connect":false,"auto_reconnect":true,"node_name":"test","scale":1.25}"#;
         let settings: Settings = serde_json::from_str(old).unwrap();
         assert!(!settings.auto_connect);
-        assert!(!settings.start_with_windows);
+        assert_eq!(settings.start_with_windows, cfg!(windows));
+        let opted_out: Settings = serde_json::from_str(r#"{"start_with_windows":false}"#).unwrap();
+        assert!(!opted_out.start_with_windows);
+        assert!(
+            !serde_json::from_str::<Settings>(&serde_json::to_string(&opted_out).unwrap())
+                .unwrap()
+                .start_with_windows
+        );
         assert_eq!(settings.reconnect_attempts, 3);
         assert_eq!(settings.start_page, StartPage::Networks);
         assert_eq!(settings.language, LanguagePreference::System);
