@@ -109,6 +109,24 @@ class PreferenceTransactionsTest {
         }
     }
 
+    @Test fun staleSettingsDraftKeepsABlockSavedAfterItWasOpened() = runBlocking {
+        val writes = PreferenceTransactions()
+        val state = MutableStateFlow(AppSettings())
+        val vip = Ip.parse("26.0.0.9")
+        val persisted = ArrayList<AppSettings>()
+        val live = ArrayList<AppSettings>()
+        val draft = state.value
+        assertTrue(writes.update(state, { persisted.add(it) }, { it.copy(blocked = it.blocked + (vip to BlockDirection.BOTH)) },
+            { live.add(it) }) != null)
+        val change = writes.update(state, { persisted.add(it) }, { settingsFromDraft(draft.copy(forceRelay = true), it) },
+            { live.add(it) })
+        assertTrue(change?.current?.forceRelay == true)
+        assertEquals(BlockDirection.BOTH, state.value.blocked[vip])
+        assertEquals(BlockDirection.BOTH, persisted.last().blocked[vip])
+        assertEquals(BlockDirection.BOTH, live.last().blocked[vip])
+        assertTrue(live.last().forceRelay)
+    }
+
     @Test fun cancellationDuringAWriteStillPublishesItsDurableValue() = runBlocking {
         withTimeout(5000) {
             val writes = PreferenceTransactions()

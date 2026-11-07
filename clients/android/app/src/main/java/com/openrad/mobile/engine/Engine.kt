@@ -1548,10 +1548,10 @@ class Engine(
         val queued = synchronized(lock) {
             ArrayList<Command>().also { commands.drainTo(it) }
         }
-        for (c in queued) {
-            c.wipe()
-            c.fail(reason)
-        }
+        // Wipe every password before any callback runs; one throwing callback
+        // must not skip the remaining commands' wipes or failure replies.
+        for (c in queued) c.wipe()
+        for (c in queued) runCatching { c.fail(reason) }
     }
 
     private fun halt() {

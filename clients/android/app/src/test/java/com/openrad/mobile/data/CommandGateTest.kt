@@ -2,6 +2,7 @@ package com.openrad.mobile.data
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -43,7 +44,10 @@ class CommandGateTest {
     }
 
     @Test fun cancelledQueuedQueryIsNeverSentAndSupersededQueriesAreSkipped() = runBlocking {
-        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        // Unconfined owner + UNDISPATCHED caller: when async returns, the obsolete
+        // waiter is already suspended on the locked gate, not merely scheduled.
+        val ownerJob = SupervisorJob()
+        val owner = CoroutineScope(ownerJob + Dispatchers.Unconfined)
         val gate = CommandGate(owner)
         val entered = CompletableDeferred<Unit>()
         val reply = CompletableDeferred<Int>()
@@ -51,10 +55,12 @@ class CommandGateTest {
         val first = async { gate.await({ true }) { entered.complete(Unit); reply.await() } }
         try {
             withTimeout(3000) { entered.await() }
-            val obsolete = async { gate.await({ true }) { obsoleteCalls++; 2 } }
+            val obsolete = async(start = CoroutineStart.UNDISPATCHED) { gate.await({ true }) { obsoleteCalls++; 2 } }
+            assertEquals(2, ownerJob.children.count())
             withTimeout(1000) { obsolete.cancelAndJoin() }
             reply.complete(1)
             assertEquals(1, withTimeout(3000) { first.await() })
+            withTimeout(3000) { ownerJob.children.forEach { it.join() } }
             assertNull(withTimeout(3000) { gate.await({ false }) { obsoleteCalls++; 3 } })
             assertEquals(4, withTimeout(3000) { gate.await({ true }) { 4 } })
             assertEquals(0, obsoleteCalls)

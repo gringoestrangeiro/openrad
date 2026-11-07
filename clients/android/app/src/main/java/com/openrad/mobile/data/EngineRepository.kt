@@ -269,8 +269,7 @@ class EngineRepository(
 
     override suspend fun saveSettings(next: AppSettings) {
         val change = preferenceWrites.update(_settings, prefs::saveSettings,
-            // Read the block list inside the transaction: an older draft must not overwrite it.
-            { current -> next.copy(blocked = current.blocked).normalized() },
+            { current -> settingsFromDraft(next, current) },
             { EngineHost.updateConfig(OpenRadVpnService.engineConfig(it)) })
             ?: return push(app.getString(R.string.preferences_save_failed), true)
         val previous = change.previous
@@ -397,6 +396,10 @@ class EngineRepository(
         const val BATCH_SPACING_MS = 50L
     }
 }
+
+/** Read the block list inside the transaction: an older settings draft must not overwrite it. */
+internal fun settingsFromDraft(draft: AppSettings, current: AppSettings): AppSettings =
+    draft.copy(blocked = current.blocked).normalized()
 
 /** Pure mapping from [EngineState] to the UI model (unit-tested). */
 object SnapshotMapper {

@@ -44,4 +44,22 @@ class EngineLifecycleTest {
         assertTrue(responses.single() is CommandResult.Failed)
         assertTrue(password.all { it == '\u0000' })
     }
+
+    @Test fun throwingCallbackDuringShutdownDrainStillWipesAndFailsLaterCommands() {
+        val engine = Engine(EngineConfig(), MemoryIdentityStore(), object : EngineListener {})
+        Engine::class.java.getDeclaredField("phase").apply { isAccessible = true }
+            .set(engine, EngineState.Phase.ONLINE)
+        (Engine::class.java.getDeclaredField("running").apply { isAccessible = true }
+            .get(engine) as java.util.concurrent.atomic.AtomicBoolean).set(true)
+        val first = "synthetic-first".toCharArray()
+        val second = "synthetic-second".toCharArray()
+        val responses = ArrayList<CommandResult>()
+        engine.join("first", first) { throw IllegalStateException("synthetic callback failure") }
+        engine.join("second", second) { responses.add(it) }
+        engine.stop()
+        assertTrue(first.all { it == '\u0000' })
+        assertTrue(second.all { it == '\u0000' })
+        assertEquals(1, responses.size)
+        assertTrue(responses.single() is CommandResult.Failed)
+    }
 }
