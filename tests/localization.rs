@@ -150,6 +150,9 @@ fn application_text_and_shared_error_messages_have_complete_catalog_coverage() {
         "Identity save retry; attempt={attempt}; error={error}",
         "Windows startup task skipped; the desktop is not installed under Program Files",
         "Recovered stale VPN service endpoint",
+        // Environment variable and type names.
+        "OPENRAD_NO_TERMINAL_SUDO",
+        "InterfaceDescriptor",
     ];
     let mut missing = Vec::new();
     for (file, source) in sources {

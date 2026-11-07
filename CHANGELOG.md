@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (2.4.0-dev)
+
+- Linux CLI: `openrad start` and `openrad retry-interface` run from a terminal
+  now ask for sudo directly on that terminal instead of depending on a Polkit
+  agent (absent in SSH/TTY sessions). The CLI creates the TAP with interactive
+  sudo and hands the descriptor to the service over its private socket; the
+  service validates that it is the `radminvpn0` TAP. `OPENRAD_NO_TERMINAL_SUDO=1`
+  restores the previous behavior.
+
 ## 2.3.2 — 2026-11-07
 
 Correcao do plugin Paper e do mod Fabric: a sessao de controle caia poucos segundos depois de

@@ -55,33 +55,16 @@ impl Tap {
         lan: bool,
         cancelled: &AtomicBool,
     ) -> Result<Self> {
-        ensure!(
-            helper.is_file(),
-            "TAP helper executable missing; build the workspace including the openrad CLI"
-        );
-        ensure!(
-            !std::path::Path::new("/sys/class/net/radminvpn0").exists(),
-            "radminvpn0 already exists; refusing to touch it"
-        );
-
-        let helper = helper.canonicalize()?;
-        let mut arguments = vec![
-            helper.into_os_string(),
-            "tap-helper".into(),
-            "--vip".into(),
-            vip.to_string().into(),
-            "--owner".into(),
-            unsafe { libc::getuid() }.to_string().into(),
-        ];
-        for peer in peers {
-            arguments.extend(["--peer".into(), peer.to_string().into()]);
-        }
-        if lan {
-            arguments.push("--lan".into());
-        }
+        let arguments = helper_arguments(vip, peers, helper, lan)?;
         let mut sudo = Command::new("/usr/bin/sudo");
         sudo.arg("-n").args(&arguments);
         let file = authorize_helper(sudo, &arguments, cancelled)?;
+        Self::from_descriptor(file)
+    }
+    /// Adopt a LAN interface descriptor authorized by a frontend process.
+    /// Only a TAP descriptor attached to `radminvpn0` is accepted.
+    pub fn from_descriptor(file: File) -> Result<Self> {
+        verify_descriptor(&file)?;
         // The engine reads the TAP without polling first; a blocking descriptor
         // would stall its event loop whenever the interface is idle.
         ensure_nonblocking(&file)?;
@@ -127,6 +110,73 @@ fn ensure_nonblocking(file: &File) -> Result<()> {
         "TAP descriptor cannot be made nonblocking: {}",
         std::io::Error::last_os_error()
     )
+}
+
+fn helper_arguments(
+    vip: Ipv4Addr,
+    peers: &[Ipv4Addr],
+    helper: &std::path::Path,
+    lan: bool,
+) -> Result<Vec<std::ffi::OsString>> {
+    ensure!(
+        helper.is_file(),
+        "TAP helper executable missing; build the workspace including the openrad CLI"
+    );
+    ensure!(
+        !std::path::Path::new("/sys/class/net/radminvpn0").exists(),
+        "radminvpn0 already exists; refusing to touch it"
+    );
+    let helper = helper.canonicalize()?;
+    let mut arguments = vec![
+        helper.into_os_string(),
+        "tap-helper".into(),
+        "--vip".into(),
+        vip.to_string().into(),
+        "--owner".into(),
+        unsafe { libc::getuid() }.to_string().into(),
+    ];
+    for peer in peers {
+        arguments.extend(["--peer".into(), peer.to_string().into()]);
+    }
+    if lan {
+        arguments.push("--lan".into());
+    }
+    Ok(arguments)
+}
+
+/// Create the persistent LAN interface from an interactive terminal: sudo asks
+/// for the password on the controlling terminal (never through our pipes), and
+/// the returned descriptor is handed to the background service.
+pub fn authorize_lan_in_terminal(
+    vip: Ipv4Addr,
+    helper: &std::path::Path,
+    cancelled: &AtomicBool,
+) -> Result<File> {
+    let arguments = helper_arguments(vip, &[], helper, true)?;
+    let mut sudo = Command::new("/usr/bin/sudo");
+    sudo.args(&arguments);
+    run_helper(sudo, Duration::from_secs(120), cancelled)?
+        .context("TAP authorization failed: sudo was refused or cancelled")
+}
+
+fn verify_descriptor(file: &File) -> Result<()> {
+    const TUNGETIFF: libc::c_ulong = 0x800454d2;
+    let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
+    // SAFETY: TUNGETIFF fills the provided ifreq; the descriptor is owned by `file`.
+    let attached = unsafe { libc::ioctl(file.as_raw_fd(), TUNGETIFF, &mut request) } >= 0;
+    let name: Vec<u8> = request
+        .ifr_name
+        .iter()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect();
+    // SAFETY: TUNGETIFF reports the interface flags in this union member.
+    let flags = unsafe { request.ifr_ifru.ifru_flags };
+    ensure!(
+        attached && name == NAME.as_bytes() && flags & libc::IFF_TAP as libc::c_short != 0,
+        "received descriptor is not the OpenRad TAP interface"
+    );
+    Ok(())
 }
 
 // A detached service has no launching terminal's sudo timestamp. Keep the
@@ -409,6 +459,14 @@ fn receive_fd(socket: RawFd) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adopted_descriptors_must_be_the_openrad_tap() {
+        let file = File::open("/dev/null").unwrap();
+        assert!(Tap::from_descriptor(file).is_err());
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        assert!(Tap::from_descriptor(File::from(OwnedFd::from(socket))).is_err());
+    }
 
     #[test]
     fn rejected_descriptor_transfers_close_all_delivered_descriptors() {

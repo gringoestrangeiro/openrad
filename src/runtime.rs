@@ -41,6 +41,8 @@ pub enum Command {
     Network(NetworkRequest),
     RetryPeers,
     RetryInterface,
+    /// Adopt a TAP descriptor that a frontend authorized (Linux terminal sudo).
+    AttachInterface(InterfaceDescriptor),
     Ping {
         peer: u64,
     },
@@ -50,6 +52,36 @@ pub enum Command {
         command: Box<Command>,
     },
 }
+/// Take-once slot for a frontend-authorized interface descriptor. Clones share
+/// the slot, so a duplicated command can never adopt the descriptor twice.
+#[derive(Clone)]
+pub struct InterfaceDescriptor(Arc<Mutex<Option<std::fs::File>>>);
+impl InterfaceDescriptor {
+    pub fn new(file: std::fs::File) -> Self {
+        Self(Arc::new(Mutex::new(Some(file))))
+    }
+    fn take(&self) -> Option<std::fs::File> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+}
+impl std::fmt::Debug for InterfaceDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InterfaceDescriptor")
+    }
+}
+#[cfg(target_os = "linux")]
+fn adopt_interface(file: std::fs::File) -> Result<Tap> {
+    Tap::from_descriptor(file)
+}
+#[cfg(not(target_os = "linux"))]
+fn adopt_interface(_: std::fs::File) -> Result<Tap> {
+    bail!("frontend interface authorization is only supported on Linux")
+}
+
+/// Shown while a terminal frontend is asking for sudo on the service's behalf.
+pub const AWAITING_TERMINAL_INTERFACE: &str =
+    "The interface needs administrator permission: run `openrad retry-interface` in a terminal";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerState {
     #[default]
@@ -272,6 +304,9 @@ pub struct Options {
     pub helper: Option<std::path::PathBuf>,
     /// Permit a headless control-only session when interface setup is unavailable.
     pub disable_interface: bool,
+    /// The first interface setup is left to a terminal frontend, which asks for
+    /// sudo itself and attaches the descriptor; the service does not prompt.
+    pub await_interface: bool,
     pub force_relay: bool,
     pub diagnostics: Diagnostics,
 }
@@ -1647,6 +1682,7 @@ pub fn run(
     let mut retired = Vec::new();
     let mut tap: Option<Tap> = None;
     let mut attempted_interface = false;
+    let mut awaited_interface = false;
     let mut interface_worker: Option<JoinHandle<Result<Tap>>> = None;
     let started = Instant::now();
     let mut next_report = Instant::now();
@@ -1731,6 +1767,18 @@ pub fn run(
                 Ok(Command::RetryInterface) => {
                     if interface_worker.is_none() {
                         attempted_interface = false;
+                    }
+                }
+                Ok(Command::AttachInterface(descriptor)) => {
+                    // Dropping an unused descriptor closes it and removes the
+                    // frontend's interface, so a ready TAP is never replaced.
+                    if let Some(file) = descriptor.take().filter(|_| {
+                        interface_worker.is_none() && tap.is_none() && !options.disable_interface
+                    }) {
+                        attempted_interface = true;
+                        snapshot.interface_error = None;
+                        interface_worker = Some(thread::spawn(move || adopt_interface(file)));
+                        report(Update::State(snapshot.clone()));
                     }
                 }
                 Ok(Command::RetryPeers) => {
@@ -2108,6 +2156,17 @@ pub fn run(
                         },
                     );
                 }
+            }
+            if !attempted_interface
+                && !options.disable_interface
+                && interface_worker.is_none()
+                && options.await_interface
+                && !awaited_interface
+            {
+                awaited_interface = true;
+                attempted_interface = true;
+                snapshot.interface_error = Some(AWAITING_TERMINAL_INTERFACE.into());
+                report(Update::State(snapshot.clone()));
             }
             if !attempted_interface && !options.disable_interface && interface_worker.is_none() {
                 // Keep the /8 interface stable across membership changes. Dynamic

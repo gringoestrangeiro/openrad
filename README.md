@@ -122,7 +122,9 @@ OS credential store, which must be available and unlocked. The short-lived TAP
 helper requests authorization in the system permission dialog using Polkit,
 after trying existing noninteractive sudo authorization. Allow that dialog when
 connecting; the detached service cannot reliably reuse a terminal's `sudo -v`.
-Polkit and a session authentication agent must be running.
+Polkit and a session authentication agent must be running for the desktop. From a
+terminal, `openrad start` and `openrad retry-interface` ask for sudo directly
+instead (see `docs/linux.md`).
 
 Closing the desktop window leaves the VPN service running. Use **Disconnect**
 or `./openrad stop` to stop the shared session and remove its session interface

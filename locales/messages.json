@@ -3969,6 +3969,56 @@
     "Истекло время получения прав или настройки TAP; повторите настройку интерфейса",
     "Cấp quyền hoặc thiết lập TAP đã hết thời gian; thử thiết lập giao diện mạng lại"
   ],
+  "The VPN interface needs administrator permission; sudo will ask for your password.": [
+    "A interface da VPN precisa de permissão de administrador; o sudo vai pedir sua senha.",
+    "Интерфейсу VPN нужны права администратора; sudo запросит ваш пароль.",
+    "Giao diện VPN cần quyền quản trị viên; sudo sẽ yêu cầu mật khẩu của bạn."
+  ],
+  "interface descriptors are attached with `attach_interface`": [
+    "descritores de interface são anexados com `attach_interface`",
+    "дескрипторы интерфейса передаются через `attach_interface`",
+    "bộ mô tả giao diện được gắn bằng `attach_interface`"
+  ],
+  "invalid descriptor transfer": [
+    "transferência de descritor inválida",
+    "недопустимая передача дескриптора",
+    "chuyển bộ mô tả không hợp lệ"
+  ],
+  "could not pass the interface descriptor: {0}": [
+    "não foi possível passar o descritor da interface: {0}",
+    "не удалось передать дескриптор интерфейса: {0}",
+    "không thể chuyển bộ mô tả giao diện: {0}"
+  ],
+  "Interface setup is disabled for this service": [
+    "A configuração da interface está desativada neste serviço",
+    "Настройка интерфейса отключена для этой службы",
+    "Thiết lập giao diện bị tắt cho dịch vụ này"
+  ],
+  "interface attachment requires a descriptor from a local terminal": [
+    "anexar a interface requer um descritor de um terminal local",
+    "для подключения интерфейса нужен дескриптор из локального терминала",
+    "gắn giao diện cần bộ mô tả từ một terminal cục bộ"
+  ],
+  "frontend interface authorization is only supported on Linux": [
+    "a autorização da interface pelo aplicativo só é suportada no Linux",
+    "авторизация интерфейса из приложения поддерживается только в Linux",
+    "ủy quyền giao diện từ ứng dụng chỉ được hỗ trợ trên Linux"
+  ],
+  "The interface needs administrator permission: run `openrad retry-interface` in a terminal": [
+    "A interface precisa de permissão de administrador: execute `openrad retry-interface` em um terminal",
+    "Интерфейсу нужны права администратора: выполните `openrad retry-interface` в терминале",
+    "Giao diện cần quyền quản trị viên: chạy `openrad retry-interface` trong terminal"
+  ],
+  "TAP authorization failed: sudo was refused or cancelled": [
+    "Falha na autorização do TAP: o sudo foi recusado ou cancelado",
+    "Авторизация TAP не удалась: sudo отклонён или отменён",
+    "Ủy quyền TAP thất bại: sudo bị từ chối hoặc bị hủy"
+  ],
+  "received descriptor is not the OpenRad TAP interface": [
+    "o descritor recebido não é a interface TAP do OpenRad",
+    "полученный дескриптор не является интерфейсом TAP OpenRad",
+    "bộ mô tả nhận được không phải giao diện TAP của OpenRad"
+  ],
   "TAP helper descriptor socket is unavailable": [
     "O socket de descritor do auxiliar TAP está indisponível",
     "Сокет дескриптора помощника TAP недоступен",

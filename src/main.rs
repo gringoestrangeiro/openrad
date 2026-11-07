@@ -123,6 +123,7 @@ enum Command {
     /// Retry failed peer channels now.
     RetryPeers,
     /// Retry interface setup after fixing driver or privilege requirements.
+    /// On Linux, from a terminal, sudo asks for the password right here.
     RetryInterface,
     /// Test the RTT of a connected peer (RID from `openrad peers`).
     Ping { peer: u64 },
@@ -164,6 +165,9 @@ enum Command {
     __Daemon {
         #[arg(long)]
         no_tap: bool,
+        /// Leave the first interface setup to the terminal that started it.
+        #[arg(long, conflicts_with = "no_tap")]
+        await_interface: bool,
     },
     #[command(hide = true)]
     TapHelper {
@@ -407,11 +411,23 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         } => initialize(&dir, node_name, identity, host, modulus)?,
         Command::Server { action } => change_server(&dir, action.unwrap_or(ServerAction::Show))?,
         Command::Start { no_tap } => {
+            let terminal = !no_tap && terminal_authorization_available();
+            #[cfg(target_os = "linux")]
+            let started = if terminal {
+                daemon::spawn_awaiting_interface(&dir)?
+            } else {
+                daemon::spawn(&dir, no_tap)?
+            };
+            #[cfg(not(target_os = "linux"))]
             let started = daemon::spawn(&dir, no_tap)?;
-            let status = daemon::request(&dir, &Request::Status)?;
+            let mut status = daemon::request(&dir, &Request::Status)?;
             if status.data["phase"] == "error" {
                 let reply = daemon::request(&dir, &Request::Reconnect)?;
                 ensure!(reply.ok, "{}", reply.message);
+            }
+            if terminal {
+                authorize_interface_in_terminal(&dir, started)?;
+                status = daemon::request(&dir, &Request::Status)?;
             }
             let mut data = status.data;
             data["started"] = Value::Bool(started);
@@ -512,6 +528,13 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
             },
         )?,
         Command::RetryPeers => daemon::request(&dir, &Request::RetryPeers)?,
+        Command::RetryInterface if terminal_authorization_available() => {
+            if authorize_interface_in_terminal(&dir, false)? {
+                daemon::request(&dir, &Request::Status)?
+            } else {
+                daemon::request(&dir, &Request::RetryInterface)?
+            }
+        }
         Command::RetryInterface => daemon::request(&dir, &Request::RetryInterface)?,
         Command::Ping { peer } => daemon::request(&dir, &Request::Ping { peer })?,
         Command::BroadcastPeer {
@@ -585,8 +608,17 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 }
             }
         }
-        Command::__Daemon { no_tap } => {
-            daemon::run(dir, no_tap)?;
+        Command::__Daemon {
+            no_tap,
+            await_interface,
+        } => {
+            #[cfg(unix)]
+            daemon::run_with(dir, no_tap, await_interface)?;
+            #[cfg(windows)]
+            {
+                let _ = await_interface;
+                daemon::run(dir, no_tap)?;
+            }
             daemon::Reply {
                 ok: true,
                 message: "Service stopped".into(),
@@ -595,6 +627,91 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         }
         Command::TapHelper { .. } => unreachable!(),
     })
+}
+
+/// Linux terminals ask for sudo directly instead of relying on a graphical
+/// Polkit agent, which terminals, SSH and TTY sessions usually lack.
+fn terminal_authorization_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::IsTerminal;
+        std::env::var_os("OPENRAD_NO_TERMINAL_SUDO").is_none()
+            && std::io::stdin().is_terminal()
+            && std::io::stderr().is_terminal()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Wait for the service to need an interface, then create it with interactive
+/// sudo here and attach its descriptor. Returns whether an attempt was made;
+/// a refused or failed attempt is reported but leaves the service running.
+#[cfg(target_os = "linux")]
+fn authorize_interface_in_terminal(dir: &daemon::DataDir, started: bool) -> Result<bool> {
+    use daemon::Request;
+    use std::sync::atomic::AtomicBool;
+    let language = i18n::language_for_args(
+        &std::env::args_os().collect::<Vec<_>>(),
+        LanguagePreference::System,
+    );
+    // A fresh service connects first; an existing one answers immediately.
+    let until = Instant::now() + Duration::from_secs(if started { 30 } else { 3 });
+    let vip = loop {
+        let status = daemon::request(dir, &Request::Status)?;
+        let snapshot = &status.data["snapshot"];
+        if status.data["interface_disabled"] == true || snapshot["interface_ready"] == true {
+            return Ok(false);
+        }
+        // Only a finished (failed or deferred) setup may be replaced; a running
+        // service attempt may be showing its own permission dialog.
+        if status.data["phase"] == "connected" && snapshot["interface_error"].is_string() {
+            if let Some(vip) = snapshot["vip"]
+                .as_str()
+                .and_then(|v| v.parse::<Ipv4Addr>().ok())
+            {
+                break vip;
+            }
+        }
+        if status.data["phase"] == "error" || Instant::now() >= until {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    eprintln!(
+        "{}",
+        language.text(
+            "The VPN interface needs administrator permission; sudo will ask for your password."
+        )
+    );
+    let attached =
+        tap::authorize_lan_in_terminal(vip, &std::env::current_exe()?, &AtomicBool::new(false))
+            .and_then(|file| daemon::attach_interface(dir, file));
+    match attached {
+        Ok(reply) if reply.ok => {
+            let until = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < until {
+                let status = daemon::request(dir, &Request::Status)?;
+                let snapshot = &status.data["snapshot"];
+                if snapshot["interface_ready"] == true
+                    || (snapshot["interface_error"].is_string()
+                        && snapshot["interface_error"]
+                            != openrad::runtime::AWAITING_TERMINAL_INTERFACE)
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Ok(reply) => eprintln!("openrad: {}", language.message(&reply.message)),
+        Err(error) => eprintln!("openrad: {}", language.message(&format!("{error:#}"))),
+    }
+    Ok(true)
+}
+#[cfg(not(target_os = "linux"))]
+fn authorize_interface_in_terminal(_: &daemon::DataDir, _: bool) -> Result<bool> {
+    Ok(false)
 }
 
 #[cfg(any(unix, windows))]

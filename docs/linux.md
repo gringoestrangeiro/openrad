@@ -52,12 +52,25 @@ processing status, peer traffic, and stop commands while awaiting permission;
 Disconnect/Stop cancels pending authorization. An actual setup failure is reported
 with its error chain and does not open a second permission dialog.
 
-For a headless session without a graphical authentication agent, an administrator
-must arrange narrowly scoped helper authorization that works for a detached
-service. Do not run the GUI/service as root or grant blanket passwordless access
-to a user-writable executable. `sudo -v` alone is insufficient with terminal-bound
-sudo timestamps. For a control-only session, use `openrad start --no-tap`; that
-mode cannot forward application traffic.
+From a terminal (including SSH and text consoles without a Polkit agent),
+`openrad start` and `openrad retry-interface` ask for sudo directly: the CLI runs
+the short-lived helper with interactive `sudo`, which prompts on your terminal,
+then passes the resulting TAP descriptor to the service over its private local
+socket (`SCM_RIGHTS`). A service started this way does not open its own
+permission dialog for that first setup. The service only accepts a descriptor
+attached to `radminvpn0`. If you refuse or cancel the prompt, the service keeps
+running and reports that the interface needs permission; run
+`openrad retry-interface` in a terminal to try again. Set
+`OPENRAD_NO_TERMINAL_SUDO=1` to keep the previous behavior (noninteractive sudo,
+then Polkit) even in a terminal. Later reconnects that recreate the interface use
+the service's normal sudo/Polkit path.
+
+For an unattended service without a terminal or graphical authentication agent,
+an administrator must arrange narrowly scoped helper authorization that works for
+a detached service. Do not run the GUI/service as root or grant blanket
+passwordless access to a user-writable executable. `sudo -v` alone is
+insufficient with terminal-bound sudo timestamps. For a control-only session, use
+`openrad start --no-tap`; that mode cannot forward application traffic.
 
 The helper uses standard system paths `/usr/bin/sudo`, `/usr/bin/pkexec`, and
 `/usr/bin/ip`; release checks use `/usr/bin/curl`. Distributions with different

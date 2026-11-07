@@ -562,6 +562,8 @@ pub enum Request {
     },
     RetryPeers,
     RetryInterface,
+    /// Linux: the TAP descriptor travels as SCM_RIGHTS data with this request.
+    AttachInterface,
     Ping {
         peer: u64,
     },
@@ -614,6 +616,9 @@ impl Request {
             Command::Ping { peer } => Self::Ping { peer },
             Command::RetryPeers => Self::RetryPeers,
             Command::RetryInterface => Self::RetryInterface,
+            Command::AttachInterface(_) => {
+                bail!("interface descriptors are attached with `attach_interface`")
+            }
             Command::Join(name) => Self::Join {
                 name,
                 password: None,
@@ -899,6 +904,133 @@ fn write_bounded(stream: &mut UnixStream, mut bytes: &[u8], timeout: Duration) -
     }
     Ok(())
 }
+/// Like `read_bounded`, but keeps one SCM_RIGHTS descriptor sent with the
+/// request. Extra or truncated descriptor transfers are closed and rejected.
+#[cfg(target_os = "linux")]
+fn read_bounded_with_descriptor(
+    stream: &mut UnixStream,
+    limit: u64,
+    timeout: Duration,
+) -> Result<(zeroize::Zeroizing<Vec<u8>>, Option<std::os::fd::OwnedFd>)> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+    let until = Instant::now() + timeout;
+    let mut data = zeroize::Zeroizing::new(Vec::new());
+    let mut buffer = zeroize::Zeroizing::new([0u8; 8192]);
+    let mut descriptors: Vec<OwnedFd> = Vec::new();
+    loop {
+        let remaining = until.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "service request timed out");
+        stream.set_read_timeout(Some(remaining))?;
+        let mut iov = libc::iovec {
+            iov_base: buffer.as_mut_ptr().cast(),
+            iov_len: buffer.len(),
+        };
+        let mut control = [0usize; 8];
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.as_mut_ptr().cast();
+        msg.msg_controllen = std::mem::size_of_val(&control);
+        // SAFETY: msg points at live iovec/control buffers for this call only.
+        let length = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
+        if length < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        // recvmsg installs every delivered descriptor; own them all first so
+        // any later rejection closes them.
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                    let bytes = (*c).cmsg_len.saturating_sub(libc::CMSG_LEN(0) as usize);
+                    for index in 0..bytes / std::mem::size_of::<RawFd>() {
+                        let fd =
+                            std::ptr::read_unaligned(libc::CMSG_DATA(c).cast::<RawFd>().add(index));
+                        descriptors.push(OwnedFd::from_raw_fd(fd));
+                    }
+                }
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+        }
+        ensure!(
+            descriptors.len() <= 1 && msg.msg_flags & libc::MSG_CTRUNC == 0,
+            "invalid descriptor transfer"
+        );
+        if length == 0 {
+            break;
+        }
+        data.extend_from_slice(&buffer[..length as usize]);
+        ensure!(
+            data.len() as u64 <= limit,
+            "local control message too large"
+        );
+    }
+    Ok((data, descriptors.pop()))
+}
+
+/// Hand a terminal-authorized TAP descriptor to the running service.
+#[cfg(target_os = "linux")]
+pub fn attach_interface(dir: &DataDir, file: File) -> Result<Reply> {
+    let timeout = Duration::from_secs(10);
+    let until = Instant::now() + timeout;
+    let mut stream =
+        connect_control(dir, until).context("Service is stopped. Run `openrad start` first")?;
+    let payload = serde_json::to_vec(&Request::AttachInterface)?;
+    send_with_descriptor(&mut stream, &payload, &file, timeout)?;
+    drop(file); // The service now holds its own copy.
+    stream.shutdown(std::net::Shutdown::Write)?;
+    let bytes = read_bounded(
+        &mut stream,
+        REPLY_LIMIT,
+        until.saturating_duration_since(Instant::now()),
+    )?;
+    ensure!(!bytes.is_empty(), "service closed the control connection");
+    Ok(serde_json::from_slice(&bytes)?)
+}
+#[cfg(target_os = "linux")]
+fn send_with_descriptor(
+    stream: &mut UnixStream,
+    payload: &[u8],
+    file: &File,
+    timeout: Duration,
+) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    ensure!(!payload.is_empty(), "empty control request");
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr().cast_mut().cast(),
+        iov_len: payload.len(),
+    };
+    let mut control = [0usize; 8];
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast();
+    let fd_size = std::mem::size_of::<std::os::fd::RawFd>() as u32;
+    stream.set_write_timeout(Some(timeout))?;
+    // SAFETY: the control buffer is large enough for one descriptor record,
+    // sendmsg only reads the payload, and every pointer refers to live buffers.
+    let sent = unsafe {
+        msg.msg_controllen = libc::CMSG_SPACE(fd_size) as usize;
+        let c = libc::CMSG_FIRSTHDR(&msg);
+        (*c).cmsg_level = libc::SOL_SOCKET;
+        (*c).cmsg_type = libc::SCM_RIGHTS;
+        (*c).cmsg_len = libc::CMSG_LEN(fd_size) as usize;
+        std::ptr::write_unaligned(libc::CMSG_DATA(c).cast(), file.as_raw_fd());
+        libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL)
+    };
+    ensure!(
+        sent > 0,
+        "could not pass the interface descriptor: {}",
+        std::io::Error::last_os_error()
+    );
+    // The small request normally fits one send; finish any remainder.
+    write_bounded(stream, &payload[sent as usize..], timeout)
+}
+
 #[cfg(unix)]
 pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
     request_with_timeout(dir, command, Duration::from_secs(35))
@@ -1113,6 +1245,8 @@ struct Shared {
     rid: u64,
     directory: Option<DataDir>,
     disable_interface: bool,
+    /// One-shot: the first session waits for a terminal-authorized interface.
+    await_interface: AtomicBool,
 }
 impl Shared {
     fn new(id: &Identity, disable_interface: bool) -> Self {
@@ -1136,6 +1270,7 @@ impl Shared {
             rid: id.rid,
             directory: None,
             disable_interface,
+            await_interface: AtomicBool::new(false),
         }
     }
     /// A panic on another thread must not turn every later request, and the
@@ -1344,6 +1479,15 @@ impl Shared {
             _ => Reply::error("Service connection is unavailable"),
         }
     }
+    #[cfg(target_os = "linux")]
+    fn attach_interface(&self, file: File) -> Reply {
+        if self.disable_interface {
+            return Reply::error("Interface setup is disabled for this service");
+        }
+        self.queue(Command::AttachInterface(runtime::InterfaceDescriptor::new(
+            file,
+        )))
+    }
     fn resolve_network(&self, name: &str) -> Result<String> {
         let state = self.lock_state();
         ensure!(
@@ -1470,6 +1614,9 @@ impl Shared {
             }
             Request::RetryPeers => self.queue(Command::RetryPeers),
             Request::RetryInterface => self.queue(Command::RetryInterface),
+            Request::AttachInterface => {
+                Reply::error("interface attachment requires a descriptor from a local terminal")
+            }
             Request::Ping { peer } => self.command(Command::Ping { peer }),
             Request::BroadcastPeer { target } => {
                 return self.handle_result(Request::BroadcastPeers {
@@ -1607,6 +1754,7 @@ fn supervisor(
         let options = runtime::Options {
             helper: std::env::current_exe().ok(),
             disable_interface,
+            await_interface: shared.await_interface.swap(false, Ordering::Relaxed),
             diagnostics: diagnostics.clone(),
             force_relay: preferences.force_relay,
             traffic_peers: preferences.traffic_peers.clone(),
@@ -1677,10 +1825,23 @@ fn supervisor(
 
 #[cfg(unix)]
 fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    let (bytes, descriptor) =
+        read_bounded_with_descriptor(&mut stream, REQUEST_LIMIT, Duration::from_secs(5))?;
+    #[cfg(not(target_os = "linux"))]
     let bytes = read_bounded(&mut stream, REQUEST_LIMIT, Duration::from_secs(5))?;
     ensure!(!bytes.is_empty(), "empty control request");
     let command: Request = serde_json::from_slice(&bytes)?;
     let stopping = matches!(&command, Request::Stop);
+    #[cfg(target_os = "linux")]
+    let payload = match (&command, descriptor) {
+        (Request::AttachInterface, Some(descriptor)) => {
+            serde_json::to_vec(&shared.attach_interface(File::from(descriptor)))?
+        }
+        // Any descriptor sent with another request is closed here.
+        _ => shared.reply_payload(command)?,
+    };
+    #[cfg(not(target_os = "linux"))]
     let payload = shared.reply_payload(command)?;
     ensure!(
         payload.len() as u64 <= REPLY_LIMIT,
@@ -1730,6 +1891,11 @@ fn dispatch_control_connection(
 
 #[cfg(unix)]
 pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
+    run_with(dir, disable_interface, false)
+}
+/// `await_interface`: leave the first interface setup to a terminal frontend.
+#[cfg(unix)]
+pub fn run_with(dir: DataDir, disable_interface: bool, await_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
     let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
@@ -1749,6 +1915,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     drop(profile_lock);
     let mut shared = Shared::new(&identity, disable_interface);
     shared.directory = Some(dir.clone());
+    shared.await_interface = AtomicBool::new(await_interface && !disable_interface);
     shared
         .state
         .get_mut()
@@ -1879,12 +2046,26 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
 pub fn spawn(dir: &DataDir, disable_interface: bool) -> Result<bool> {
     spawn_with_executable(dir, disable_interface, &std::env::current_exe()?)
 }
+/// Start the service for a terminal that will ask for sudo itself and attach
+/// the interface with `attach_interface`; the service skips its own prompt once.
+#[cfg(target_os = "linux")]
+pub fn spawn_awaiting_interface(dir: &DataDir) -> Result<bool> {
+    spawn_inner(dir, false, true, &std::env::current_exe()?)
+}
 /// Launch the background VPN service without inheriting CLI output handles.
 ///
 /// Returns whether this call started a new daemon; it reports early exits.
 pub fn spawn_with_executable(
     dir: &DataDir,
     disable_interface: bool,
+    executable: &std::path::Path,
+) -> Result<bool> {
+    spawn_inner(dir, disable_interface, false, executable)
+}
+fn spawn_inner(
+    dir: &DataDir,
+    disable_interface: bool,
+    await_interface: bool,
     executable: &std::path::Path,
 ) -> Result<bool> {
     early_log::checkpoint(Stage::ServiceStarting);
@@ -1919,6 +2100,8 @@ pub fn spawn_with_executable(
         command.arg("--data-dir").arg(&dir.path).arg("__daemon");
         if disable_interface {
             command.arg("--no-tap");
+        } else if await_interface {
+            command.arg("--await-interface");
         }
         use std::os::unix::process::CommandExt;
         unsafe {
@@ -1936,7 +2119,10 @@ pub fn spawn_with_executable(
             .spawn()?
     };
     #[cfg(windows)]
-    let child = windows_spawn::spawn(executable, &dir.path, disable_interface)?;
+    let child = {
+        let _ = await_interface;
+        windows_spawn::spawn(executable, &dir.path, disable_interface)?
+    };
     #[cfg(unix)]
     let diagnostic_log = dir.path.join("service.log");
     #[cfg(windows)]
@@ -1976,6 +2162,61 @@ pub fn spawn_with_executable(
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn control_requests_carry_one_descriptor_and_close_unused_ones() {
+        use std::os::fd::AsRawFd;
+        let timeout = Duration::from_secs(5);
+        // The descriptor arrives with the request bytes; observing EOF on the
+        // passed socket's peer proves the received copy was closed on drop.
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let (passed, mut observer) = UnixStream::pair().unwrap();
+        let payload = serde_json::to_vec(&Request::AttachInterface).unwrap();
+        send_with_descriptor(
+            &mut client,
+            &payload,
+            &File::from(std::os::fd::OwnedFd::from(passed)),
+            timeout,
+        )
+        .unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let (bytes, descriptor) =
+            read_bounded_with_descriptor(&mut server, REQUEST_LIMIT, timeout).unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<Request>(&bytes).unwrap(),
+            Request::AttachInterface
+        ));
+        let descriptor = descriptor.expect("descriptor delivered");
+        assert!(descriptor.as_raw_fd() >= 0);
+        drop(descriptor);
+        observer.set_read_timeout(Some(timeout)).unwrap();
+        assert_eq!(observer.read(&mut [0]).unwrap(), 0);
+
+        // Plain requests still parse and carry no descriptor.
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client
+            .write_all(&serde_json::to_vec(&Request::Status).unwrap())
+            .unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let (bytes, descriptor) =
+            read_bounded_with_descriptor(&mut server, REQUEST_LIMIT, timeout).unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<Request>(&bytes).unwrap(),
+            Request::Status
+        ));
+        assert!(descriptor.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn attach_request_without_descriptor_is_refused() {
+        let shared = shared();
+        let reply: Reply =
+            serde_json::from_slice(&shared.reply_payload(Request::AttachInterface).unwrap())
+                .unwrap();
+        assert!(!reply.ok);
+    }
 
     fn shared() -> Shared {
         let id = Identity::from_secret(br#"{"format":"openrad-identity-v1","rid":123,"vip":"26.0.0.5","node_name":"test","address":"00000000000000000000000000000000","credential":"010203040506","server_address":"192.0.2.1"}"#).unwrap();
