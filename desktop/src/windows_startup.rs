@@ -99,6 +99,40 @@ pub fn ready_to_register(settings: &Settings, identity_persisted: bool) -> bool 
     background_allowed(settings) && identity_persisted
 }
 
+/// A settings save touches the logon task only when the user changes the
+/// option, so unrelated preferences never depend on Task Scheduler. Returns
+/// the requested task state, or None when the task should be left alone.
+pub fn requested_change(
+    previous: &Settings,
+    next: &Settings,
+    identity_persisted: bool,
+) -> Option<bool> {
+    if previous.start_with_windows && !next.start_with_windows {
+        Some(false)
+    } else if !previous.start_with_windows && ready_to_register(next, identity_persisted) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// The registration script admits only protected Program Files installs.
+/// Implicit registration skips other locations (such as an extracted portable
+/// archive) instead of reporting the same expected failure on every launch.
+pub fn install_supported() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let exe = exe.to_string_lossy().to_lowercase();
+    ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .any(|root| {
+            let root = root.to_string_lossy().trim_end_matches('\\').to_lowercase();
+            !root.is_empty() && exe.starts_with(&format!("{root}\\"))
+        })
+}
+
 fn system_powershell() -> Result<PathBuf> {
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
     let mut buffer = [0u16; 32768];
@@ -200,6 +234,27 @@ mod tests {
         settings.start_with_windows = false;
         assert!(!background_allowed(&settings));
         assert!(!ready_to_register(&settings, true));
+    }
+
+    #[test]
+    fn settings_saves_touch_the_logon_task_only_when_the_option_changes() {
+        let mut enabled = Settings {
+            onboarding_complete: true,
+            start_with_windows: true,
+            ..Settings::default()
+        };
+        let disabled = Settings {
+            start_with_windows: false,
+            ..enabled.clone()
+        };
+        assert_eq!(requested_change(&enabled, &enabled, true), None);
+        assert_eq!(requested_change(&disabled, &disabled, true), None);
+        assert_eq!(requested_change(&enabled, &disabled, false), Some(false));
+        assert_eq!(requested_change(&disabled, &enabled, true), Some(true));
+        // Enabling before an identity exists waits for the first saved identity.
+        assert_eq!(requested_change(&disabled, &enabled, false), None);
+        enabled.node_name = "renamed".into();
+        assert_eq!(requested_change(&enabled, &enabled, true), None);
     }
 
     #[test]
