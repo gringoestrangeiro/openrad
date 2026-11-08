@@ -1,6 +1,7 @@
 """Validate the Windows matrix script's artifact selection with a stubbed build."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -17,6 +18,10 @@ class MinecraftBuildMatrixTests(unittest.TestCase):
     def test_current_project_version_wins_over_stale_artifact(self):
         with tempfile.TemporaryDirectory(prefix='openrad-matrix-') as directory:
             root = Path(directory)
+            build_source = (ROOT / 'clients/mod/build.gradle.kts').read_text(encoding='utf-8')
+            declared_versions = re.findall(r'version\s*=\s*"([^"]+)"', build_source)
+            self.assertEqual(len(declared_versions), 1, declared_versions)
+            current_version = declared_versions[0]
             (root / 'release').mkdir()
             shutil.copyfile(ROOT / 'clients/mod/build-matrix.ps1', root / 'build-matrix.ps1')
             shutil.copyfile(ROOT / 'clients/mod/build.gradle.kts', root / 'build.gradle.kts')
@@ -27,7 +32,7 @@ class MinecraftBuildMatrixTests(unittest.TestCase):
             libs = root / 'fabric/build/libs'
             libs.mkdir(parents=True)
             mixin_package = 'io/github/gringoestrangeiro/openradclient/fabric/mixin/'
-            for version in ('2.3.0', '0.2.3-alpha'):
+            for version in (current_version, '0.2.3-alpha'):
                 with zipfile.ZipFile(libs / f'fabric-{version}.jar', 'w') as jar:
                     jar.writestr('fabric.mod.json', json.dumps({'version': version, 'environment': 'client',
                         'entrypoints': {'client': ['io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod']},
@@ -44,7 +49,7 @@ class MinecraftBuildMatrixTests(unittest.TestCase):
             result = subprocess.run([shutil.which('pwsh') or shutil.which('powershell'), '-NoProfile', '-File',
                 str(root / 'build-matrix.ps1'), '-MinecraftVersions', '1.21.1'], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue((root / 'release/OpenRadClientMod-2.3.0-fabric-1.21.1.jar').is_file(), result.stdout)
+            self.assertTrue((root / f'release/OpenRadClientMod-{current_version}-fabric-1.21.1.jar').is_file(), result.stdout)
             self.assertFalse((root / 'release/OpenRadClientMod-0.2.3-alpha-fabric-1.21.1.jar').exists())
 
 
