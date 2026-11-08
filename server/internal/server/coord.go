@@ -103,6 +103,10 @@ func (s *Server) coordinate(ss *Session, target uint64) {
 				continue
 			}
 			s.mu.Lock()
+			if s.conns[cid] != c {
+				s.mu.Unlock()
+				return
+			}
 			s.connRecordLocked(c, 0, op, recs)
 			s.mu.Unlock()
 		default:
@@ -127,11 +131,12 @@ func (s *Server) connRecord(ss *Session, op uint32, recs wire.Records) {
 	s.connRecordLocked(c, 1, op, recs)
 }
 
-// dropConnsLocked forgets connections whose acceptor session ended.
+// dropConnsLocked stops broker sessions whose acceptor attachment ended.
 func (s *Server) dropConnsLocked(ss *Session) {
 	for cid, c := range s.conns {
 		if c.b == ss {
 			delete(s.conns, cid)
+			c.a.Close()
 		}
 	}
 }

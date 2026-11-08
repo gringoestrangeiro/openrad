@@ -1,11 +1,13 @@
 package io.github.gringoestrangeiro.openradplugin.config;
 
 import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
+import io.github.gringoestrangeiro.openradplugin.session.CoordinatorEndpoint;
 
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -13,17 +15,24 @@ import java.util.*;
 
 /**
  * Edits {@code config.yml} and {@code secrets.properties} for the in-game setup commands. Every
- * edit is validated with {@link VpnSettings#from} before it replaces the file. Each file is
+ * edit validates the replacement before publishing it. Each file is
  * replaced atomically; password changes publish a fresh secret before switching the YAML
  * reference, so a failed YAML write preserves the previously referenced password.
  */
 public final class ConfigEditor {
     private static final int MAX_FILE = 256 * 1024;
+    private static final System.Logger LOG = System.getLogger(ConfigEditor.class.getName());
 
     private final Path directory;
+    private final boolean onlineMode;
 
     public ConfigEditor(Path directory) {
+        this(directory, true);
+    }
+
+    public ConfigEditor(Path directory, boolean onlineMode) {
         this.directory = directory;
+        this.onlineMode = onlineMode;
     }
 
     /** Result of {@link #join}: whether the network was new and which secret key it uses. */
@@ -59,7 +68,7 @@ public final class ConfigEditor {
         }
         yaml.set("vpn.networks", networks);
         yaml.set("bridge.enabled", true);
-        VpnSettings settings = VpnSettings.from(yaml);
+        VpnSettings settings = validate(yaml, password == null ? "" : secret);
         if (password != null) writeSecret(secret, password);
         try {
             save(yaml);
@@ -85,17 +94,13 @@ public final class ConfigEditor {
         networks.remove(entry);
         String secret = Objects.toString(entry.get("secret"), "");
         yaml.set("vpn.networks", networks);
-        VpnSettings settings;
-        try {
-            settings = VpnSettings.from(yaml);
-        } catch (IllegalArgumentException e) {
-            // The last private network was removed and no public discovery is active.
+        if (networks.isEmpty() && !MinecraftNetworkSettings.from(yaml).enabled()) {
             yaml.set("bridge.enabled", false);
-            settings = VpnSettings.from(yaml);
         }
+        VpnSettings settings = validate(yaml, "");
         save(yaml);
         boolean stillUsed = settings.networks().stream().anyMatch(n -> n.secret().equals(secret));
-        if (!secret.isEmpty() && !stillUsed) removeSecret(secret);
+        if (!secret.isEmpty() && !stillUsed) removeUnusedSecretBestEffort(secret);
         return true;
     }
 
@@ -103,7 +108,7 @@ public final class ConfigEditor {
     public synchronized void enabled(boolean enabled) throws IOException {
         YamlConfiguration yaml = load();
         yaml.set("bridge.enabled", enabled);
-        VpnSettings.from(yaml);
+        validate(yaml, "");
         save(yaml);
     }
 
@@ -113,7 +118,7 @@ public final class ConfigEditor {
         yaml.set("vpn.minecraft-networks.enabled", true);
         yaml.set("vpn.minecraft-networks.select", new ArrayList<>(selectors));
         if (!selectors.isEmpty()) yaml.set("bridge.enabled", true);
-        VpnSettings.from(yaml);
+        validate(yaml, "");
         save(yaml);
     }
 
@@ -121,8 +126,19 @@ public final class ConfigEditor {
     public synchronized void forceRelay(boolean enabled) throws IOException {
         YamlConfiguration yaml = load();
         yaml.set("vpn.transports.force-relay", enabled);
-        VpnSettings.from(yaml);
+        validate(yaml, "");
         save(yaml);
+    }
+
+    private VpnSettings validate(YamlConfiguration yaml, String stagedSecret) throws IOException {
+        VpnSettings settings = VpnSettings.from(yaml, onlineMode);
+        if (settings.bridge().enabled()) {
+            CoordinatorEndpoint.load(directory, settings.bootstrap(), settings.controlPort());
+        }
+        try (NetworkSecrets secrets = NetworkSecrets.readExisting(directory)) {
+            secrets.validate(settings, stagedSecret);
+        }
+        return settings;
     }
 
     static String freshSecretKey(
@@ -187,7 +203,7 @@ public final class ConfigEditor {
     private List<String> secretLines() throws IOException {
         Path path = secretsPath();
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return new ArrayList<>();
-        if (Files.isSymbolicLink(path) || Files.size(path) > 65536)
+        if (Files.isSymbolicLink(path) || Files.size(path) > NetworkSecrets.MAX_FILE_BYTES)
             throw new IOException("invalid secrets file");
         return new ArrayList<>(Files.readAllLines(path, StandardCharsets.UTF_8));
     }
@@ -199,10 +215,7 @@ public final class ConfigEditor {
         // A blank line also terminates an EOF continuation before the new key.
         lines.add("");
         lines.add(key + "=" + escape(password));
-        String content = String.join("\n", lines) + "\n";
-        if (content.getBytes(StandardCharsets.UTF_8).length > 65536)
-            throw new IOException("secrets file exceeds size limit");
-        replace(secretsPath(), content, true);
+        replace(secretsPath(), String.join("\n", lines) + "\n", true);
     }
 
     private Set<String> storedSecretKeys() throws IOException {
@@ -214,9 +227,10 @@ public final class ConfigEditor {
     private void removeUnusedSecretBestEffort(String key) {
         try {
             removeSecret(key);
-        } catch (IOException ignored) {
-            // An unreferenced secret may remain for cleanup. Never undo publication
-            // or report a committed configuration as failed because of cleanup.
+        } catch (IOException | IllegalArgumentException e) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "Could not remove an unused secret from secrets.properties ("
+                            + e.getClass().getSimpleName() + ")");
         }
     }
 
@@ -225,6 +239,10 @@ public final class ConfigEditor {
         List<String> retained = new ArrayList<>();
         boolean removed = false;
         for (int at = 0; at < lines.size(); ) {
+            if (!startsProperty(lines.get(at))) {
+                retained.add(lines.get(at++));
+                continue;
+            }
             int start = at;
             StringBuilder record = new StringBuilder();
             boolean continued;
@@ -237,12 +255,18 @@ public final class ConfigEditor {
             } while (continued && at < lines.size());
             Properties properties = new Properties();
             properties.load(new java.io.StringReader(record.toString()));
-            // Properties comments may end in a backslash without continuing.
-            // If our group contains multiple keys, retain it conservatively.
             if (properties.size() == 1 && properties.containsKey(key)) removed = true;
             else retained.addAll(lines.subList(start, at));
         }
         if (removed) replace(secretsPath(), String.join("\n", retained) + "\n", true);
+    }
+
+    private static boolean startsProperty(String line) {
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c != ' ' && c != '\t' && c != '\f') return c != '#' && c != '!';
+        }
+        return false;
     }
 
     /** java.util.Properties escaping for a value: backslash, leading space, and separators. */
@@ -259,6 +283,10 @@ public final class ConfigEditor {
     }
 
     private static void replace(Path path, String content, boolean secret) throws IOException {
+        int maxBytes = secret ? NetworkSecrets.MAX_FILE_BYTES : MAX_FILE;
+        if (content.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+            throw new IOException(path.getFileName() + " exceeds size limit");
+        }
         Path temp = path.resolveSibling(path.getFileName() + ".tmp-" + UUID.randomUUID());
         try {
             if (secret) {
@@ -273,6 +301,8 @@ public final class ConfigEditor {
                 Identity.secureFile(temp);
             }
             Files.writeString(temp, content, StandardCharsets.UTF_8);
+            if (Thread.currentThread().isInterrupted())
+                throw new InterruptedIOException("configuration edit cancelled");
             try {
                 Files.move(
                         temp,

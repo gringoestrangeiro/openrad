@@ -17,6 +17,8 @@ import java.util.function.Consumer;
 
 /** Registration never retries after a possibly issued identity. The marker survives restarts. */
 public final class Provisioner {
+    private static final System.Logger LOG = System.getLogger(Provisioner.class.getName());
+
     private Provisioner() {}
 
     public static Identity loadOrRegister(
@@ -39,16 +41,18 @@ public final class Provisioner {
             throws IOException {
         Path identity = directory.resolve("identity.json"),
                 intent = directory.resolve("registration.pending");
-        if (Files.exists(identity, LinkOption.NOFOLLOW_LINKS)) {
+        // Require definite absence before creating a new identity.
+        if (!Files.notExists(identity, LinkOption.NOFOLLOW_LINKS)) {
             Identity loaded = Identity.load(identity);
-            Files.deleteIfExists(intent);
+            clearSavedIntent(intent);
             return loaded;
         }
-        if (Files.exists(intent, LinkOption.NOFOLLOW_LINKS))
+        if (!Files.notExists(intent, LinkOption.NOFOLLOW_LINKS))
             throw new IOException(
                     "registration outcome unknown: preserve registration.pending and recover"
                         + " identity before another registration");
         try (Identity bootstrap = Identity.bootstrap(name, host)) {
+            byte[] request = login(name, 0, 3, 0);
             Set<String> visited = new HashSet<>();
             long until = System.nanoTime() + Duration.ofSeconds(90).toNanos();
             for (int attempt = 0; attempt < 3; attempt++) {
@@ -63,7 +67,7 @@ public final class Provisioner {
                                         modulus,
                                         owner)) {
                     writeIntent(intent);
-                    session.send(login(name, 0, 3, 0));
+                    session.send(request);
                     byte[] reply = session.receive();
                     if (TlvCodec.operation(reply) == 12) {
                         var f = fields(field(fields(field(fields(reply), 0x1238)), 0x1234));
@@ -110,35 +114,56 @@ public final class Provisioner {
         for (int attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
             try {
                 saver.save(issued, destination);
-                Files.deleteIfExists(intent);
-                return;
             } catch (IOException e) {
                 failure = e;
-            }
-            if (attempt < SAVE_ATTEMPTS - 1) {
-                try {
-                    Thread.sleep(Math.min(4000L, 200L << attempt));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("identity storage retry interrupted");
+                if (attempt < SAVE_ATTEMPTS - 1) {
+                    try {
+                        Thread.sleep(Math.min(4000L, 200L << attempt));
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("identity storage retry interrupted", interrupted);
+                    }
                 }
+                continue;
             }
+            clearSavedIntent(intent);
+            return;
         }
         throw new IOException(
                 "issued identity could not be saved; registration remains blocked", failure);
     }
 
+    private static void clearSavedIntent(Path intent) {
+        try {
+            if (Files.isRegularFile(intent, LinkOption.NOFOLLOW_LINKS)) Files.deleteIfExists(intent);
+        } catch (IOException | SecurityException failure) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "Identity is saved; registration.pending cleanup failed ({0})",
+                    failure.getClass().getSimpleName());
+        }
+    }
+
     private static void writeIntent(Path intent) throws IOException {
         Files.createFile(intent);
-        Identity.secureFile(intent);
-        byte[] notice =
-                "A registration request may have reached the service. Do not delete until the issued identity is recovered or deliberate re-registration is chosen.\n"
-                        .getBytes(StandardCharsets.UTF_8);
-        try (FileChannel channel =
-                FileChannel.open(intent, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-            ByteBuffer buffer = ByteBuffer.wrap(notice);
-            while (buffer.hasRemaining()) channel.write(buffer);
-            channel.force(true);
+        try {
+            Identity.secureFile(intent);
+            byte[] notice =
+                    "A registration request may have reached the service. Do not delete until the issued identity is recovered or deliberate re-registration is chosen.\n"
+                            .getBytes(StandardCharsets.UTF_8);
+            try (FileChannel channel =
+                    FileChannel.open(intent, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                ByteBuffer buffer = ByteBuffer.wrap(notice);
+                while (buffer.hasRemaining()) channel.write(buffer);
+                channel.force(true);
+            }
+        } catch (IOException | RuntimeException failure) {
+            // The Login write has yet to start, so this attempt cannot have issued a credential.
+            try {
+                Files.deleteIfExists(intent);
+            } catch (IOException | SecurityException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
     }
 }

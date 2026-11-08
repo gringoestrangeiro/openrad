@@ -189,7 +189,7 @@ func writeModulus(key *rsa.PrivateKey, path string) error {
 
 func serve(dbPath string, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	listen := fs.String("listen", "0.0.0.0:17301", "control TCP address (only Rust clients can use a port other than 17301)")
+	listen := fs.String("listen", "0.0.0.0:17301", "control TCP address (Python and Android use port 17301)")
 	relayListen := fs.String("relay-listen", "0.0.0.0:17302", "relay TCP address")
 	relayPort := fs.Int("relay-port", 0, "relay port advertised to clients (default: the relay listener's port)")
 	publicIP := fs.String("public-ip", "", "IPv4 address advertised to clients (default: the address each client connected to)")

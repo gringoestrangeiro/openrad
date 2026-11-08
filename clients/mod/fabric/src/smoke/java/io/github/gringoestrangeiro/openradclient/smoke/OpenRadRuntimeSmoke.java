@@ -1,13 +1,18 @@
 package io.github.gringoestrangeiro.openradclient.smoke;
 
+import com.mojang.brigadier.CommandDispatcher;
+import io.github.gringoestrangeiro.openradclient.fabric.OpenRadMenuScreen;
 import io.netty.channel.ChannelFuture;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
+import net.minecraft.client.multiplayer.ClientSuggestionProvider;
 import net.minecraft.client.multiplayer.ServerStatusPinger;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.PacketFlow;
@@ -51,6 +56,11 @@ public final class OpenRadRuntimeSmoke implements ClientModInitializer {
                 multiplayer.tick();
                 require(Screens.getButtons(multiplayer).stream()
                         .anyMatch(button -> button.getMessage().getString().startsWith("OpenRad")), "Multiplayer OpenRad button");
+                multiplayer.resize(client, client.getWindow().getGuiScaledWidth(), client.getWindow().getGuiScaledHeight());
+                require(Screens.getButtons(multiplayer).stream()
+                        .filter(button -> button.getMessage().getString().equals("OpenRad")).count() == 1,
+                        "Multiplayer retains one OpenRad button after resize");
+                System.out.println("OPENRAD_SMOKE MULTIPLAYER_RESIZE PASS");
                 client.setScreen(new TitleScreen()); // Closes only this test's physical LAN detector.
                 System.out.println("OPENRAD_SMOKE MULTIPLAYER_INIT_TICK_BUTTON PASS");
                 io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod.openMenu(multiplayer);
@@ -82,30 +92,54 @@ public final class OpenRadRuntimeSmoke implements ClientModInitializer {
                 require(Screens.getButtons(client.screen).size() >= 6,
                         "known languages are shown as a paged list");
                 System.out.println("OPENRAD_SMOKE SIMPLIFIED_NETWORK_MENU PASS");
-                Thread.ofVirtual().name("openrad-smoke-connections").start(() -> {
-                    try {
-                        InetAddress loopback = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
-                        try (ServerSocket ordinary = new ServerSocket(0, 1, loopback)) {
-                            InetSocketAddress unchanged = connect(new InetSocketAddress(loopback, ordinary.getLocalPort()));
-                            require(unchanged.getAddress().equals(loopback)
-                                    && unchanged.getPort() == ordinary.getLocalPort(), "ordinary endpoint retained");
-                        }
-                        System.out.println("OPENRAD_SMOKE ORDINARY_CONNECTION PASS");
-                        // Offline routing deliberately retains 26/8 for an existing OS VPN.
-                        // Inspect the policy without attempting a real connection to that address.
-                        var controller = io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod.controller();
-                        require(!controller.active(), "isolated profile remains offline");
-                        InetSocketAddress syntheticVip = new InetSocketAddress(
-                                InetAddress.getByAddress(new byte[]{26, (byte) 254, (byte) 253, (byte) 252}), 25565);
-                        require(controller.route(syntheticVip) == syntheticVip, "offline routing policy retains endpoint");
-                        System.out.println("OPENRAD_SMOKE OFFLINE_ROUTING_POLICY PASS");
-                        if (FINISHED.compareAndSet(false, true)) {
-                            result("PASS: required mixins, Multiplayer init/tick/button, ordinary connection, offline routing policy");
-                            System.out.println("OPENRAD_SMOKE RESULT PASS");
-                            client.execute(client::stop);
-                        }
-                    } catch (Throwable failure) { fail(failure); }
-                });
+                verifyMenuCommand(client);
+            } catch (Throwable failure) { fail(failure); }
+        });
+    }
+
+    private static void verifyMenuCommand(Minecraft client) throws Exception {
+        var dispatcher = new CommandDispatcher<FabricClientCommandSource>();
+        ClientCommandRegistrationCallback.EVENT.invoker().register(dispatcher, null);
+        var source = (FabricClientCommandSource) new ClientSuggestionProvider(null, client);
+        var before = client.screen;
+        require(dispatcher.execute("openrad menu", source) == 1, "registered OpenRad menu command");
+        require(client.screen == before, "OpenRad menu command defers changing the screen");
+        // ChatScreen closes itself immediately after sending a command.
+        client.setScreen(null);
+        var checked = new AtomicBoolean();
+        ClientTickEvents.END_CLIENT_TICK.register(next -> {
+            if (!checked.compareAndSet(false, true)) return;
+            try {
+                require(next.screen instanceof OpenRadMenuScreen, "OpenRad menu opens after chat closes");
+                System.out.println("OPENRAD_SMOKE MENU_COMMAND PASS");
+                verifyConnections(next);
+            } catch (Throwable failure) { fail(failure); }
+        });
+    }
+
+    private static void verifyConnections(Minecraft client) {
+        Thread.ofVirtual().name("openrad-smoke-connections").start(() -> {
+            try {
+                InetAddress loopback = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+                try (ServerSocket ordinary = new ServerSocket(0, 1, loopback)) {
+                    InetSocketAddress unchanged = connect(new InetSocketAddress(loopback, ordinary.getLocalPort()));
+                    require(unchanged.getAddress().equals(loopback)
+                            && unchanged.getPort() == ordinary.getLocalPort(), "ordinary endpoint retained");
+                }
+                System.out.println("OPENRAD_SMOKE ORDINARY_CONNECTION PASS");
+                // Offline routing deliberately retains 26/8 for an existing OS VPN.
+                // Inspect the policy without attempting a real connection to that address.
+                var controller = io.github.gringoestrangeiro.openradclient.fabric.OpenRadClientMod.controller();
+                require(!controller.active(), "isolated profile remains offline");
+                InetSocketAddress syntheticVip = new InetSocketAddress(
+                        InetAddress.getByAddress(new byte[]{26, (byte) 254, (byte) 253, (byte) 252}), 25565);
+                require(controller.route(syntheticVip) == syntheticVip, "offline routing policy retains endpoint");
+                System.out.println("OPENRAD_SMOKE OFFLINE_ROUTING_POLICY PASS");
+                if (FINISHED.compareAndSet(false, true)) {
+                    result("PASS: required mixins, Multiplayer init/tick/button, menu command, ordinary connection, offline routing policy");
+                    System.out.println("OPENRAD_SMOKE RESULT PASS");
+                    client.execute(client::stop);
+                }
             } catch (Throwable failure) { fail(failure); }
         });
     }

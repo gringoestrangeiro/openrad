@@ -4,7 +4,6 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
-import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,7 +42,7 @@ public final class PaperAddressForwarder implements AutoCloseable {
     private final AtomicBoolean warned = new AtomicBoolean();
     private volatile boolean active = true;
 
-    private PaperAddressForwarder(
+    PaperAddressForwarder(
             VirtualOrigins origins,
             Consumer<String> log,
             Key key,
@@ -118,14 +117,14 @@ public final class PaperAddressForwarder implements AutoCloseable {
         }
     }
 
-    private void initialized(Object channel) {
+    void initialized(Object channel) {
         if (!active || origins.size() == 0) return;
         try {
-            InetSocketAddress origin =
-                    origins.lookup((SocketAddress) remoteAddress.invoke(channel));
-            if (origin == null) return;
+            SocketAddress backendClient = (SocketAddress) remoteAddress.invoke(channel);
+            VirtualOrigins.Entry entry = origins.find(backendClient);
+            if (entry == null) return;
             Executor loop = (Executor) eventLoop.invoke(channel);
-            loop.execute(new Apply(channel, loop, origin));
+            loop.execute(new Apply(channel, loop, backendClient, entry));
         } catch (ReflectiveOperationException | RuntimeException e) {
             disable(e);
         }
@@ -134,18 +133,20 @@ public final class PaperAddressForwarder implements AutoCloseable {
     private final class Apply implements Runnable {
         private final Object channel;
         private final Executor loop;
-        private final InetSocketAddress origin;
+        private final SocketAddress backendClient;
+        private final VirtualOrigins.Entry entry;
         private int attempts;
 
-        Apply(Object channel, Executor loop, InetSocketAddress origin) {
+        Apply(Object channel, Executor loop, SocketAddress backendClient, VirtualOrigins.Entry entry) {
             this.channel = channel;
             this.loop = loop;
-            this.origin = origin;
+            this.backendClient = backendClient;
+            this.entry = entry;
         }
 
         @Override
         public void run() {
-            if (!active) return;
+            if (!active || origins.find(backendClient) != entry) return;
             try {
                 Object connection = pipelineGet.invoke(pipeline.invoke(channel), PACKET_HANDLER);
                 Field field = connection == null ? null : addressField(connection.getClass());
@@ -159,11 +160,8 @@ public final class PaperAddressForwarder implements AutoCloseable {
                     if (++attempts < ATTEMPTS) loop.execute(this);
                     return;
                 }
-                // Only replace the bridge's own loopback address, never a proxy-forwarded one.
-                if (current instanceof InetSocketAddress
-                        && ((InetSocketAddress) current).getAddress() != null
-                        && ((InetSocketAddress) current).getAddress().isLoopbackAddress())
-                    field.set(connection, origin);
+                if (backendClient.equals(current) && origins.find(backendClient) == entry)
+                    field.set(connection, entry.origin());
             } catch (ReflectiveOperationException | RuntimeException e) {
                 disable(e);
             }

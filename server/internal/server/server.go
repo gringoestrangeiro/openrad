@@ -21,7 +21,7 @@ import (
 
 // Config controls one server instance.
 type Config struct {
-	Listen      string // control TCP address (Python, Android and Minecraft clients only dial port 17301)
+	Listen      string // control TCP address (Python and Android dial port 17301)
 	RelayListen string // relay TCP address
 	RelayPort   int    // advertised relay port (defaults to RelayListen's port)
 	PublicIP    net.IP // advertised IPv4; nil uses the address each client connected to

@@ -89,6 +89,25 @@ Para rede pública, use `secret: ""`. A lista de redes precisa existir no servi�
 
 O backend é fixado pelo administrador, não pelo peer. Com `bridge.forward-player-address: true` (padrão), o Paper recebe o IP virtual do jogador; veja os requisitos acima. `online-mode` e o protocolo Minecraft não são alterados. Não é necessário habilitar IP forwarding de proxies.
 
+## Coordenador próprio
+
+Por padrão, o plugin usa o serviço oficial. Para usar o `openrad-server`,
+copie o arquivo público binário `modulus.bin` dele para
+`plugins/OpenRadPlugin/`. No mesmo diretório, crie `coordinator.properties`.
+
+```properties
+host=192.168.1.20
+port=17301
+```
+
+Ajuste as redes em `config.yml` para as do coordenador e execute
+`/orb reload`. Fabric e Paper precisam ingressar em uma rede autorizada em
+comum. Em uma sessão com coordenador próprio, o plugin usa o endereço e a
+porta de `coordinator.properties` e guarda a identidade em
+`plugins/OpenRadPlugin/coordinators/`, separada da identidade oficial. Para
+voltar ao serviço oficial, remova `coordinator.properties` e recarregue o
+plugin. Use o módulo público entregue pelo administrador do coordenador.
+
 ## Force relay
 
 `vpn.transports.force-relay: true` (ou `/orb force-relay on`) faz o plugin usar somente relay, como o **Force Relay** do desktop e `openrad force-relay true` da CLI: ignora `direct-tcp` e `direct-udp`, não anuncia endpoints diretos e não consulta servidores de descoberta UDP. Exige `vpn.transports.relay: true`; a combinação com `relay: false` é rejeitada e nada é alterado. Aplicar a opção encerra os canais atuais e desconecta os jogadores da VPN, que reconectam em seguida. `/orb status` mostra `Transporte: somente relay` e `/orb peers` mostra o caminho de cada peer. O padrão é `false`, inclusive em um `config.yml` antigo sem a chave.

@@ -7,9 +7,11 @@ import io.github.gringoestrangeiro.openradplugin.diagnostics.HostDiagnostics;
 import io.github.gringoestrangeiro.openradplugin.network.MinecraftNetworks;
 import io.github.gringoestrangeiro.openradplugin.runtime.GenerationGate;
 import io.github.gringoestrangeiro.openradplugin.runtime.VpnRuntime;
+import io.github.gringoestrangeiro.openradplugin.session.CoordinatorEndpoint;
 
 import org.bukkit.command.*;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
@@ -43,6 +45,11 @@ public final class OpenRadPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
+        if (admin != null && !admin.isTerminated()) {
+            getLogger().severe("A administracao da instancia anterior ainda esta encerrando.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         generations.reset();
         if (getServer().getPluginManager().getPlugin("OpenRadBridge") != null) {
             getLogger().severe("O JAR antigo OpenRadBridge tambem esta instalado; remova-o "
@@ -51,7 +58,8 @@ public final class OpenRadPlugin extends JavaPlugin {
             return;
         }
         try {
-            migrateLegacyData();
+            if (migrateLegacyData(getDataFolder().toPath()))
+                getLogger().info("Configuracao e identidade existentes migradas para OpenRad Plugin.");
         } catch (IOException e) {
             getLogger().severe("Nao foi possivel migrar a configuracao antiga; VPN nao iniciada.");
             getServer().getPluginManager().disablePlugin(this);
@@ -133,18 +141,20 @@ public final class OpenRadPlugin extends JavaPlugin {
      * Rename the old data directory once. Never auto-register a fresh device while a
      * valid legacy identity might still exist in the old directory.
      */
-    private void migrateLegacyData() throws IOException {
-        Path destination = getDataFolder().toPath();
+    static boolean migrateLegacyData(Path destination) throws IOException {
         Path legacy = destination.resolveSibling("OpenRadBridge");
         if (Files.isSymbolicLink(legacy) || !Files.isDirectory(legacy, LinkOption.NOFOLLOW_LINKS))
-            return;
+            return false;
         if (Files.notExists(destination, LinkOption.NOFOLLOW_LINKS)) {
             Files.move(legacy, destination);
-            getLogger().info("Configuracao e identidade existentes migradas para OpenRad Plugin.");
-        } else if (!Files.exists(destination.resolve("identity.json"), LinkOption.NOFOLLOW_LINKS)
-                && Files.exists(legacy.resolve("identity.json"), LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("legacy identity exists; refusing to start with a new profile");
+            return true;
         }
+        if (!Files.exists(destination.resolve("identity.json"), LinkOption.NOFOLLOW_LINKS)
+                && (Files.exists(legacy.resolve("identity.json"), LinkOption.NOFOLLOW_LINKS)
+                        || Files.exists(legacy.resolve("registration.pending"), LinkOption.NOFOLLOW_LINKS))) {
+            throw new IOException("legacy identity or pending registration requires recovery");
+        }
+        return false;
     }
 
     private VpnSettings readSettings() throws Exception {
@@ -167,20 +177,11 @@ public final class OpenRadPlugin extends JavaPlugin {
             throw new IllegalArgumentException(
                     "config.yml nao e um YAML valido" + where + "; confira a indentacao e as aspas");
         }
-        VpnSettings parsed = VpnSettings.from(yaml);
-        if (parsed.bridge().enabled()
-                && parsed.networks().isEmpty()
-                && parsed.minecraftNetworks().select().isEmpty())
-            getLogger()
-                    .warning(
-                            "VPN ativada sem redes: use /orb join <rede> [senha] ou /orb public"
-                                    + " all-ptbr para que jogadores possam entrar.");
+        boolean onlineMode = getServer().getOnlineMode();
+        VpnSettings parsed = VpnSettings.from(yaml, onlineMode);
         if (parsed.bridge().backendPortAutomatic())
             parsed = parsed.withBridge(parsed.bridge().withBackendPort(getServer().getPort()));
-        validateOfflinePublicNetworks(parsed, getServer().getOnlineMode(),
-                yaml.getBoolean("security.allow-insecure-offline-public-networks", false));
-        if (parsed.bridge().enabled() && !getServer().getOnlineMode()
-                && hasPublicNetworks(parsed)) {
+        if (parsed.bridge().enabled() && !onlineMode && parsed.hasPublicNetworks()) {
             getLogger().warning("Offline-mode with public VPN networks allows Minecraft "
                     + "username impersonation, including OP names. Use online-mode=true.");
         }
@@ -192,28 +193,17 @@ public final class OpenRadPlugin extends JavaPlugin {
         return parsed;
     }
 
-    static void validateOfflinePublicNetworks(
-            VpnSettings settings, boolean onlineMode, boolean acknowledged) {
-        if (settings.bridge().enabled() && !onlineMode && !acknowledged
-                && hasPublicNetworks(settings)) {
-            throw new IllegalArgumentException("Offline-mode with public Minecraft VPN networks is unsafe. "
-                    + "Enable online-mode=true, or explicitly acknowledge the risk using "
-                    + "security.allow-insecure-offline-public-networks: true.");
-        }
-    }
-
-    private static boolean hasPublicNetworks(VpnSettings settings) {
-        return settings.networks().stream().anyMatch(network -> network.secret().isEmpty())
-                || (settings.minecraftNetworks().enabled()
-                        && !settings.minecraftNetworks().select().isEmpty());
-    }
-
     /**
      * Validates all replacements before stopping the current generation. Reload disconnects flows.
      */
     private void apply(VpnSettings replacement) throws Exception {
         synchronized (applyLock) {
-            NetworkSecrets secrets = NetworkSecrets.load(getDataFolder().toPath());
+            if (generations.stopping()) return;
+            Path directory = getDataFolder().toPath();
+            CoordinatorEndpoint endpoint = replacement.bridge().enabled()
+                    ? CoordinatorEndpoint.load(directory, replacement.bootstrap(), replacement.controlPort())
+                    : null;
+            NetworkSecrets secrets = NetworkSecrets.load(directory);
             boolean transferred = false;
             try {
                 secrets.validate(replacement);
@@ -229,14 +219,13 @@ public final class OpenRadPlugin extends JavaPlugin {
                 }
                 if (generations.stopping()) return;
                 VpnRuntime next =
-                        replacement.bridge().enabled()
-                                ? new VpnRuntime(
-                                        replacement,
-                                        getDataFolder().toPath(),
-                                        secrets,
-                                        getLogger()::info)
-                                : null;
-                if (!generations.install(next, VpnRuntime::start)) return;
+                        endpoint == null
+                                ? null
+                                : new VpnRuntime(replacement, directory, secrets, getLogger()::info, endpoint);
+                if (!generations.install(next, VpnRuntime::start)) {
+                    if (next != null) next.close();
+                    return;
+                }
                 settings = replacement;
                 transferred = next != null;
             } finally {
@@ -465,19 +454,23 @@ public final class OpenRadPlugin extends JavaPlugin {
             sender.sendMessage("[OpenRad Plugin] Use " + usage);
             return;
         }
-        if (sub.equals("join") && args.size() == 3 && sender instanceof org.bukkit.entity.Player) {
-            // Paper logs player commands with their arguments; never let a password reach logs.
+        if (sub.equals("join") && args.size() == 3 && !acceptsNetworkPassword(sender)) {
+            // Paper may log player commands before dispatching them here.
             sender.sendMessage(
                     "[OpenRad Plugin] Por seguranca, informe a senha pelo console do servidor"
                             + " (comandos de jogadores ficam registrados no log). Sem senha,"
                             + " /orb join <rede> adiciona uma rede publica.");
             return;
         }
-        char[] password = sub.equals("join") && args.size() == 3 ? args.get(2).toCharArray() : null;
         try {
             admin.execute(
                     () -> {
-                        ConfigEditor editor = new ConfigEditor(getDataFolder().toPath());
+                        if (generations.stopping()) return;
+                        ConfigEditor editor = new ConfigEditor(
+                                getDataFolder().toPath(), getServer().getOnlineMode());
+                        char[] password = sub.equals("join") && args.size() == 3
+                                ? args.get(2).toCharArray()
+                                : null;
                         try {
                             String done;
                             switch (sub) {
@@ -534,9 +527,12 @@ public final class OpenRadPlugin extends JavaPlugin {
                     });
             sender.sendMessage("[OpenRad Plugin] Operacao agendada.");
         } catch (RejectedExecutionException e) {
-            if (password != null) Arrays.fill(password, '\0');
             sender.sendMessage("[OpenRad Plugin] Administracao ocupada; tente novamente.");
         }
+    }
+
+    static boolean acceptsNetworkPassword(CommandSender sender) {
+        return sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender;
     }
 
     /** Parses an on/off command value; null when it is neither. Accepts the CLI's true/false. */
@@ -578,8 +574,13 @@ public final class OpenRadPlugin extends JavaPlugin {
         VpnSettings s = settings;
         if (s == null) return List.of();
         return s.networks().stream()
-                .map(n -> n.name().contains(" ") ? "\"" + n.name() + "\"" : n.name())
+                .map(n -> quoteCommandToken(n.name()))
                 .toList();
+    }
+
+    static String quoteCommandToken(String name) {
+        if (!name.contains(" ") && !name.contains("\"")) return name;
+        return "\"" + name.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     private static List<String> publicSuggestions(VpnRuntime current) {
@@ -679,7 +680,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                                 if (!generations.stopping())
                                     sender.sendMessage("[OpenRad Plugin] " + text);
                             });
-        } catch (IllegalStateException ignored) {
+        } catch (IllegalPluginAccessException e) {
             getLogger().fine("Reply cancelled during plugin shutdown");
         }
     }
@@ -717,6 +718,9 @@ public final class OpenRadPlugin extends JavaPlugin {
                 shutdownDeadlineReached();
             if (retiring != null && !retiring.awaitStopped(remaining(deadline)))
                 shutdownDeadlineReached();
+            if (admin != null && !admin.awaitTermination(
+                    remaining(deadline).toNanos(), TimeUnit.NANOSECONDS))
+                getLogger().warning("Administration did not stop before the shutdown deadline.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

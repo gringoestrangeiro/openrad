@@ -143,6 +143,7 @@ func (s *Server) attach(ss *Session) {
 		}
 		switch op {
 		case 4: // heartbeat
+			ss.Send(wire.ServerMsg(17))
 		case 43:
 			s.search(ss, recs)
 		case 39:

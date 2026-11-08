@@ -14,6 +14,7 @@ import io.github.gringoestrangeiro.openradplugin.security.InboundFirewall.PeerGr
 import io.github.gringoestrangeiro.openradplugin.session.*;
 import io.github.gringoestrangeiro.openradplugin.tunnel.TunnelCodec;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.*;
@@ -61,12 +62,12 @@ public final class VpnRuntime implements AutoCloseable {
     private final Path directory;
     private final NetworkSecrets secrets;
     private final Consumer<String> log;
-    private final byte[] serviceModulus;
+    private final CoordinatorEndpoint coordinator;
     private final AtomicBoolean stopped = new AtomicBoolean();
     private final AtomicLong lastIncomingRejectLog = new AtomicLong();
     private final AtomicReference<ControlSession> control = new AtomicReference<>();
     private final ConcurrentHashMap<Long, PeerWorker> workers = new ConcurrentHashMap<>();
-    private final ArrayBlockingQueue<byte[]> controlOutbound = new ArrayBlockingQueue<>(128);
+    private final AcceptorRelayGuard relayGuard = new AcceptorRelayGuard();
     private final ThreadPoolExecutor peerExecutor;
     private final Thread worker;
     private volatile VirtualTcpBridge bridge;
@@ -94,11 +95,21 @@ public final class VpnRuntime implements AutoCloseable {
             NetworkSecrets secrets,
             Consumer<String> log,
             byte[] serviceModulus) {
+        this(settings, directory, secrets, log, new CoordinatorEndpoint(
+                settings.bootstrap(), settings.controlPort(), serviceModulus, directory));
+    }
+
+    public VpnRuntime(
+            VpnSettings settings,
+            Path directory,
+            NetworkSecrets secrets,
+            Consumer<String> log,
+            CoordinatorEndpoint coordinator) {
         this.settings = settings;
         this.directory = directory;
         this.secrets = secrets;
         this.log = log;
-        this.serviceModulus = serviceModulus.clone();
+        this.coordinator = coordinator;
         peerExecutor =
                 new ThreadPoolExecutor(
                         0,
@@ -149,12 +160,14 @@ public final class VpnRuntime implements AutoCloseable {
     private void run() {
         int failures = 0;
         try {
-            Files.createDirectories(directory);
+            Path identityDirectory = coordinator.identityDirectory();
+            Files.createDirectories(identityDirectory);
             try (FileChannel lockFile =
                             FileChannel.open(
-                                    directory.resolve("identity.lock"),
+                                    identityDirectory.resolve("identity.lock"),
                                     StandardOpenOption.CREATE,
-                                    StandardOpenOption.WRITE);
+                                    StandardOpenOption.WRITE,
+                                    LinkOption.NOFOLLOW_LINKS);
                     FileLock lock =
                             awaitIdentityLock(
                                     lockFile,
@@ -172,19 +185,19 @@ public final class VpnRuntime implements AutoCloseable {
                         publish("AUTHENTICATING", "", List.of(), "");
                         try (Identity identity =
                                         Provisioner.loadOrRegister(
-                                                directory,
+                                                identityDirectory,
                                                 settings.nodeName(),
-                                                settings.bootstrap(),
-                                                settings.controlPort(),
+                                                coordinator.bootstrap(),
+                                                coordinator.port(),
                                                 this::own,
-                                                serviceModulus);
+                                                coordinator.modulus());
                                 Attachment attached =
                                         Attachment.connect(
                                                 identity,
-                                                settings.controlPort(),
+                                                coordinator.port(),
                                                 settings.nodeName(),
                                                 this::own,
-                                                serviceModulus)) {
+                                                coordinator.modulus())) {
                             own(attached.session());
                             attachedAt = System.nanoTime();
                             runAttached(identity, attached);
@@ -214,10 +227,10 @@ public final class VpnRuntime implements AutoCloseable {
                             break;
                         }
                         if (Files.exists(
-                                        directory.resolve("registration.pending"),
+                                        identityDirectory.resolve("registration.pending"),
                                         LinkOption.NOFOLLOW_LINKS)
                                 && !Files.exists(
-                                        directory.resolve("identity.json"),
+                                        identityDirectory.resolve("identity.json"),
                                         LinkOption.NOFOLLOW_LINKS)) {
                             publish("REGISTRATION_RECOVERY_REQUIRED", "", List.of(), reason);
                             break;
@@ -273,6 +286,9 @@ public final class VpnRuntime implements AutoCloseable {
     }
 
     private void runAttached(Identity identity, Attachment attached) throws Exception {
+        relayGuard.startAttachment();
+        // A worker retiring from this attachment cannot enqueue onto its replacement.
+        var controlOutbound = new ArrayBlockingQueue<byte[]>(128);
         ControlSession session = attached.session();
         Membership membership = attached.membership();
         try (IncomingHub hub = new IncomingHub()) {
@@ -321,6 +337,8 @@ public final class VpnRuntime implements AutoCloseable {
                                     + " networks; "
                                     + selected.networks().size()
                                     + " selected.");
+                } catch (ServerDisconnect | EOFException | SocketException e) {
+                    throw e;
                 } catch (IOException | IllegalArgumentException e) {
                     if (stopped.get()) return;
                     minecraftCatalog =
@@ -576,6 +594,7 @@ public final class VpnRuntime implements AutoCloseable {
                                     session.localAddress(),
                                     setup,
                                     hub,
+                                    controlOutbound,
                                     attached.uesHosts(),
                                     nextNetworks.get(p.rid()));
                     workers.put(p.rid(), w);
@@ -592,7 +611,7 @@ public final class VpnRuntime implements AutoCloseable {
                 for (int i = 0; i < 64; i++) {
                     byte[] record = controlOutbound.poll();
                     if (record == null) break;
-                    session.send(record);
+                    relayGuard.send(record, session::send);
                 }
                 if (System.nanoTime() >= heartbeat) {
                     session.send(op(4));
@@ -664,13 +683,14 @@ public final class VpnRuntime implements AutoCloseable {
             case 38 -> membership.snapshot(data);
             case 41, 42 -> membership.changes(data);
             case ServerDisconnect.OPERATION -> {
-                PeerConnector.serverObjected();
-                throw ServerDisconnect.of(data);
+                ServerDisconnect disconnect = ServerDisconnect.of(data);
+                if (!disconnect.replaced()) relayGuard.serverObjected();
+                throw disconnect;
             }
             // A refusal on the shared session (for example of an acceptor relay request) is
             // not a disconnect: keep the session, its channels and Minecraft players (Rust).
             case 44 -> {
-                if (PeerConnector.serverObjected())
+                if (relayGuard.serverObjected())
                     log.accept(
                             settings.relayOnly()
                                     ? "Service refused an acceptor relay request; incoming peers"
@@ -805,6 +825,7 @@ public final class VpnRuntime implements AutoCloseable {
         private final InetAddress route;
         private final IncomingHub.Setup setup;
         private final IncomingHub hub;
+        private final ArrayBlockingQueue<byte[]> controlOutbound;
         private final VirtualTcpBridge stack;
         private final LanDiscovery lan;
         private final PeerReachability attempts;
@@ -824,6 +845,7 @@ public final class VpnRuntime implements AutoCloseable {
                 InetAddress route,
                 IncomingHub.Setup setup,
                 IncomingHub hub,
+                ArrayBlockingQueue<byte[]> controlOutbound,
                 List<Inet4Address> uesHosts,
                 Set<String> allowedNetworks) {
             this.identity = identity;
@@ -832,6 +854,7 @@ public final class VpnRuntime implements AutoCloseable {
             this.route = route;
             this.setup = setup;
             this.hub = hub;
+            this.controlOutbound = controlOutbound;
             this.stack = bridge;
             this.lan = discovery;
             this.attempts = reachability;
@@ -857,10 +880,10 @@ public final class VpnRuntime implements AutoCloseable {
                                     identity,
                                     ownIp,
                                     peer,
-                                    settings.controlPort(),
+                                    coordinator.port(),
                                     policy,
                                     this::ownResource,
-                                    serviceModulus);
+                                    coordinator.modulus());
                     ownResource(result);
                     connected = result.channel();
                 } else
@@ -1018,7 +1041,6 @@ public final class VpnRuntime implements AutoCloseable {
                         catalog.entries(),
                         Set.of(),
                         List.of());
-        controlOutbound.clear();
         VirtualTcpBridge stack = bridge;
         bridge = null;
         if (stack != null) stack.close();

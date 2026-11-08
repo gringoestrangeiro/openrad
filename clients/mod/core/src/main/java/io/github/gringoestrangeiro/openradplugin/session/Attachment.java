@@ -53,6 +53,7 @@ public record Attachment(
             for (int i = 0; i < 8; i++) {
                 byte[] data = s.receive();
                 int operation = TlvCodec.operation(data);
+                if (operation == ServerDisconnect.OPERATION) throw ServerDisconnect.of(data);
                 require(
                         i == 0 ? operation == 21 : operation == 9 || operation == 38,
                         "unexpected attachment operation");

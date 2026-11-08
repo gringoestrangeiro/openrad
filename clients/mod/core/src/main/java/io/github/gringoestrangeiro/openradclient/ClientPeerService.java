@@ -5,7 +5,7 @@ import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
 import io.github.gringoestrangeiro.openradplugin.network.Membership;
 import io.github.gringoestrangeiro.openradplugin.peer.*;
 import io.github.gringoestrangeiro.openradplugin.session.Attachment;
-import io.github.gringoestrangeiro.openradplugin.session.ServiceConfig;
+import io.github.gringoestrangeiro.openradplugin.session.CoordinatorEndpoint;
 import io.github.gringoestrangeiro.openradplugin.tunnel.TunnelCodec;
 import java.io.*;
 import java.net.*;
@@ -22,6 +22,8 @@ final class ClientPeerService implements AutoCloseable {
     private final PeerConnector.Policy transports;
     private final Identity identity;
     private final Attachment attachment;
+    private final CoordinatorEndpoint coordinator;
+    private final AcceptorRelayGuard relayGuard;
     private final int maxPeers;
     private volatile Set<String> selectedNames;
     private final IncomingHub incoming = new IncomingHub();
@@ -43,9 +45,12 @@ final class ClientPeerService implements AutoCloseable {
 
     private record Attempt(int failures, long retryAt, long lastStarted) {}
 
-    ClientPeerService(Identity identity, Attachment attachment, ClientConfig config) {
+    ClientPeerService(Identity identity, Attachment attachment, ClientConfig config,
+                      CoordinatorEndpoint coordinator, AcceptorRelayGuard relayGuard) {
         this.identity = identity;
         this.attachment = attachment;
+        this.coordinator = coordinator;
+        this.relayGuard = relayGuard;
         this.maxPeers = config.maxPeers();
         this.transports = transports(config);
         this.selectedNames = Set.copyOf(config.networks());
@@ -60,6 +65,7 @@ final class ClientPeerService implements AutoCloseable {
     }
 
     void ingest(byte[] record) { incoming.ingest(record); }
+    boolean serverObjected() { return relayGuard.serverObjected(); }
     void selectNetworks(Set<String> selectedNames) { this.selectedNames = Set.copyOf(selectedNames); }
     int connectedCount() { return (int) workers.values().stream().filter(w -> w.channel != null).count(); }
     List<ClientVpnRuntime.LanServer> lanServers() { return lan.snapshot(); }
@@ -154,7 +160,7 @@ final class ClientPeerService implements AutoCloseable {
         for (int i = 0; i < 64; i++) {
             byte[] record = controlOutbound.poll();
             if (record == null) break;
-            attachment.session().send(record);
+            relayGuard.send(record, attachment.session()::send);
         }
         signalChanged();
     }
@@ -256,7 +262,7 @@ final class ClientPeerService implements AutoCloseable {
                 PeerChannel connected;
                 if (setup == null) {
                     var result = PeerConnector.connect(identity, attachment.vip(), grant.peer(),
-                            ServiceConfig.PORT, transports, this::own);
+                            coordinator.port(), transports, this::own, coordinator.modulus());
                     own(result);
                     connected = result.channel();
                 } else {

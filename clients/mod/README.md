@@ -60,6 +60,25 @@ force-relay=false
 
 O servidor precisa estar acessível na VPN e escutando na porta anunciada. No OpenRadBridge, use a porta **virtual exposta** pelo plugin. Uma sessão de controle conectada, por si só, não comprova conectividade com um peer ou jogabilidade.
 
+## Coordenador próprio
+
+Por padrão, o mod usa o serviço oficial. Para conectar ao `openrad-server`,
+crie `config/openrad-client/state/coordinator.properties` com o IPv4 do
+servidor e a porta de controle. Copie o arquivo público binário `modulus.bin`
+gerado por esse servidor para o mesmo diretório.
+
+```properties
+host=192.168.1.20
+port=17301
+```
+
+Configure no mod o nome exato de uma rede pública oferecida pelo coordenador
+e conecte. Desconecte antes de editar o endpoint e conecte de novo para
+aplicar. Cada combinação de endereço, porta e chave usa sua própria identidade
+em `state/coordinators/`. Para voltar ao serviço oficial, desconecte e remova
+`coordinator.properties`. Os arquivos de identidade de ambos os serviços
+continuam no disco.
+
 ## Configuração e limites
 
 `max-peers` aceita 1..4096; no máximo oito novas negociações acontecem simultaneamente. `max-connections` aceita 1..64 e inclui status/pings e conexões de jogo. `connection-timeout-seconds` aceita 1..120. Configurações antigas sem essas opções mantêm os valores padrão.

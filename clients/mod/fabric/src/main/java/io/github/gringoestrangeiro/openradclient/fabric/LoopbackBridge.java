@@ -1,5 +1,7 @@
 package io.github.gringoestrangeiro.openradclient.fabric;
 
+import io.netty.channel.ChannelFuture;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -13,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 /** Single-destination, single-use sockets. No listener ever accepts a target from its client. */
 public final class LoopbackBridge implements AutoCloseable {
@@ -50,10 +53,39 @@ public final class LoopbackBridge implements AutoCloseable {
 
     /** Performs no DNS lookup or VPN I/O. Non-VPN addresses retain their original object. */
     public InetSocketAddress route(InetSocketAddress destination) {
+        Lease lease = prepare(destination);
+        return lease == null ? destination : lease.endpoint;
+    }
+
+    ChannelFuture connect(InetSocketAddress destination, boolean legacyPing,
+                          Function<InetSocketAddress, ChannelFuture> connect) {
+        Lease lease;
+        try {
+            lease = prepare(destination);
+        } catch (RuntimeException unavailable) {
+            // Legacy ping runs on the render thread; keep its failure within loopback.
+            if (legacyPing) return connect.apply(UNREACHABLE);
+            throw unavailable;
+        }
+        if (lease == null) return connect.apply(destination);
+        try {
+            ChannelFuture attempt = connect.apply(lease.endpoint);
+            attempt.channel().closeFuture().addListener(closed -> lease.close());
+            attempt.addListener(completed -> {
+                if (!completed.isSuccess()) lease.close();
+            });
+            return attempt;
+        } catch (RuntimeException failure) {
+            lease.close();
+            throw failure;
+        }
+    }
+
+    private Lease prepare(InetSocketAddress destination) {
         InetAddress resolved = destination.getAddress();
         if (resolved == null) resolved = ipv4Literal(destination.getHostString());
         if (!(resolved instanceof Inet4Address address) || (address.getAddress()[0] & 255) != 26)
-            return destination;
+            return null;
         if (closed.get() || !capacity.tryAcquire())
             throw new IllegalStateException("OpenRad connection capacity unavailable");
         Lease lease = null;
@@ -72,13 +104,19 @@ public final class LoopbackBridge implements AutoCloseable {
             Lease running = lease;
             Thread worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualUnstarted("openrad-minecraft-bridge",() -> serve(running, address, destination.getPort()));
             lease.start(worker);
-            return new InetSocketAddress(LOOPBACK, listener.getLocalPort());
+            return lease;
         } catch (IOException | RuntimeException failure) {
             if (lease == null) capacity.release();
             else lease.close();
             if (failure instanceof IOException io) throw new UncheckedIOException("OpenRad local bridge unavailable", io);
             throw (RuntimeException) failure;
         }
+    }
+
+    static boolean isVirtualLiteral(String host) {
+        if (host == null) return false;
+        InetAddress address = ipv4Literal(host);
+        return address != null && address.getAddress()[0] == 26;
     }
 
     private static InetAddress ipv4Literal(String host) {
@@ -146,12 +184,16 @@ public final class LoopbackBridge implements AutoCloseable {
 
     private final class Lease {
         private final ServerSocket listener;
+        private final InetSocketAddress endpoint;
         private boolean finished;
         private Socket socket;
         private Tunnel tunnel;
         private Thread worker;
         private int finishedPumps;
-        private Lease(ServerSocket listener) { this.listener = listener; }
+        private Lease(ServerSocket listener) {
+            this.listener = listener;
+            this.endpoint = new InetSocketAddress(LOOPBACK, listener.getLocalPort());
+        }
         private synchronized void start(Thread value) throws IOException {
             if (finished) throw new IOException("OpenRad bridge closed");
             worker = value;

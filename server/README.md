@@ -61,8 +61,8 @@ database (`--modulus-out`). It listens on:
 | 17302 | TCP | relay (`--relay-listen`, `--relay-port`) |
 | 17301–17399 | UDP | endpoint discovery (UES), only with `--ues-host` |
 
-Open these in the firewall. Only Rust clients can reach a control port other
-than 17301 (see below); the UES range is fixed by every client.
+Open these in the firewall. The clients below document whether their control
+port is configurable. The UES range is fixed by every client.
 
 A minimal systemd unit:
 
@@ -86,15 +86,16 @@ server: a client registers a new device the first time it uses this server.
 | Rust CLI | `openrad server set --host SERVER_IP [--port PORT] --modulus modulus.bin`, then `openrad init --node-name NAME` and `openrad start`; `openrad server reset` returns to the official server |
 | Python | `python3 openrad.py --data-dir ./profile run --host SERVER_IP --modulus modulus.bin --mode server` (port 17301 only) |
 | Android | debuggable builds only: `files/debug-endpoint.json` with `host`, `port` and `modulus` |
-| Paper plugin / Fabric mod | not supported: the modulus is compiled in |
+| Paper plugin | Put `coordinator.properties` with `host` and `port` beside the binary `modulus.bin` in `plugins/OpenRadPlugin/`. Run `/orb reload`. |
+| Fabric mod | Put the same two files in `config/openrad-client/state/` and reconnect. |
 
 * `--host` must be an IPv4 address reachable by every client: the server hands
   it out as the identity's home server and as peers' coordinator.
 * By default the server advertises whichever local address each client
   connected to. Behind NAT or port forwarding, set `--public-ip`.
 * The Rust client never advertises loopback addresses as direct candidates.
-  Use a LAN or public IP for Rust clients; `127.0.0.1` only suits the Python
-  client (Rust peers then fall back to the relay).
+  Use a LAN or public IP for Rust clients. On a single host, Java and Python
+  clients can use `127.0.0.1` for isolated tests (Rust falls back to relay).
 
 ### serve flags
 
@@ -141,7 +142,7 @@ online see membership edits only after they reconnect.
   26.0.0.0/8 VIP, fdfd:: companion address, credential and home server.
 * **Attachment (purpose 4):** LoginComplete with server ID and UES hosts,
   then a Networks snapshot (38) with own address, networks, roles, members and
-  presence. Heartbeats (4). A second login of the same identity replaces the
+  presence. Heartbeat requests (4) receive operation 17. A second login of the same identity replaces the
   first, which receives op 16.
 * **Presence and renames:** member upserts (41/0x131e) when someone comes
   online or changes name, presence changes (0x1366) when they go offline.
