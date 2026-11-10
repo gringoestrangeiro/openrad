@@ -474,6 +474,41 @@
     "При каждом повторе задержка удваивается, до пяти минут. Изменения действуют со следующего сбоя.",
     "Thời gian chờ tăng gấp đôi sau mỗi lần thử, tối đa năm phút. Thay đổi áp dụng từ lần lỗi tiếp theo."
   ],
+  "Ethernet TAP · MTU 1500": [
+    "TAP Ethernet · MTU 1500",
+    "Ethernet TAP · MTU 1500",
+    "Ethernet TAP · MTU 1500"
+  ],
+  "Linux interface name saved: {name}": [
+    "Nome da interface Linux salvo: {name}",
+    "Имя интерфейса Linux сохранено: {name}",
+    "Đã lưu tên giao diện Linux: {name}"
+  ],
+  "Service did not return an interface name": [
+    "O serviço não retornou o nome da interface",
+    "Служба не вернула имя интерфейса",
+    "Dịch vụ không trả về tên giao diện"
+  ],
+  "Linux interface name: {name}": [
+    "Nome da interface Linux: {name}",
+    "Имя интерфейса Linux: {name}",
+    "Tên giao diện Linux: {name}"
+  ],
+  "Interface name is already selected": [
+    "Este nome de interface já está selecionado",
+    "Это имя интерфейса уже выбрано",
+    "Tên giao diện này đã được chọn"
+  ],
+  "Interface name saved. Reconnecting to apply it.": [
+    "Nome da interface salvo. Reconectando para aplicar a alteração.",
+    "Имя интерфейса сохранено. Переподключение для применения изменений.",
+    "Đã lưu tên giao diện. Đang kết nối lại để áp dụng."
+  ],
+  "{name} already exists; refusing to touch it": [
+    "{name} já existe; não será alterada",
+    "{name} уже существует; изменение отклонено",
+    "{name} đã tồn tại; sẽ không thay đổi"
+  ],
   "Linux VPN interface name": [
     "Nome da interface VPN no Linux",
     "Имя VPN-интерфейса в Linux",
