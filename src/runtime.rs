@@ -70,11 +70,11 @@ impl std::fmt::Debug for InterfaceDescriptor {
     }
 }
 #[cfg(target_os = "linux")]
-fn adopt_interface(file: std::fs::File) -> Result<Tap> {
-    Tap::from_descriptor(file)
+fn adopt_interface(file: std::fs::File, name: &str) -> Result<Tap> {
+    Tap::from_descriptor_named(file, name)
 }
 #[cfg(not(target_os = "linux"))]
-fn adopt_interface(_: std::fs::File) -> Result<Tap> {
+fn adopt_interface(_: std::fs::File, _: &str) -> Result<Tap> {
     bail!("frontend interface authorization is only supported on Linux")
 }
 
@@ -302,6 +302,8 @@ pub struct Options {
     pub block_policy: BlockPolicy,
     /// Setup-only executable. Desktop passes the sibling CLI, never the GUI.
     pub helper: Option<std::path::PathBuf>,
+    /// Linux interface name persisted in the service preferences; None uses the legacy default.
+    pub interface_name: Option<String>,
     /// Permit a headless control-only session when interface setup is unavailable.
     pub disable_interface: bool,
     /// The first interface setup is left to a terminal frontend, which asks for
@@ -1777,7 +1779,13 @@ pub fn run(
                     }) {
                         attempted_interface = true;
                         snapshot.interface_error = None;
-                        interface_worker = Some(thread::spawn(move || adopt_interface(file)));
+                        let interface_name = options
+                            .interface_name
+                            .clone()
+                            .unwrap_or_else(|| crate::tap::DEFAULT_LINUX_INTERFACE_NAME.into());
+                        interface_worker = Some(thread::spawn(move || {
+                            adopt_interface(file, &interface_name)
+                        }));
                         report(Update::State(snapshot.clone()));
                     }
                 }
@@ -2181,10 +2189,20 @@ pub fn run(
                     .map(Ok)
                     .unwrap_or_else(std::env::current_exe)?;
                 let interface_stop = stop.clone();
+                #[cfg(target_os = "linux")]
+                let interface_name = options
+                    .interface_name
+                    .clone()
+                    .unwrap_or_else(|| crate::tap::DEFAULT_LINUX_INTERFACE_NAME.into());
                 interface_worker = Some(thread::spawn(move || {
                     #[cfg(target_os = "linux")]
                     {
-                        Tap::create_lan_with_helper_cancellable(vip, &helper, &interface_stop)
+                        Tap::create_lan_with_helper_cancellable_named(
+                            vip,
+                            &helper,
+                            &interface_stop,
+                            &interface_name,
+                        )
                     }
                     #[cfg(not(target_os = "linux"))]
                     {

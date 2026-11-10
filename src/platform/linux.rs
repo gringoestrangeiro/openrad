@@ -17,7 +17,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-pub const NAME: &str = "radminvpn0";
+pub const NAME: &str = crate::tap::DEFAULT_LINUX_INTERFACE_NAME;
 const TUNSETIFF: libc::c_ulong = 0x400454ca;
 const TUNSETOWNER: libc::c_ulong = 0x400454cc;
 
@@ -34,19 +34,42 @@ impl Tap {
         peers: &[Ipv4Addr],
         helper: &std::path::Path,
     ) -> Result<Self> {
-        Self::create_configured(vip, peers, helper, false, &AtomicBool::new(false))
+        Self::create_with_helper_named(vip, peers, helper, NAME)
+    }
+    pub fn create_with_helper_named(
+        vip: Ipv4Addr,
+        peers: &[Ipv4Addr],
+        helper: &std::path::Path,
+        name: &str,
+    ) -> Result<Self> {
+        Self::create_configured(vip, peers, helper, false, &AtomicBool::new(false), name)
     }
     /// Persistent desktop and CLI LAN: a connected /8 and IPv4 group routes.
     /// The bounded diagnostic client retains controlled-peer /32 route mode.
     pub fn create_lan_with_helper(vip: Ipv4Addr, helper: &std::path::Path) -> Result<Self> {
-        Self::create_lan_with_helper_cancellable(vip, helper, &AtomicBool::new(false))
+        Self::create_lan_with_helper_named(vip, helper, NAME)
+    }
+    pub fn create_lan_with_helper_named(
+        vip: Ipv4Addr,
+        helper: &std::path::Path,
+        name: &str,
+    ) -> Result<Self> {
+        Self::create_lan_with_helper_cancellable_named(vip, helper, &AtomicBool::new(false), name)
     }
     pub(crate) fn create_lan_with_helper_cancellable(
         vip: Ipv4Addr,
         helper: &std::path::Path,
         cancelled: &AtomicBool,
     ) -> Result<Self> {
-        Self::create_configured(vip, &[], helper, true, cancelled)
+        Self::create_lan_with_helper_cancellable_named(vip, helper, cancelled, NAME)
+    }
+    pub(crate) fn create_lan_with_helper_cancellable_named(
+        vip: Ipv4Addr,
+        helper: &std::path::Path,
+        cancelled: &AtomicBool,
+        name: &str,
+    ) -> Result<Self> {
+        Self::create_configured(vip, &[], helper, true, cancelled, name)
     }
     fn create_configured(
         vip: Ipv4Addr,
@@ -54,17 +77,22 @@ impl Tap {
         helper: &std::path::Path,
         lan: bool,
         cancelled: &AtomicBool,
+        name: &str,
     ) -> Result<Self> {
-        let arguments = helper_arguments(vip, peers, helper, lan)?;
+        let arguments = helper_arguments(vip, peers, helper, lan, name)?;
         let mut sudo = Command::new("/usr/bin/sudo");
         sudo.arg("-n").args(&arguments);
         let file = authorize_helper(sudo, &arguments, cancelled)?;
-        Self::from_descriptor(file)
+        Self::from_descriptor_named(file, name)
     }
     /// Adopt a LAN interface descriptor authorized by a frontend process.
-    /// Only a TAP descriptor attached to `radminvpn0` is accepted.
+    /// Only a TAP descriptor attached to the configured interface is accepted.
     pub fn from_descriptor(file: File) -> Result<Self> {
-        verify_descriptor(&file)?;
+        Self::from_descriptor_named(file, NAME)
+    }
+    pub fn from_descriptor_named(file: File, name: &str) -> Result<Self> {
+        crate::tap::validate_linux_interface_name(name)?;
+        verify_descriptor(&file, name)?;
         // The engine reads the TAP without polling first; a blocking descriptor
         // would stall its event loop whenever the interface is idle.
         ensure_nonblocking(&file)?;
@@ -117,19 +145,23 @@ fn helper_arguments(
     peers: &[Ipv4Addr],
     helper: &std::path::Path,
     lan: bool,
+    name: &str,
 ) -> Result<Vec<std::ffi::OsString>> {
+    crate::tap::validate_linux_interface_name(name)?;
     ensure!(
         helper.is_file(),
         "TAP helper executable missing; build the workspace including the openrad CLI"
     );
     ensure!(
-        !std::path::Path::new("/sys/class/net/radminvpn0").exists(),
-        "radminvpn0 already exists; refusing to touch it"
+        !std::path::Path::new("/sys/class/net").join(name).exists(),
+        "{name} already exists; refusing to touch it"
     );
     let helper = helper.canonicalize()?;
     let mut arguments = vec![
         helper.into_os_string(),
         "tap-helper".into(),
+        "--interface-name".into(),
+        name.into(),
         "--vip".into(),
         vip.to_string().into(),
         "--owner".into(),
@@ -151,15 +183,16 @@ pub fn authorize_lan_in_terminal(
     vip: Ipv4Addr,
     helper: &std::path::Path,
     cancelled: &AtomicBool,
+    name: &str,
 ) -> Result<File> {
-    let arguments = helper_arguments(vip, &[], helper, true)?;
+    let arguments = helper_arguments(vip, &[], helper, true, name)?;
     let mut sudo = Command::new("/usr/bin/sudo");
     sudo.args(&arguments);
     run_helper(sudo, Duration::from_secs(120), cancelled)?
         .context("TAP authorization failed: sudo was refused or cancelled")
 }
 
-fn verify_descriptor(file: &File) -> Result<()> {
+fn verify_descriptor(file: &File, expected_name: &str) -> Result<()> {
     const TUNGETIFF: libc::c_ulong = 0x800454d2;
     let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
     // SAFETY: TUNGETIFF fills the provided ifreq; the descriptor is owned by `file`.
@@ -173,7 +206,7 @@ fn verify_descriptor(file: &File) -> Result<()> {
     // SAFETY: TUNGETIFF reports the interface flags in this union member.
     let flags = unsafe { request.ifr_ifru.ifru_flags };
     ensure!(
-        attached && name == NAME.as_bytes() && flags & libc::IFF_TAP as libc::c_short != 0,
+        attached && name == expected_name.as_bytes() && flags & libc::IFF_TAP as libc::c_short != 0,
         "received descriptor is not the OpenRad TAP interface"
     );
     Ok(())
@@ -284,6 +317,16 @@ pub fn helper(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr]) -> Result<()> {
     helper_with_lan(vip, owner, peers, false)
 }
 pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool) -> Result<()> {
+    helper_with_lan_named(vip, owner, peers, lan, NAME)
+}
+pub fn helper_with_lan_named(
+    vip: Ipv4Addr,
+    owner: u32,
+    peers: &[Ipv4Addr],
+    lan: bool,
+    name: &str,
+) -> Result<()> {
+    crate::tap::validate_linux_interface_name(name)?;
     ensure!(
         unsafe { libc::geteuid() } == 0,
         "interface helper requires CAP_NET_ADMIN via sudo"
@@ -310,7 +353,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
         .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open("/dev/net/tun")?;
     let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
-    for (out, b) in request.ifr_name.iter_mut().zip(NAME.bytes()) {
+    for (out, b) in request.ifr_name.iter_mut().zip(name.bytes()) {
         *out = b as libc::c_char;
     }
     request.ifr_ifru.ifru_flags =
@@ -334,7 +377,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
         "link",
         "set",
         "dev",
-        NAME,
+        name,
         "address",
         &mac,
         "mtu",
@@ -350,13 +393,13 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
             "broadcast",
             "26.255.255.255",
             "dev",
-            NAME,
+            name,
         ])?;
-        ip(&["link", "set", "dev", NAME, "multicast", "on"])?;
+        ip(&["link", "set", "dev", name, "multicast", "on"])?;
     } else {
-        ip(&["address", "add", &format!("{vip}/32"), "dev", NAME])?;
+        ip(&["address", "add", &format!("{vip}/32"), "dev", name])?;
     }
-    ip(&["link", "set", "dev", NAME, "up"])?;
+    ip(&["link", "set", "dev", name, "up"])?;
     if lan {
         // These routes are owned by the ephemeral interface. Do not replace an
         // existing route or default gateway. Application interface selection and
@@ -367,7 +410,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
                 "add",
                 destination,
                 "dev",
-                NAME,
+                name,
                 "src",
                 &vip.to_string(),
                 "metric",
@@ -381,7 +424,7 @@ pub fn helper_with_lan(vip: Ipv4Addr, owner: u32, peers: &[Ipv4Addr], lan: bool)
             "add",
             &format!("{peer}/32"),
             "dev",
-            NAME,
+            name,
             "src",
             &vip.to_string(),
         ])?;
@@ -459,6 +502,35 @@ fn receive_fd(socket: RawFd) -> Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_name_is_forwarded_to_the_privileged_helper() {
+        let executable = std::env::current_exe().unwrap();
+        let args = helper_arguments(
+            Ipv4Addr::new(26, 1, 2, 3),
+            &[],
+            &executable,
+            true,
+            "openrad-test0",
+        )
+        .unwrap();
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>();
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--interface-name" && pair[1] == "openrad-test0" }));
+        assert!(args.iter().any(|arg| arg == "--lan"));
+        assert!(helper_arguments(
+            Ipv4Addr::new(26, 1, 2, 3),
+            &[],
+            &executable,
+            true,
+            "../invalid",
+        )
+        .is_err());
+    }
 
     #[test]
     fn adopted_descriptors_must_be_the_openrad_tap() {

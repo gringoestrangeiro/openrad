@@ -29,6 +29,7 @@ pub struct RunOptions {
     pub only_peers: BTreeSet<u64>,
     pub traffic_peers: BTreeSet<u64>,
     pub tap: bool,
+    pub interface_name: Option<String>,
     pub passive: bool,
     pub incoming_transport: Policy,
     pub duration: Duration,
@@ -203,6 +204,13 @@ pub fn run(
     } = client;
     let mut stats = RunStats::default();
     let mut tap = None;
+    #[cfg(target_os = "linux")]
+    let interface_name = options
+        .interface_name
+        .as_deref()
+        .unwrap_or(crate::tap::NAME);
+    #[cfg(not(target_os = "linux"))]
+    let interface_name = crate::tap::NAME;
     let mut workers: BTreeMap<u64, Worker> = BTreeMap::new();
     let mut retired = vec![];
     let mut attempted = BTreeSet::new();
@@ -427,7 +435,19 @@ pub fn run(
                     .collect();
                 let unique: BTreeSet<_> = peers.iter().collect();
                 ensure!(unique.len() == peers.len(), "ambiguous peer VIP");
-                tap = Some(Tap::create(vip, &peers)?);
+                #[cfg(target_os = "linux")]
+                {
+                    tap = Some(Tap::create_with_helper_named(
+                        vip,
+                        &peers,
+                        &std::env::current_exe()?,
+                        interface_name,
+                    )?);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    tap = Some(Tap::create(vip, &peers)?);
+                }
                 stats.tap_created = true;
                 for rid in &options.traffic_peers {
                     if eligible_rids.contains(rid)
@@ -444,7 +464,7 @@ pub fn run(
                     }
                 }
                 report(
-                    json!({"event":"tap_ready","interface":"radminvpn0","vip":vip,"routes":peers,"uid":crate::tap::user_id()}),
+                    json!({"event":"tap_ready","interface":interface_name,"vip":vip,"routes":peers,"uid":crate::tap::user_id()}),
                 );
             }
             if let Some(t) = tap.as_mut() {
@@ -510,8 +530,10 @@ pub fn run(
     })();
     stop.store(true, Ordering::Relaxed);
     drop(tap); // Last nonpersistent TAP FD; kernel also removes its /32 routes.
-    stats.tap_removed =
-        stats.tap_created && !std::path::Path::new("/sys/class/net/radminvpn0").exists();
+    stats.tap_removed = stats.tap_created
+        && !std::path::Path::new("/sys/class/net")
+            .join(interface_name)
+            .exists();
     drop(rx); // Wake workers blocked on event publication during failure cleanup.
     for worker in workers.values() {
         worker.stop.store(true, Ordering::Relaxed);

@@ -58,3 +58,29 @@ fn linux_desktop_lan_routes_and_descriptor_cleanup() {
         .iter()
         .all(|r| r["dev"] != "radminvpn0"));
 }
+
+#[test]
+#[ignore = "requires sudo -n and no existing openradtest0; modifies network interfaces"]
+fn linux_custom_interface_name_routes_and_cleanup() {
+    let name = "openradtest0";
+    let interface = Path::new("/sys/class/net").join(name);
+    assert!(
+        !interface.exists(),
+        "custom TAP already exists; do not replace it"
+    );
+    let helper = Path::new(env!("CARGO_BIN_EXE_openrad"));
+    let tap = Tap::create_lan_with_helper_named(Ipv4Addr::new(26, 2, 3, 4), helper, name).unwrap();
+    let address = ip(&["-j", "address", "show", "dev", name]);
+    assert_eq!(address[0]["ifname"], name);
+    assert!(address[0]["addr_info"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| { row["family"] == "inet" && row["local"] == "26.2.3.4" }));
+    assert!(Tap::create_lan_with_helper_named(Ipv4Addr::new(26, 2, 3, 5), helper, name).is_err());
+    drop(tap);
+    assert!(
+        !interface.exists(),
+        "custom TAP must disappear after FD closes"
+    );
+}

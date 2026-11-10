@@ -301,6 +301,7 @@ fn manager(
         match dir.preferences() {
             Ok(preferences) => {
                 settings.force_relay = preferences.force_relay;
+                settings.interface_name = preferences.interface_name.clone();
                 broadcast_selection = preferences.broadcast_selection();
                 blocked = preferences.blocked.clone();
                 settings.auto_reconnect = preferences.auto_reconnect;
@@ -388,6 +389,7 @@ fn manager(
     let configure = |settings: &Settings| -> Result<daemon::ServicePreferences> {
         let mut preferences = dir.preferences()?;
         preferences.force_relay = settings.force_relay;
+        preferences.interface_name = settings.interface_name.clone();
         preferences.auto_reconnect = settings.auto_reconnect;
         preferences.reconnect_attempts = settings.reconnect_attempts;
         preferences.reconnect_base_delay_seconds = settings.reconnect_base_delay_seconds;

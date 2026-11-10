@@ -123,6 +123,7 @@ pub struct Settings {
     pub show_internal_ids: bool,
     pub show_diagnostics: bool,
     pub force_relay: bool,
+    pub interface_name: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -155,6 +156,7 @@ impl Default for Settings {
             show_internal_ids: false,
             show_diagnostics: false,
             force_relay: false,
+            interface_name: openrad::tap::DEFAULT_LINUX_INTERFACE_NAME.into(),
         }
     }
 }

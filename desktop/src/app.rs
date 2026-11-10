@@ -1698,13 +1698,15 @@ impl App {
             .map(|(_, n)| n.as_str())
             .unwrap_or(language.text("This device"));
         let status = if self.snapshot.interface_ready {
-            language.text(if self.windows_platform() {
-                "OpenRad TAP active"
+            if self.windows_platform() {
+                language.text("OpenRad TAP active").to_owned()
             } else {
-                "radminvpn0 active"
-            })
+                language
+                    .text("radminvpn0 active")
+                    .replace("radminvpn0", &self.saved_settings.interface_name)
+            }
         } else {
-            language.text("Interface offline")
+            language.text("Interface offline").to_owned()
         };
         let version = language.message(&if self.windows_platform() {
             format!("Native Windows · v{}", env!("CARGO_PKG_VERSION"))
@@ -1732,7 +1734,8 @@ impl App {
                         },
                     );
                     ui.add(
-                        egui::Label::new(RichText::new(status).size(11.).color(muted())).truncate(),
+                        egui::Label::new(RichText::new(status.as_str()).size(11.).color(muted()))
+                            .truncate(),
                     )
                     .on_hover_text(status);
                 });
@@ -3290,6 +3293,13 @@ impl App {
             ui.label(language.text("Device name"));
             ui.add(egui::TextEdit::singleline(&mut self.settings.node_name).margin(Vec2::new(8., 6.)).desired_width(300.));
             ui.label(RichText::new(language.text("Save preferences to change the name peers see. Your identity and memberships are preserved.")).size(11.).color(muted()));
+            #[cfg(target_os = "linux")]
+            {
+                ui.add_space(14.);
+                ui.label(language.text("Linux VPN interface name"));
+                ui.add(egui::TextEdit::singleline(&mut self.settings.interface_name).margin(Vec2::new(8., 6.)).desired_width(300.));
+                ui.label(RichText::new(language.text("1-15 ASCII letters, digits, '.', '_' or '-'; the name must start with a letter or digit. Saving recreates the VPN interface when connected.")).size(11.).color(muted()));
+            }
         });
         ui.add_space(16.);
         self.broadcast_settings(ui);
@@ -3584,7 +3594,9 @@ impl App {
         card().inner_margin(22).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             section_title(ui, language.text(if self.windows_platform() { "Windows interface" } else { "Linux interface" }));
-            ui.label(if self.windows_platform() { "OpenRad · TAP-Windows6 · MTU 1500" } else { "radminvpn0 · Ethernet TAP · MTU 1500" });
+            ui.label(if self.windows_platform() { "OpenRad · TAP-Windows6 · MTU 1500" } else { "Ethernet TAP · MTU 1500" });
+            #[cfg(target_os = "linux")]
+            ui.label(format!("{}: {}", language.text("Linux VPN interface name"), self.saved_settings.interface_name));
             ui.label(RichText::new(language.text(if self.windows_platform() { "OpenRad Setup creates the dedicated TAP-Windows6 adapter. Disconnecting removes the VPN address and session routes; the installed adapter remains." } else { "A short-lived helper configures the interface. OpenRad runs as your normal user. Disconnect removes the interface and routes; closing the window keeps the VPN running." })).size(12.).color(muted()));
             ui.add_space(10.); ui.label(RichText::new(language.text(if self.windows_platform() { "Run OpenRad-Setup.exe again to check or repair setup. Use --no-launch for CLI setup. Windows runtime validation is still pending. See docs/windows.md." } else { "TAP setup requests permission through the system dialog. If it does not appear, check that Polkit and its authentication agent are running, then retry interface setup." })).size(12.).color(muted()));
             ui.add_space(10.); ui.label(RichText::new(language.text("Windows uses TAP-Windows6 and awaits Windows runtime validation. macOS has no data plane. Each connected peer shows its authenticated transport; relay remains available when direct connection fails.")).size(12.).color(muted()));
