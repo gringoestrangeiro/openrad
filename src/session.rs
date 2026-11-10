@@ -349,7 +349,14 @@ impl Framed {
                 Duration::from_millis(timeout_ms.max(0) as u64),
             )?
         };
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        let ready = {
+            if wake.is_pending() {
+                return Ok(false);
+            }
+            self.ready_windows_poll(timeout_ms.min(50))?
+        };
+        #[cfg(not(any(target_os = "linux", windows)))]
         let ready = {
             if wake.is_pending() {
                 return Ok(false);
@@ -359,6 +366,33 @@ impl Framed {
         self.check_cancelled()?;
         Ok(ready)
     }
+
+    #[cfg(windows)]
+    fn ready_windows_poll(&self, timeout_ms: i32) -> Result<bool> {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{
+            WSAGetLastError, WSAPoll, POLLERR, POLLHUP, POLLIN, POLLNVAL, SOCKET_ERROR, WSAPOLLFD,
+        };
+
+        // A kernel socket wait avoids repeatedly switching a live TCP stream
+        // between blocking and nonblocking mode to peek every five milliseconds.
+        // Keep the wait bounded so a local cancellation event is observed.
+        let mut poll = WSAPOLLFD {
+            fd: self.socket.as_raw_socket() as _,
+            events: POLLIN,
+            revents: 0,
+        };
+        let result = unsafe { WSAPoll(&mut poll, 1, timeout_ms.clamp(0, 50)) };
+        if result == SOCKET_ERROR {
+            return Err(std::io::Error::from_raw_os_error(unsafe { WSAGetLastError() }).into());
+        }
+        ensure!(
+            poll.revents & POLLNVAL == 0,
+            "TCP socket is no longer valid"
+        );
+        Ok(result > 0 && poll.revents & (POLLIN | POLLERR | POLLHUP) != 0)
+    }
+
     #[cfg(not(target_os = "linux"))]
     fn ready_peek(&self, timeout_ms: i32) -> Result<bool> {
         // peek preserves framing; this also reports EOF as readable.
@@ -1791,6 +1825,30 @@ mod framed_read_tests {
             assert!(received == *expected, "frame {index} content");
         }
         sender.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_tcp_socket_wait_wakes_on_bytes_and_honors_local_cancellation() {
+        let (mut reader, mut writer) = pair();
+        let wake = crate::wake::Wake::new().unwrap();
+        let started = Instant::now();
+        assert!(!reader.ready_or_wake(100, &wake).unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(25));
+
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            writer.write_all(&frame(b"tcp wake")).unwrap();
+            writer
+        });
+        let started = Instant::now();
+        assert!(reader.ready_or_wake(100, &wake).unwrap());
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert_eq!(reader.receive(64).unwrap(), b"tcp wake");
+        let _writer = sender.join().unwrap();
+
+        wake.notify();
+        assert!(!reader.ready_or_wake(100, &wake).unwrap());
     }
 
     #[test]

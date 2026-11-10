@@ -509,6 +509,11 @@
     "{name} уже существует; изменение отклонено",
     "{name} đã tồn tại; sẽ không thay đổi"
   ],
+  "TCP socket is no longer valid": [
+    "O socket TCP não é mais válido",
+    "TCP-сокет больше недействителен",
+    "Kết nối TCP không còn hợp lệ"
+  ],
   "Linux VPN interface name": [
     "Nome da interface VPN no Linux",
     "Имя VPN-интерфейса в Linux",
