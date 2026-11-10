@@ -47,7 +47,7 @@ impl Tap {
     /// Persistent desktop and CLI LAN: a connected /8 and IPv4 group routes.
     /// The bounded diagnostic client retains controlled-peer /32 route mode.
     pub fn create_lan_with_helper(vip: Ipv4Addr, helper: &std::path::Path) -> Result<Self> {
-        Self::create_lan_with_helper_named(vip, helper, NAME)
+        Self::create_lan_with_helper_cancellable(vip, helper, &AtomicBool::new(false))
     }
     pub fn create_lan_with_helper_named(
         vip: Ipv4Addr,
