@@ -128,6 +128,22 @@ public record VpnSettings(
         deniedRids = Set.copyOf(deniedRids);
     }
 
+    public static VpnSettings from(FileConfiguration c, boolean onlineMode) {
+        VpnSettings settings = from(c);
+        if (settings.bridge().enabled() && !onlineMode && settings.hasPublicNetworks()
+                && !c.getBoolean("security.allow-insecure-offline-public-networks", false)) {
+            throw new IllegalArgumentException("Offline-mode with public Minecraft VPN networks is unsafe. "
+                    + "Enable online-mode=true, or explicitly acknowledge the risk using "
+                    + "security.allow-insecure-offline-public-networks: true.");
+        }
+        return settings;
+    }
+
+    public boolean hasPublicNetworks() {
+        return networks.stream().anyMatch(network -> network.secret().isEmpty())
+                || (minecraftNetworks.enabled() && !minecraftNetworks.select().isEmpty());
+    }
+
     public static VpnSettings from(FileConfiguration c) {
         BridgeSettings bridge = BridgeSettings.from(c);
         String name = c.getString("vpn.device-name", "OpenRad Plugin");

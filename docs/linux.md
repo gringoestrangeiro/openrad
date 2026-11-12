@@ -77,7 +77,17 @@ The helper uses standard system paths `/usr/bin/sudo`, `/usr/bin/pkexec`, and
 layouts must adapt the platform adapters. Keep the matching-version CLI beside
 the desktop; relative installation paths are resolved before elevation.
 
-The interface is named `radminvpn0`, has MTU 1500, and uses the assigned `26.x.x.x` address. OpenRad refuses to replace an interface that already uses that name. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
+By default, the Linux interface is named `radminvpn0`. You can choose another name in **Settings > Connection > Linux VPN interface name** in the desktop app or in the CLI:
+
+```sh
+openrad interface-name                 # show the saved name
+openrad interface-name openrad0        # save a custom name
+openrad start                          # start with that name
+openrad interface-name radminvpn0      # restore the default
+ip address show dev openrad0
+```
+
+The name is shared by the desktop and CLI for the same profile, persisted in `service.json`, and must contain 1–15 ASCII characters. The first character must be a letter or digit; the rest may also include `-`, `_` and `.`. Invalid names are rejected before privilege elevation. If changed while connected, OpenRad reconnects and recreates the nonpersistent TAP under the new name. If the name is already occupied by another interface, setup fails without touching that interface; choose a different name. The interface uses MTU 1500 and the assigned `26.x.x.x` address. The desktop and persistent CLI service add a connected `/8` LAN and broadcast/multicast routes. Other applications using overlapping routes may affect traffic selection.
 
 ## Open-file limit
 

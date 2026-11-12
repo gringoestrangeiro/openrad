@@ -88,6 +88,87 @@ final class ConfigEditorTest {
     }
 
     @Test
+    void offlinePublicSelectionDoesNotPersistARejectedConfiguration() throws Exception {
+        defaults();
+        Path config = directory.resolve("config.yml");
+        String before = Files.readString(config);
+        var editor = new ConfigEditor(directory, false);
+        assertThrows(IllegalArgumentException.class, () -> editor.publicSelection(List.of("all-ptbr")));
+        assertEquals(before, Files.readString(config));
+
+        Files.writeString(config, before.replace("allow-insecure-offline-public-networks: false",
+                "allow-insecure-offline-public-networks: true"));
+        editor.publicSelection(List.of("all-ptbr"));
+        assertEquals(List.of("all-ptbr"), settings().minecraftNetworks().select());
+    }
+
+    @Test
+    void joiningDoesNotPublishFilesWhenAnotherConfiguredPasswordIsMissing() throws Exception {
+        Path config = directory.resolve("config.yml");
+        String before = """
+                vpn:
+                  networks:
+                    - name: Existing private network
+                      secret: missing-password
+                """;
+        Files.writeString(config, before);
+        var editor = new ConfigEditor(directory);
+        assertThrows(IllegalArgumentException.class,
+                () -> editor.join("New private network", "synthetic-password".toCharArray()));
+        assertEquals(before, Files.readString(config));
+        assertFalse(Files.exists(directory.resolve("secrets.properties")));
+    }
+
+    @Test
+    void invalidCustomCoordinatorPreventsPublishingAnEnabledConfig() throws Exception {
+        defaults();
+        Files.writeString(directory.resolve("coordinator.properties"), "host=127.0.0.1\n");
+        Path config = directory.resolve("config.yml");
+        String before = Files.readString(config);
+
+        assertThrows(java.io.IOException.class,
+                () -> new ConfigEditor(directory).publicSelection(List.of("all")));
+        assertEquals(before, Files.readString(config));
+    }
+
+    @Test
+    void aNetworkWithAnInvalidPasswordCanStillBeRemoved() throws Exception {
+        defaults();
+        var editor = new ConfigEditor(directory);
+        var result = editor.join("Private", "password-one".toCharArray());
+        Path secrets = directory.resolve("secrets.properties");
+        Files.writeString(secrets, result.secretKey() + "=short\n");
+
+        assertThrows(IllegalArgumentException.class, () -> editor.enabled(true));
+        assertTrue(editor.leave("Private"));
+        assertTrue(settings().networks().isEmpty());
+        assertFalse(Files.readString(secrets).contains(result.secretKey()));
+    }
+
+    @Test
+    void editCannotProduceAConfigurationThatExceedsTheReadLimit() throws Exception {
+        Path config = directory.resolve("config.yml");
+        String before = "extra: " + "x".repeat(256 * 1024 - 8) + "\n";
+        Files.writeString(config, before);
+        var editor = new ConfigEditor(directory);
+        assertThrows(java.io.IOException.class, () -> editor.publicSelection(List.of("all")));
+        assertEquals(before, Files.readString(config));
+    }
+
+    @Test
+    void removingASecretPreservesACommentEndingInBackslash() throws Exception {
+        defaults();
+        var editor = new ConfigEditor(directory);
+        var result = editor.join("Private", "password-one".toCharArray());
+        Path secrets = directory.resolve("secrets.properties");
+        String comment = "# Retain this comment\\\n";
+        Files.writeString(secrets, comment + result.secretKey() + "=password-one\n");
+
+        assertTrue(editor.leave("Private"));
+        assertEquals(comment, Files.readString(secrets));
+    }
+
+    @Test
     void forceRelayCommandPersistsAndRestoresDirectTransports() throws Exception {
         defaults();
         var editor = new ConfigEditor(directory);

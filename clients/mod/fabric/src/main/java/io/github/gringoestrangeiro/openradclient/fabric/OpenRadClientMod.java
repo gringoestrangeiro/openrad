@@ -1,9 +1,11 @@
 package io.github.gringoestrangeiro.openradclient.fabric;
 
 import io.github.gringoestrangeiro.openradclient.ClientVpnRuntime;
+import io.netty.channel.ChannelFuture;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.fabricmc.loader.api.FabricLoader;
@@ -16,9 +18,11 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.network.chat.Component;
 
+import java.lang.ref.WeakReference;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 import java.util.logging.Logger;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
@@ -27,23 +31,26 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.lit
 public final class OpenRadClientMod implements ClientModInitializer {
     private static final Logger LOG = Logger.getLogger("OpenRad Client Mod");
     private static volatile OpenRadController controller;
+    private boolean menuRequested;
     /** Render-thread only; weak so closed screens and their buttons are collected. */
-    private static final java.util.Map<Screen, Button> MENU_BUTTONS = new java.util.WeakHashMap<>();
+    private static final java.util.Map<Screen, WeakReference<Button>> MENU_BUTTONS = new java.util.WeakHashMap<>();
+
+    private static Button menuButton(Screen screen) {
+        var button = MENU_BUTTONS.get(screen);
+        return button == null ? null : button.get();
+    }
+
+    public static boolean usesVirtualRoute(String host) {
+        OpenRadController current = controller;
+        return current != null && current.active() && LoopbackBridge.isVirtualLiteral(host);
+    }
 
     public static OpenRadController controller() { return controller; }
     /** Without an OpenRad session, 26.x addresses keep the normal path (e.g. official Radmin VPN). */
-    public static InetSocketAddress route(InetSocketAddress destination) {
+    public static ChannelFuture connect(InetSocketAddress destination, boolean legacyPing,
+                                        Function<InetSocketAddress, ChannelFuture> connect) {
         OpenRadController current = controller;
-        return current == null ? destination : current.route(destination);
-    }
-    /**
-     * The legacy ping runs on the render thread, where an exception crashes the game. If the
-     * bridge cannot take the connection, fail fast on a loopback port nothing can accept rather
-     * than leaving the VPN.
-     */
-    public static InetSocketAddress routeLegacyPing(InetSocketAddress destination) {
-        try { return route(destination); }
-        catch (RuntimeException unavailable) { return LoopbackBridge.UNREACHABLE; }
+        return current == null ? connect.apply(destination) : current.connect(destination, legacyPing, connect);
     }
     public static List<ClientVpnRuntime.LanServer> lanServers() {
         OpenRadController current = controller;
@@ -64,12 +71,17 @@ public final class OpenRadClientMod implements ClientModInitializer {
         controller = new OpenRadController(FabricLoader.getInstance().getConfigDir().resolve("openrad-client"), LOG);
         controller.initialize();
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> controller.close());
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (!menuRequested) return;
+            menuRequested = false;
+            openMenu(null);
+        });
         ScreenEvents.AFTER_INIT.register((client, screen, width, height) -> {
             if (!(screen instanceof JoinMultiplayerScreen || screen instanceof TitleScreen || screen instanceof PauseScreen)) return;
             // A window resize re-runs AFTER_INIT, but screens that only reposition their layout
             // (JoinMultiplayerScreen on 1.21+/26.x) keep their widgets: move the existing button
             // instead of stacking another one at every resize.
-            Button existing = MENU_BUTTONS.get(screen);
+            Button existing = menuButton(screen);
             if (existing != null && screen.children().contains(existing)) {
                 existing.setX(width - 112);
                 existing.setY(5);
@@ -78,11 +90,11 @@ public final class OpenRadClientMod implements ClientModInitializer {
             Button button = Button.builder(Component.literal("OpenRad"), clicked -> openMenu(screen))
                     .bounds(width - 112, 5, 106, 20).build();
             Screens.getButtons(screen).add(button);
-            MENU_BUTTONS.put(screen, button);
+            MENU_BUTTONS.put(screen, new WeakReference<>(button));
             // Rebuild the tooltip only when the phase changes, not on every client tick.
             String[] shown = {null};
             ScreenEvents.afterTick(screen).register(ignored -> {
-                if (MENU_BUTTONS.get(screen) != button) return; // replaced by a full re-init
+                if (menuButton(screen) != button) return; // replaced by a full re-init
                 String current = controller.status().phase();
                 if (current.equals(shown[0])) return;
                 shown[0] = current;
@@ -93,8 +105,8 @@ public final class OpenRadClientMod implements ClientModInitializer {
                 .executes(ctx -> show(ctx.getSource()))
                 .then(literal("status").executes(ctx -> show(ctx.getSource())))
                 .then(literal("menu").executes(ctx -> {
-                    var client = ctx.getSource().getClient();
-                    client.execute(() -> openMenu(null));
+                    // ChatScreen clears itself after dispatching the command.
+                    menuRequested = true;
                     return 1;
                 }))
                 .then(literal("networks").executes(ctx -> {

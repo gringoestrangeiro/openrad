@@ -388,6 +388,28 @@ class VpnRuntimeTest {
     }
 
     @Test
+    void explicitAttachmentCloseDuringCatalogDoesNotStartJoiningOnThatSocket() throws Exception {
+        saveIdentity();
+        try (Service service = new Service();
+                VpnRuntime runtime = catalogRuntime(service, List.of("all"))) {
+            var job = service.jobs.submit(() -> {
+                try (var attached = service.authenticate(4)) {
+                    service.attach(attached, concat(server(38), tlv(0x1316, concat(
+                            u32(0x01000305, LOCAL_IP), tlv(0x09000305, new byte[16])))));
+                    assertEquals(43, clientOperation(attached.receive()));
+                    attached.send(server(16));
+                    assertThrows(EOFException.class, attached::receive,
+                            "closed attachment must not send a join after the catalog request");
+                }
+                return null;
+            });
+            runtime.start();
+            job.get(5, TimeUnit.SECONDS);
+            stopped(runtime);
+        }
+    }
+
+    @Test
     void stalledAutomaticPublicJoinDoesNotRestartExistingAttachment() throws Exception {
         saveIdentity();
         try (Service service = new Service();

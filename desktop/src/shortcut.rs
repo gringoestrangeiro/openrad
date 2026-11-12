@@ -1,7 +1,6 @@
 //! Optional first-run Windows desktop shortcut. Never modifies existing user
 //! settings or the VPN service.
 use anyhow::{ensure, Context, Result};
-use std::process::Command;
 
 pub fn create_desktop_shortcut() -> Result<()> {
     let exe = std::env::current_exe().context("Locate OpenRad executable")?;
@@ -23,8 +22,7 @@ if (Test-Path -LiteralPath $ico -PathType Leaf) {
 $shortcut.Description = 'OpenRad'
 $shortcut.Save()
 "#;
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+    let output = crate::windows_startup::powershell_command(script)?
         .env("OPENRAD_SHORTCUT_EXE", exe)
         .output()
         .context("Start Windows shortcut helper")?;

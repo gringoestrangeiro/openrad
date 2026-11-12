@@ -466,6 +466,7 @@ fn atomic_save(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServicePreferences {
+    pub interface_name: String,
     pub force_relay: bool,
     pub auto_reconnect: bool,
     pub reconnect_attempts: u32,
@@ -480,6 +481,7 @@ pub struct ServicePreferences {
 impl Default for ServicePreferences {
     fn default() -> Self {
         Self {
+            interface_name: crate::tap::DEFAULT_LINUX_INTERFACE_NAME.into(),
             force_relay: false,
             auto_reconnect: true,
             reconnect_attempts: 3,
@@ -493,6 +495,7 @@ impl Default for ServicePreferences {
 }
 impl ServicePreferences {
     fn validate(&self) -> Result<()> {
+        crate::tap::validate_linux_interface_name(&self.interface_name)?;
         ensure!(
             self.broadcast_peer != Some(0)
                 && self.broadcast_peers.as_ref().is_none_or(|selection| {
@@ -589,6 +592,10 @@ pub enum Request {
     BlockList,
     Configure {
         preferences: ServicePreferences,
+    },
+    #[cfg(target_os = "linux")]
+    SetInterfaceName {
+        name: String,
     },
     Reconnect,
     Stop,
@@ -1704,7 +1711,8 @@ impl Shared {
                     .save_preferences(&preferences)?;
                 let mut state = self.lock_state();
                 let restart = preferences.force_relay != state.preferences.force_relay
-                    || preferences.traffic_peers != state.preferences.traffic_peers;
+                    || preferences.traffic_peers != state.preferences.traffic_peers
+                    || preferences.interface_name != state.preferences.interface_name;
                 state.preferences = preferences;
                 if restart {
                     state.restart = true;
@@ -1713,6 +1721,34 @@ impl Shared {
                     }
                 }
                 Reply::ok("Settings saved", Value::Null)
+            }
+            #[cfg(target_os = "linux")]
+            Request::SetInterfaceName { name } => {
+                crate::tap::validate_linux_interface_name(&name)?;
+                let _serial = self.lock_config();
+                let mut preferences = self.lock_state().preferences.clone();
+                if preferences.interface_name == name {
+                    Reply::ok(
+                        "Interface name is already selected",
+                        json!({"interface_name": name}),
+                    )
+                } else {
+                    preferences.interface_name = name.clone();
+                    self.directory
+                        .as_ref()
+                        .context("Profile is unavailable")?
+                        .save_preferences(&preferences)?;
+                    let mut state = self.lock_state();
+                    state.preferences = preferences;
+                    state.restart = true;
+                    if let Some(stop) = &state.session_stop {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    Reply::ok(
+                        "Interface name saved. Reconnecting to apply it.",
+                        json!({"interface_name": name}),
+                    )
+                }
             }
             Request::Reconnect => {
                 let mut state = self.lock_state();
@@ -1753,6 +1789,7 @@ fn supervisor(
         };
         let options = runtime::Options {
             helper: std::env::current_exe().ok(),
+            interface_name: Some(preferences.interface_name.clone()),
             disable_interface,
             await_interface: shared.await_interface.swap(false, Ordering::Relaxed),
             diagnostics: diagnostics.clone(),
@@ -2555,11 +2592,70 @@ mod tests {
             BroadcastSelection::All
         );
         let mut legacy: ServicePreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            legacy.interface_name,
+            crate::tap::DEFAULT_LINUX_INTERFACE_NAME
+        );
         assert_eq!(legacy.broadcast_peer, None);
         legacy.broadcast_peer = Some(0);
         assert!(legacy.validate().is_err());
         fs::remove_dir_all(directory.path).unwrap();
     }
+    #[test]
+    fn interface_names_have_backward_compatible_defaults_and_validation() {
+        let mut preferences: ServicePreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            preferences.interface_name,
+            crate::tap::DEFAULT_LINUX_INTERFACE_NAME
+        );
+        assert!(preferences.validate().is_ok());
+        preferences.interface_name = "minecraft0".into();
+        assert!(preferences.validate().is_ok());
+        assert_eq!(
+            serde_json::from_str::<ServicePreferences>(
+                &serde_json::to_string(&preferences).unwrap()
+            )
+            .unwrap()
+            .interface_name,
+            "minecraft0"
+        );
+        for invalid in ["", "a/b", "vpn name", "a123456789012345"] {
+            preferences.interface_name = invalid.into();
+            assert!(preferences.validate().is_err(), "{invalid}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_interface_name_changes_are_persisted_and_idempotent() {
+        let directory = DataDir::open(Some(std::env::temp_dir().join(format!(
+            "openrad-interface-name-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ))))
+        .unwrap();
+        let mut shared = shared();
+        shared.directory = Some(directory.clone());
+        let request = || Request::SetInterfaceName {
+            name: "vpn-lucas".into(),
+        };
+        assert!(shared.handle(request()).ok);
+        assert_eq!(directory.preferences().unwrap().interface_name, "vpn-lucas");
+        assert!(shared.lock_state().restart);
+        shared.lock_state().restart = false;
+        assert!(shared.handle(request()).ok);
+        assert!(!shared.lock_state().restart);
+        assert!(
+            !shared
+                .handle(Request::SetInterfaceName {
+                    name: "../bad".into()
+                })
+                .ok
+        );
+        assert_eq!(directory.preferences().unwrap().interface_name, "vpn-lucas");
+        fs::remove_dir_all(directory.path).unwrap();
+    }
+
     #[test]
     fn multiple_broadcast_targets_are_atomic_bounded_and_preserved_by_stale_settings() {
         use std::collections::BTreeSet;

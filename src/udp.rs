@@ -471,6 +471,77 @@ struct Fragment {
     received: u128,
     received_count: u16,
 }
+#[cfg(windows)]
+struct WindowsUdpEvent {
+    event: windows_sys::Win32::Networking::WinSock::WSAEVENT,
+}
+
+#[cfg(windows)]
+impl WindowsUdpEvent {
+    fn new(socket: &UdpSocket) -> std::io::Result<Self> {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{
+            WSACreateEvent, WSAEventSelect, WSAGetLastError, FD_READ, SOCKET_ERROR,
+            WSA_INVALID_EVENT,
+        };
+
+        // SAFETY: the resulting manual-reset event belongs to this owner.
+        let event = unsafe { WSACreateEvent() };
+        if event == WSA_INVALID_EVENT {
+            return Err(std::io::Error::from_raw_os_error(unsafe {
+                WSAGetLastError()
+            }));
+        }
+        let registration = Self { event };
+        // The UDP socket was already configured as nonblocking during the
+        // handshake. FD_READ avoids 2 ms polling on every established peer.
+        if unsafe { WSAEventSelect(socket.as_raw_socket() as _, event, FD_READ as i32) }
+            == SOCKET_ERROR
+        {
+            return Err(std::io::Error::from_raw_os_error(unsafe {
+                WSAGetLastError()
+            }));
+        }
+        Ok(registration)
+    }
+
+    fn wait(
+        &self,
+        socket: &UdpSocket,
+        wake: &crate::wake::Wake,
+        timeout: Duration,
+    ) -> std::io::Result<()> {
+        use std::os::windows::io::{AsRawSocket, RawHandle};
+        use windows_sys::Win32::Networking::WinSock::{
+            WSAEnumNetworkEvents, WSAGetLastError, SOCKET_ERROR, WSANETWORKEVENTS,
+        };
+
+        if wake.wait(Some(self.event as RawHandle), timeout)? {
+            // WSAEnumNetworkEvents resets the event and records its errors.
+            // The next pump drains recv() until WouldBlock, rearming FD_READ.
+            let mut events: WSANETWORKEVENTS = unsafe { std::mem::zeroed() };
+            if unsafe { WSAEnumNetworkEvents(socket.as_raw_socket() as _, self.event, &mut events) }
+                == SOCKET_ERROR
+            {
+                return Err(std::io::Error::from_raw_os_error(unsafe {
+                    WSAGetLastError()
+                }));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsUdpEvent {
+    fn drop(&mut self) {
+        // SAFETY: WSACreateEvent succeeded, and this value owns the event.
+        unsafe {
+            windows_sys::Win32::Networking::WinSock::WSACloseEvent(self.event);
+        }
+    }
+}
+
 pub struct Enet {
     pub socket: UdpSocket,
     endpoint: SocketAddr,
@@ -491,6 +562,8 @@ pub struct Enet {
     deadline: Option<Instant>,
     last_receive: Instant,
     stop: Option<Arc<AtomicBool>>,
+    #[cfg(windows)]
+    socket_event: Option<WindowsUdpEvent>,
 }
 /// Punch quickly while both NATs are opening bindings, then settle down.
 /// Punches are seven bytes, so the faster start costs almost nothing.
@@ -718,6 +791,8 @@ impl Enet {
             deadline,
             last_receive: Instant::now(),
             stop,
+            #[cfg(windows)]
+            socket_event: None,
         }
     }
     pub fn endpoint(&self) -> SocketAddr {
@@ -925,6 +1000,10 @@ impl Enet {
         self.ready_wait(timeout_ms, Some(wake))
     }
     fn ready_wait(&mut self, timeout_ms: i32, wake: Option<&crate::wake::Wake>) -> Result<bool> {
+        #[cfg(windows)]
+        if wake.is_some() && self.socket_event.is_none() {
+            self.socket_event = Some(WindowsUdpEvent::new(&self.socket)?);
+        }
         let until = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
         loop {
             self.pump()?;
@@ -965,7 +1044,20 @@ impl Enet {
                 crate::session::readable(self.socket.as_raw_fd(), millis)?;
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            if let Some(wake) = wake {
+                // UDP is already nonblocking, so Winsock can signal a waitable
+                // socket event alongside the existing local cancellation event.
+                if let Some(event) = &self.socket_event {
+                    event.wait(&self.socket, wake, remaining)?;
+                }
+            } else {
+                // Short-lived handshake callers do not have a local wake source.
+                std::thread::sleep(remaining.min(Duration::from_millis(2)));
+            }
+        }
+        #[cfg(not(any(target_os = "linux", windows)))]
         std::thread::sleep(remaining.min(Duration::from_millis(2)));
         Ok(())
     }
@@ -1654,6 +1746,45 @@ mod tests {
         assert_eq!(e.receive(128).unwrap(), b"immediate incoming data");
         worker.join().unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn windows_idle_udp_wait_observes_network_data_and_local_wake() {
+        let (mut enet, remote) = pair();
+        let wake = Arc::new(crate::wake::Wake::new().unwrap());
+
+        let start = Instant::now();
+        assert!(!enet.ready_or_wake(70, &wake).unwrap());
+        assert!(start.elapsed() >= Duration::from_millis(35));
+        assert!(start.elapsed() < Duration::from_secs(1));
+
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            remote.send(&packet(&reliable(1, b"socket wake"))).unwrap();
+            remote
+        });
+        let start = Instant::now();
+        assert!(enet.ready_or_wake(1500, &wake).unwrap());
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert_eq!(enet.receive(128).unwrap(), b"socket wake");
+        let _remote = worker.join().unwrap();
+
+        // Reading all pending datagrams must rearm FD_READ rather than leave
+        // a signaled event that spins forever on an empty socket.
+        let start = Instant::now();
+        assert!(!enet.ready_or_wake(50, &wake).unwrap());
+        assert!(start.elapsed() >= Duration::from_millis(25));
+
+        let notified = wake.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            notified.notify();
+        });
+        let start = Instant::now();
+        assert!(!enet.ready_or_wake(1500, &wake).unwrap());
+        assert!(start.elapsed() < Duration::from_millis(500));
+        worker.join().unwrap();
+    }
+
     #[test]
     fn idle_wait_is_cancelled_by_flag_or_notification() {
         for notified in [false, true] {

@@ -3,9 +3,12 @@ package io.github.gringoestrangeiro.openradclient.fabric;
 import io.github.gringoestrangeiro.openradclient.ClientConfig;
 import io.github.gringoestrangeiro.openradclient.ClientVpnRuntime;
 
+import io.netty.channel.ChannelFuture;
+
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
+import java.util.function.Function;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -87,6 +90,10 @@ public final class OpenRadController implements AutoCloseable {
         return active() ? bridgeRoute(destination) : destination;
     }
     InetSocketAddress bridgeRoute(InetSocketAddress destination) { return bridge.route(destination); }
+    ChannelFuture connect(InetSocketAddress destination, boolean legacyPing,
+                          Function<InetSocketAddress, ChannelFuture> connect) {
+        return active() ? bridge.connect(destination, legacyPing, connect) : connect.apply(destination);
+    }
     public boolean active() { return active(status().phase()); }
     public static boolean active(String phase) {
         return !List.of("OFFLINE", "STOPPED", "FAILED").contains(phase);

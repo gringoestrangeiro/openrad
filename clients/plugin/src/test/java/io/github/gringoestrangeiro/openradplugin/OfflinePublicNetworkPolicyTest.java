@@ -7,7 +7,9 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 final class OfflinePublicNetworkPolicyTest {
-    private VpnSettings settings(String secret, String selection, boolean enabled) throws Exception {
+    private VpnSettings settings(
+            String secret, String selection, boolean enabled, boolean onlineMode, boolean acknowledged)
+            throws Exception {
         var yaml = new YamlConfiguration();
         yaml.loadFromString("""
                 bridge:
@@ -19,36 +21,31 @@ final class OfflinePublicNetworkPolicyTest {
                   minecraft-networks:
                     enabled: true
                     select: %s
-                """.formatted(enabled, secret, selection));
-        return VpnSettings.from(yaml);
+                security:
+                  allow-insecure-offline-public-networks: %s
+                """.formatted(enabled, secret, selection, acknowledged));
+        return VpnSettings.from(yaml, onlineMode);
     }
 
     @Test
-    void explicitPasswordlessNetworkRequiresAcknowledgementInOfflineMode() throws Exception {
-        var settings = settings("", "[]", true);
-        assertThrows(IllegalArgumentException.class,
-                () -> OpenRadPlugin.validateOfflinePublicNetworks(settings, false, false));
+    void explicitPasswordlessNetworkRequiresAcknowledgementInOfflineMode() {
+        assertThrows(IllegalArgumentException.class, () -> settings("", "[]", true, false, false));
     }
 
     @Test
-    void privateOnlyNetworkDoesNotRequirePublicAcknowledgement() throws Exception {
-        var settings = settings("private-key", "[]", true);
-        assertDoesNotThrow(() -> OpenRadPlugin.validateOfflinePublicNetworks(settings, false, false));
+    void privateOnlyNetworkDoesNotRequirePublicAcknowledgement() {
+        assertDoesNotThrow(() -> settings("private-key", "[]", true, false, false));
     }
 
     @Test
-    void automaticPublicSelectionRequiresAcknowledgement() throws Exception {
-        var settings = settings("private-key", "[all]", true);
-        assertThrows(IllegalArgumentException.class,
-                () -> OpenRadPlugin.validateOfflinePublicNetworks(settings, false, false));
+    void automaticPublicSelectionRequiresAcknowledgement() {
+        assertThrows(IllegalArgumentException.class, () -> settings("private-key", "[all]", true, false, false));
     }
 
     @Test
-    void acknowledgedOnlineOrDisabledBridgeRemainAllowed() throws Exception {
-        var publicNetwork = settings("", "[]", true);
-        assertDoesNotThrow(() -> OpenRadPlugin.validateOfflinePublicNetworks(publicNetwork, false, true));
-        assertDoesNotThrow(() -> OpenRadPlugin.validateOfflinePublicNetworks(publicNetwork, true, false));
-        var disabled = settings("", "[]", false);
-        assertDoesNotThrow(() -> OpenRadPlugin.validateOfflinePublicNetworks(disabled, false, false));
+    void acknowledgedOnlineOrDisabledBridgeRemainAllowed() {
+        assertDoesNotThrow(() -> settings("", "[]", true, false, true));
+        assertDoesNotThrow(() -> settings("", "[]", true, true, false));
+        assertDoesNotThrow(() -> settings("", "[]", false, false, false));
     }
 }

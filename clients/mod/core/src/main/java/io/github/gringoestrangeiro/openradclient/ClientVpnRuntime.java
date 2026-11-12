@@ -8,7 +8,7 @@ import io.github.gringoestrangeiro.openradplugin.network.NetworkJoin;
 import io.github.gringoestrangeiro.openradplugin.network.MinecraftNetworks;
 import io.github.gringoestrangeiro.openradplugin.protocol.TlvCodec;
 import io.github.gringoestrangeiro.openradplugin.session.*;
-import io.github.gringoestrangeiro.openradplugin.peer.PeerConnector;
+import io.github.gringoestrangeiro.openradplugin.peer.AcceptorRelayGuard;
 import io.github.gringoestrangeiro.openradclient.virtual.OutboundTcpStack;
 
 import java.io.*;
@@ -117,14 +117,21 @@ public final class ClientVpnRuntime implements AutoCloseable {
 
     private void worker() {
         try {
-            Files.createDirectories(dataDirectory);
-            if (Files.isSymbolicLink(dataDirectory.resolve("identity.lock")))
-                throw new IOException("identity lock symlink not permitted");
-            try (FileChannel lockFile = FileChannel.open(dataDirectory.resolve("identity.lock"),
-                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+            CoordinatorEndpoint coordinator;
+            try {
+                coordinator = CoordinatorEndpoint.load(dataDirectory, ServiceConfig.BOOTSTRAP, ServiceConfig.PORT);
+            } catch (IOException error) {
+                if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
+                        "Unable to load coordinator.properties or modulus.bin");
+                return;
+            }
+            Path identityDirectory = coordinator.identityDirectory();
+            Files.createDirectories(identityDirectory);
+            try (FileChannel lockFile = FileChannel.open(identityDirectory.resolve("identity.lock"),
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
                  FileLock lock = lockFile.tryLock()) {
                 if (lock == null) throw new IOException("OpenRad identity is already in use");
-                workerLocked();
+                workerLocked(coordinator);
             }
         } catch (Exception error) {
             if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
@@ -142,12 +149,12 @@ public final class ClientVpnRuntime implements AutoCloseable {
         return Math.min(RETRY_MAX_SECONDS, (long) RETRY_BASE_SECONDS << exponent);
     }
 
-    private void workerLocked() {
+    private void workerLocked(CoordinatorEndpoint coordinator) {
+        var relayGuard = new AcceptorRelayGuard();
         int failures = 0;
         while (!stopped.get()) {
             long attachedAt = 0;
             try {
-                Files.createDirectories(dataDirectory);
                 // Closing or interrupting a registration after registration.pending is written
                 // would discard an issued identity and block this profile for good. Disconnect
                 // only flags it; the worker stops once the bounded registration has finished.
@@ -157,8 +164,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 try {
                     if (stopped.get()) break;
                     provisioned = Provisioner.loadOrRegister(
-                            dataDirectory, "OpenRad Minecraft", ServiceConfig.BOOTSTRAP,
-                            ServiceConfig.PORT, this::own);
+                            coordinator.identityDirectory(), "OpenRad Minecraft", coordinator.bootstrap(),
+                            coordinator.port(), this::own, coordinator.modulus());
                 } finally {
                     provisioning.set(false);
                     active.set(null);
@@ -169,12 +176,12 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 }
                 try (Identity identity = provisioned;
                      Attachment connection = Attachment.connect(
-                        identity, ServiceConfig.PORT, identity.nodeName(), this::own)) {
+                        identity, coordinator.port(), identity.nodeName(), this::own, coordinator.modulus())) {
                     own(connection.session());
                     attachedAt = System.nanoTime();
                     update("JOINING_NETWORKS", connection.vip().getHostAddress(),
                             connection.membership(), "");
-                    runConnected(identity, connection);
+                    runConnected(identity, connection, coordinator, relayGuard);
                 }
                 if (!stopped.get()) throw new IOException("control session ended");
             } catch (Exception ex) {
@@ -244,23 +251,27 @@ public final class ClientVpnRuntime implements AutoCloseable {
     static ControlEvent classify(byte[] record) throws ServerDisconnect {
         return switch (TlvCodec.operation(record)) {
             case 38, 41, 42 -> ControlEvent.MEMBERSHIP;
-            case ServerDisconnect.OPERATION -> {
-                PeerConnector.serverObjected();
-                throw ServerDisconnect.of(record);
-            }
+            case ServerDisconnect.OPERATION -> throw ServerDisconnect.of(record);
             case 44 -> ControlEvent.REFUSAL;
             default -> ControlEvent.PEER_RECORD;
         };
     }
 
     private void handle(byte[] record, Membership membership, ClientPeerService peerService) throws IOException {
-        switch (classify(record)) {
+        ControlEvent event;
+        try {
+            event = classify(record);
+        } catch (ServerDisconnect disconnect) {
+            if (!disconnect.replaced()) peerService.serverObjected();
+            throw disconnect;
+        }
+        switch (event) {
             case MEMBERSHIP -> {
                 if (TlvCodec.operation(record) == 38) membership.snapshot(record);
                 else membership.changes(record);
             }
             case REFUSAL -> {
-                if (PeerConnector.serverObjected())
+                if (peerService.serverObjected())
                     logger.accept(config.forceRelay()
                             ? "Service refused an acceptor relay request; incoming peers now depend on a relay offer of their own."
                             : "Service refused an acceptor relay request; using direct paths.");
@@ -279,8 +290,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
         }
     }
 
-    private void runConnected(Identity identity, Attachment connection) throws IOException {
-        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config)) {
+    private void runConnected(Identity identity, Attachment connection, CoordinatorEndpoint coordinator,
+                              AcceptorRelayGuard relayGuard) throws IOException {
+        relayGuard.startAttachment();
+        try (ClientPeerService peerService = new ClientPeerService(identity, connection, config, coordinator, relayGuard)) {
             peers = peerService;
             Set<String> targets = resolveNetworks(connection, peerService);
             activeNetworkNames = targets;

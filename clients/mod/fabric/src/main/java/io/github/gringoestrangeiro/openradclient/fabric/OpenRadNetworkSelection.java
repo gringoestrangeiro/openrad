@@ -65,13 +65,35 @@ final class OpenRadNetworkSelection {
         mode = Mode.SPECIFIC;
     }
 
-    void toggle(MinecraftNetworks.Entry item) {
+    boolean toggle(MinecraftNetworks.Entry item, List<MinecraftNetworks.Entry> catalog) {
+        String name = item.name();
+        String selector = item.selector();
+        var otherMatches = catalog.stream()
+                .filter(entry -> selector.equals(entry.selector()) && !name.equals(entry.name()))
+                .toList();
+        boolean savedSelector = selectors.contains(selector);
+        if (savedSelector && otherMatches.stream().anyMatch(entry -> !canStoreExactName(entry.name())))
+            return false;
+        if (!savedSelector && !exact.contains(name) && !canStoreExactName(name)) {
+            // Existing profiles support semicolons and whitespace through unique aliases.
+            if (!otherMatches.isEmpty()) return false;
+            try { MinecraftNetworks.validateSelector(selector); }
+            catch (IllegalArgumentException invalid) { return false; }
+        }
         specific();
-        // When a previous profile selected the same network by exact name,
-        // clicking it clears that selection instead of adding a second selector.
-        boolean removedExact = exact.remove(item.name());
-        boolean removedSelector = selectors.remove(item.selector());
-        if (!removedExact && !removedSelector) selectors.add(item.selector());
+        boolean removedExact = exact.remove(name);
+        if (selectors.remove(selector)) {
+            // Keep the other networks covered by a previously saved ambiguous selector.
+            otherMatches.forEach(entry -> exact.add(entry.name()));
+        } else if (!removedExact) {
+            if (canStoreExactName(name)) exact.add(name);
+            else selectors.add(selector);
+        }
+        return true;
+    }
+
+    private static boolean canStoreExactName(String name) {
+        return name.equals(name.trim()) && !name.contains(";");
     }
 
     void toggleSavedSelector(String key) {

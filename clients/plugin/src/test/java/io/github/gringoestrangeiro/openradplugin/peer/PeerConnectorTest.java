@@ -13,6 +13,7 @@ import io.github.gringoestrangeiro.openradplugin.transport.FramedTcp;
 import io.github.gringoestrangeiro.openradplugin.tunnel.TunnelCodec;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -21,6 +22,7 @@ import java.net.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 class PeerConnectorTest {
     static Inet4Address ip(String value) throws Exception {
@@ -277,6 +279,55 @@ class PeerConnectorTest {
             assertTrue(System.nanoTime() - began < 3_000_000_000L);
         } finally {
             closeAll(resources);
+        }
+    }
+
+    @Test
+    @Timeout(5)
+    void rejectedUdpCandidateSubmissionClosesTheAdvertisedSocket() throws Exception {
+        Inet4Address loopback = ip("127.0.0.1");
+        var candidateResources = new AtomicReference<Set<?>>();
+        var advertisedSocket = new AtomicReference<DatagramSocket>();
+        try (IncomingHub hub = new IncomingHub();
+                DatagramSocket remoteUdp = new DatagramSocket(0, loopback);
+                Identity identity = new Identity(
+                        22, ip("26.0.0.2"), "Remote", new byte[16], "remote-password".getBytes(),
+                        "127.0.0.1")) {
+            hub.ingest(offer(11));
+            var setup = hub.take(11).orElseThrow();
+            var peer = new Membership.Peer(11, "Local", ip("26.0.0.1"), "127.0.0.1", 1, Set.of("network"));
+            hub.ingest(candidates(29, 0x127c,
+                    tlv(0x127d, concat(text(0x030001c2, "127.0.0.1"),
+                            u32(0x010001c3, remoteUdp.getLocalPort())))));
+
+            assertThrows(RejectedExecutionException.class, () -> PeerConnector.accept(
+                    setup, identity, identity.vip(), peer, loopback,
+                    new PeerConnector.Policy(false, true, false),
+                    advert -> advertisedSocket.set(candidateResources.get().stream()
+                            .filter(DatagramSocket.class::isInstance)
+                            .map(DatagramSocket.class::cast)
+                            .findFirst().orElseThrow()),
+                    race -> {
+                        // Reject the task while the parent scope still owns the advertised socket.
+                        ((ExecutorService) inspect(race, "jobs")).shutdown();
+                        candidateResources.set((Set<?>) inspect(inspect(race, "resources"), "resources"));
+                    }));
+            DatagramSocket socket = advertisedSocket.get();
+            assertNotNull(socket, "the bound UDP port was advertised");
+            assertTrue(socket.isClosed(), "failed handoff must release its socket");
+        } finally {
+            DatagramSocket socket = advertisedSocket.get();
+            if (socket != null) socket.close();
+        }
+    }
+
+    private static Object inspect(Object target, String fieldName) {
+        try {
+            var field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.get(target);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
         }
     }
 

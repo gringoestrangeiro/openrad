@@ -6,10 +6,11 @@ use crate::storage::{Paths, Settings};
 use anyhow::{bail, ensure, Context, Result};
 use std::{
     ffi::OsString,
-    os::windows::ffi::OsStringExt,
+    os::windows::{ffi::OsStringExt, process::CommandExt},
     path::{Path, PathBuf},
     process::Command,
 };
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -147,6 +148,20 @@ fn system_powershell() -> Result<PathBuf> {
     Ok(powershell)
 }
 
+pub(crate) fn powershell_command(script: &str) -> Result<Command> {
+    let mut command = Command::new(system_powershell()?);
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW);
+    Ok(command)
+}
+
 const REMOVE_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $exe = $env:OPENRAD_STARTUP_EXEC
@@ -165,8 +180,7 @@ foreach ($task in $tasks) {
 /// The NSIS uninstaller uses this before removing the executable.
 pub fn remove_tasks_for_install() -> Result<()> {
     let exe = std::env::current_exe().context("Locate installed OpenRad Desktop")?;
-    let output = Command::new(system_powershell()?)
-        .args(["-NoProfile", "-NonInteractive", "-Command", REMOVE_SCRIPT])
+    let output = powershell_command(REMOVE_SCRIPT)?
         .env("OPENRAD_STARTUP_EXEC", exe)
         .output()
         .context("Clean OpenRad logon tasks before uninstall")?;
@@ -193,8 +207,7 @@ pub fn set_start_with_windows(paths: &Paths, enabled: bool) -> Result<()> {
 
     // No user input is interpolated into the PowerShell source. Inputs are
     // supplied only to this subprocess's environment.
-    let output = Command::new(system_powershell()?)
-        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+    let output = powershell_command(SCRIPT)?
         .env("OPENRAD_STARTUP_TASK", task_name(&paths.directory))
         .env("OPENRAD_STARTUP_EXEC", &exe)
         .env("OPENRAD_STARTUP_DIR", &paths.directory)
@@ -220,6 +233,25 @@ pub fn set_start_with_windows(paths: &Paths, enabled: bool) -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn powershell_helper_has_no_console_window() {
+        let script = r#"
+Add-Type -Namespace OpenRadDiagnostics -Name ConsoleWindow -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();' -ErrorAction Stop
+[OpenRadDiagnostics.ConsoleWindow]::GetConsoleWindow().ToInt64()
+"#;
+        let output = powershell_command(script).unwrap().output().unwrap();
+        assert!(
+            output.status.success(),
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "0",
+            "the helper must not create or inherit a console window"
+        );
+    }
 
     #[test]
     fn windows_default_starts_only_after_onboarding_and_identity_persistence() {

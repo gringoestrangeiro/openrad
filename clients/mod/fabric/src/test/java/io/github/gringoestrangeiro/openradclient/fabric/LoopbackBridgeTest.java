@@ -1,5 +1,9 @@
 package io.github.gringoestrangeiro.openradclient.fabric;
 
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -153,6 +157,51 @@ class LoopbackBridgeTest {
         }
     }
 
+    @Test void closingNettyChannelCancelsOnlyItsPendingTunnel() throws Exception {
+        var firstOpening = new CountDownLatch(1);
+        var secondOpening = new CountDownLatch(1);
+        var firstCancelled = new CountDownLatch(1);
+        var secondCancelled = new CountDownLatch(1);
+        var loops = new NioEventLoopGroup(1);
+        var bootstrap = new Bootstrap().group(loops).channel(NioSocketChannel.class)
+                .handler(new ChannelInboundHandlerAdapter() {
+                    @Override public boolean isSharable() { return true; }
+                });
+        var firstTarget = vpn();
+        var secondTarget = new InetSocketAddress(firstTarget.getAddress(), 25566);
+        try (var bridge = new LoopbackBridge((ip, port) -> {
+            boolean first = port == firstTarget.getPort();
+            (first ? firstOpening : secondOpening).countDown();
+            try {
+                Thread.sleep(30_000);
+                throw new IOException("setup deadline");
+            } catch (InterruptedException cancelled) {
+                (first ? firstCancelled : secondCancelled).countDown();
+                Thread.currentThread().interrupt();
+                throw new IOException(cancelled);
+            }
+        }, 2)) {
+            var first = bridge.connect(firstTarget, false, bootstrap::connect).sync().channel();
+            var second = bridge.connect(secondTarget, false, bootstrap::connect).sync().channel();
+            try {
+                assertTrue(firstOpening.await(2, TimeUnit.SECONDS));
+                assertTrue(secondOpening.await(2, TimeUnit.SECONDS));
+                first.close().sync();
+                assertTrue(firstCancelled.await(2, TimeUnit.SECONDS),
+                        "closing the client channel must interrupt its pending VPN setup");
+                assertEquals(1, secondCancelled.getCount(), "unrelated connection must keep its lease");
+                assertTrue(second.isOpen());
+                assertTrue(bridge.route(firstTarget).getAddress().isLoopbackAddress(),
+                        "the first connection's capacity must be available again");
+            } finally {
+                first.close().syncUninterruptibly();
+                second.close().syncUninterruptibly();
+            }
+        } finally {
+            loops.shutdownGracefully(0, 2, TimeUnit.SECONDS).syncUninterruptibly();
+        }
+    }
+
     @Test void boundedPendingConnectionsReleaseCapacityWhenDisconnected() throws Exception {
         try (var bridge = new LoopbackBridge((ip, port) -> { fail("no accepted socket"); return null; }, 1)) {
             var unused = bridge.route(vpn());
@@ -180,6 +229,18 @@ class LoopbackBridgeTest {
         var bridge = new LoopbackBridge((ip, port) -> { throw new IOException(); });
         bridge.close();
         assertThrows(IllegalStateException.class, () -> bridge.route(vpn()));
+    }
+
+    @Test void srvBypassOnlyMatchesLiteralIpv4InTheVirtualRange() {
+        assertTrue(LoopbackBridge.isVirtualLiteral("26.4.5.6"));
+        assertTrue(LoopbackBridge.isVirtualLiteral("26.255.255.255"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("25.4.5.6"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("26.example.invalid"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("26.256.5.6"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("26.4.5"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("26.4.5.6:25565"));
+        assertFalse(LoopbackBridge.isVirtualLiteral("::ffff:26.4.5.6"));
+        assertFalse(LoopbackBridge.isVirtualLiteral(null));
     }
 
     @Test void unresolvedIpv4LiteralIsInterceptedWithoutDns() throws Exception {

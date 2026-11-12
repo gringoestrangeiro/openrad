@@ -79,6 +79,9 @@ enum Command {
     Status,
     /// Stop the VPN service and remove its TAP interface.
     Stop,
+    /// Show or change the Linux TAP interface name (persisted across restarts).
+    #[cfg(target_os = "linux")]
+    InterfaceName { name: Option<String> },
     /// List joined networks and your role in each.
     Networks,
     /// List current peers and their live connection states.
@@ -171,6 +174,9 @@ enum Command {
     },
     #[command(hide = true)]
     TapHelper {
+        /// TAP name chosen by the unprivileged client and verified by the daemon.
+        #[arg(long, default_value = tap::DEFAULT_LINUX_INTERFACE_NAME)]
+        interface_name: String,
         #[arg(long)]
         vip: Ipv4Addr,
         #[arg(long)]
@@ -210,6 +216,8 @@ impl Command {
             Self::Start { .. } => "start",
             Self::Status => "status",
             Self::Stop => "stop",
+            #[cfg(target_os = "linux")]
+            Self::InterfaceName { .. } => "interface_name",
             Self::Networks => "networks",
             Self::Peers => "peers",
             Self::Search { .. } => "search",
@@ -441,6 +449,41 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 }
                 .into(),
                 data,
+            }
+        }
+        #[cfg(target_os = "linux")]
+        Command::InterfaceName { name } => {
+            if let Some(name) = name {
+                tap::validate_linux_interface_name(&name)?;
+                if dir.endpoint_exists() {
+                    daemon::request(&dir, &Request::SetInterfaceName { name })?
+                } else {
+                    let _profile_lock = dir.try_profile_lock()?;
+                    let _service_lock = dir.stopped_lock()?;
+                    let mut preferences = dir.preferences()?;
+                    preferences.interface_name = name.clone();
+                    dir.save_preferences(&preferences)?;
+                    daemon::Reply {
+                        ok: true,
+                        message: format!("Linux interface name saved: {name}"),
+                        data: json!({"interface_name": name}),
+                    }
+                }
+            } else {
+                let name = if dir.endpoint_exists() {
+                    let reply = daemon::request(&dir, &Request::Status)?;
+                    reply.data["preferences"]["interface_name"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("Service did not return an interface name"))?
+                        .to_owned()
+                } else {
+                    dir.preferences()?.interface_name
+                };
+                daemon::Reply {
+                    ok: true,
+                    message: format!("Linux interface name: {name}"),
+                    data: json!({"interface_name": name}),
+                }
             }
         }
         Command::Status => match daemon::request(&dir, &Request::Status) {
@@ -685,9 +728,18 @@ fn authorize_interface_in_terminal(dir: &daemon::DataDir, started: bool) -> Resu
             "The VPN interface needs administrator permission; sudo will ask for your password."
         )
     );
-    let attached =
-        tap::authorize_lan_in_terminal(vip, &std::env::current_exe()?, &AtomicBool::new(false))
-            .and_then(|file| daemon::attach_interface(dir, file));
+    let status = daemon::request(dir, &Request::Status)?;
+    let interface_name = status.data["preferences"]["interface_name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Service did not return an interface name"))?;
+    tap::validate_linux_interface_name(interface_name)?;
+    let attached = tap::authorize_lan_in_terminal(
+        vip,
+        &std::env::current_exe()?,
+        &AtomicBool::new(false),
+        interface_name,
+    )
+    .and_then(|file| daemon::attach_interface(dir, file));
     match attached {
         Ok(reply) if reply.ok => {
             let until = Instant::now() + Duration::from_secs(15);
@@ -899,9 +951,16 @@ fn execute() -> Result<()> {
         owner,
         ref peer,
         lan,
+        ref interface_name,
     } = cli.command
     {
-        return tap::helper_with_lan(vip, owner, peer, lan);
+        #[cfg(target_os = "linux")]
+        return tap::helper_with_lan_named(vip, owner, peer, lan, interface_name);
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = interface_name;
+            return tap::helper_with_lan(vip, owner, peer, lan);
+        }
     }
     ensure!(
         !tap::is_privileged(),

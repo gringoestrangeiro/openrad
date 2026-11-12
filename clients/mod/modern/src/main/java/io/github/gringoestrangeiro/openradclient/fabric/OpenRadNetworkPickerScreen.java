@@ -22,9 +22,9 @@ public final class OpenRadNetworkPickerScreen extends Screen {
     private final OpenRadNetworkSelection choice;
     private final boolean languages;
     private int page;
-    /** Catalog identity last rendered; immutable entry lists compare without string building. */
-    private Object signature = "";
+    private List<MinecraftNetworks.Entry> entries = List.of();
     private List<Item> items = List.of();
+    private boolean invalidSelection;
 
     OpenRadNetworkPickerScreen(OpenRadNetworkScreen parent, OpenRadController controller,
                                OpenRadNetworkSelection choice, boolean languages) {
@@ -46,14 +46,11 @@ public final class OpenRadNetworkPickerScreen extends Screen {
                     OpenRadNetworkLabels.name(code, locale), null, code, null)).toList();
         }
 
-        var listing = controller.catalog();
-        List<MinecraftNetworks.Entry> entries = listing == null ? List.of() : listing.entries();
         List<Item> results = new ArrayList<>();
         Set<String> available = new HashSet<>();
         for (MinecraftNetworks.Entry entry : entries) {
             available.add(entry.selector());
-            results.add(new Item(OpenRadNetworkLabels.name(entry.language(), locale)
-                    + "  #" + entry.number(), entry, null, null));
+            results.add(new Item(entry.name(), entry, null, null));
         }
         // Saved filters and custom names must always be removable, even offline.
         for (String selector : choice.individualSelectors()) {
@@ -68,9 +65,9 @@ public final class OpenRadNetworkPickerScreen extends Screen {
         return List.copyOf(results);
     }
 
-    private Object signature() {
+    private List<MinecraftNetworks.Entry> catalogEntries() {
         var catalog = controller.catalog();
-        return languages ? "languages" : catalog == null ? "empty" : catalog.entries();
+        return catalog == null ? List.of() : catalog.entries();
     }
 
     private int rows() { return Math.max(1, (height - 121) / 23); }
@@ -78,7 +75,7 @@ public final class OpenRadNetworkPickerScreen extends Screen {
     private void goBack() { minecraft.setScreenAndShow(parent); }
 
     @Override protected void init() {
-        signature = signature();
+        entries = languages ? List.of() : catalogEntries();
         items = items();
         int panel = Math.min(380, width - 24), left = (width - panel) / 2;
         int rows = rows();
@@ -99,7 +96,8 @@ public final class OpenRadNetworkPickerScreen extends Screen {
                             choice.language(item.savedSelector());
                             goBack();
                         } else {
-                            if (item.entry() != null) choice.toggle(item.entry());
+                            invalidSelection = false;
+                            if (item.entry() != null) invalidSelection = !choice.toggle(item.entry(), entries);
                             else if (item.savedSelector() != null) choice.toggleSavedSelector(item.savedSelector());
                             else choice.toggleExactName(item.savedExactName());
                             rebuildWidgets();
@@ -121,6 +119,7 @@ public final class OpenRadNetworkPickerScreen extends Screen {
         if (!languages) {
             addRenderableWidget(Button.builder(OpenRadI18n.tr("openrad.network.clear"), b -> {
                 choice.clearSpecific();
+                invalidSelection = false;
                 rebuildWidgets();
             }).bounds(left, height - 27, (panel - 6) / 2, 20).build());
         }
@@ -130,14 +129,15 @@ public final class OpenRadNetworkPickerScreen extends Screen {
     }
 
     @Override public void tick() {
-        if (!java.util.Objects.equals(signature(), signature)) rebuildWidgets();
+        if (!languages && !catalogEntries().equals(entries)) rebuildWidgets();
     }
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mx, int my, float dt) {
         super.extractRenderState(graphics, mx, my, dt);
         graphics.centeredText(font, title, width / 2, 9, 0xFFFFFFFF);
         graphics.centeredText(font,
-                OpenRadI18n.tr(languages ? "openrad.network.pick.language"
+                OpenRadI18n.tr(invalidSelection ? "openrad.menu.config_error"
+                        : languages ? "openrad.network.pick.language"
                         : "openrad.network.pick.specific"), width / 2, 25, 0xFFC2D6DB);
         if (!languages && items.isEmpty()) {
             graphics.centeredText(font, font.plainSubstrByWidth(

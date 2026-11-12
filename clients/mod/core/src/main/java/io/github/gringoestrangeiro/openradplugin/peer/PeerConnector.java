@@ -48,18 +48,6 @@ public final class PeerConnector {
     private PeerConnector() {}
 
     private static final long SECOND = 1_000_000_000L;
-    private static final AtomicBoolean ACCEPTOR_RELAY_ALLOWED = new AtomicBoolean(true);
-    private static final AtomicLong LAST_ACCEPTOR_RELAY_REQUEST = new AtomicLong();
-
-    /** Disable acceptor-initiated relay requests if its attachment objects within five seconds. */
-    public static boolean serverObjected() {
-        long requested = LAST_ACCEPTOR_RELAY_REQUEST.get();
-        if (requested != 0 && System.nanoTime() - requested < 5 * SECOND) {
-            ACCEPTOR_RELAY_ALLOWED.set(false);
-            return true;
-        }
-        return false;
-    }
 
     private static void closeQuietly(AutoCloseable c) {
         try {
@@ -122,32 +110,41 @@ public final class PeerConnector {
         final AtomicBoolean closed = new AtomicBoolean();
 
         void spawn(Work work) {
-            Scope child = resources.own(new Scope());
-            active.incrementAndGet();
-            jobs.submit(
-                    () -> {
-                        boolean success = false;
-                        try {
-                            PeerChannel p = child.own(work.run(child));
-                            if (!closed.get()) {
-                                successes.offer(new Success(p, child));
-                                success = true;
-                            }
-                        } catch (Exception ignored) {
-                        } finally {
-                            if (!success) child.close();
-                            active.decrementAndGet();
-                        }
-                    });
+            spawn(null, work);
         }
 
-        void spawnUdp(DatagramSocket socket, Work work) {
-            resources.release(socket);
-            spawn(
-                    scope -> {
-                        scope.own(socket);
-                        return work.run(scope);
-                    });
+        void spawn(AutoCloseable socket, Work work) {
+            Scope child = new Scope();
+            synchronized (resources) {
+                // Keep an existing candidate covered by the parent until its child can close it.
+                if (socket != null) {
+                    child.own(socket);
+                    resources.release(socket);
+                }
+                resources.own(child);
+            }
+            active.incrementAndGet();
+            try {
+                jobs.submit(
+                        () -> {
+                            boolean success = false;
+                            try {
+                                PeerChannel p = child.own(work.run(child));
+                                if (!closed.get()) {
+                                    successes.offer(new Success(p, child));
+                                    success = true;
+                                }
+                            } catch (Exception ignored) {
+                            } finally {
+                                if (!success) child.close();
+                                active.decrementAndGet();
+                            }
+                        });
+            } catch (RejectedExecutionException rejected) {
+                active.decrementAndGet();
+                child.close();
+                throw rejected;
+            }
         }
 
         PeerChannel winner() {
@@ -614,7 +611,7 @@ public final class PeerConnector {
                             DatagramSocket socket = udpSocket;
                             int n = nonce;
                             List<InetSocketAddress> endpoints = udp;
-                            race.spawnUdp(
+                            race.spawn(
                                     socket,
                                     scope ->
                                             authenticateUdp(
@@ -638,7 +635,7 @@ public final class PeerConnector {
                             lastStart = System.nanoTime();
                             DatagramSocket socket = mappedSocket;
                             MappedCandidate m = mapped;
-                            race.spawnUdp(
+                            race.spawn(
                                     socket,
                                     scope ->
                                             authenticateUdp(
@@ -958,10 +955,9 @@ public final class PeerConnector {
                     if (stream != null) {
                         lastStart = System.nanoTime();
                         tcpAuth.set(true);
-                        race.resources.release(stream);
                         race.spawn(
+                                stream,
                                 scope -> {
-                                    scope.own(stream);
                                     stream.handshakeDeadline(remaining(until, 10));
                                     race.progress.incrementAndGet();
                                     try {
@@ -989,7 +985,7 @@ public final class PeerConnector {
                     lastStart = System.nanoTime();
                     DatagramSocket socket = mappedSocket;
                     MappedCandidate m = mapped;
-                    race.spawnUdp(
+                    race.spawn(
                             socket,
                             scope ->
                                     authenticateUdp(
@@ -1010,10 +1006,7 @@ public final class PeerConnector {
                         && relay == null
                         && System.nanoTime() - began
                                 >= (policy.tcp || policy.udp ? 2 * SECOND : 300_000_000L)) {
-                    if (ACCEPTOR_RELAY_ALLOWED.get()) {
-                        controlSend.accept(request(setup.cid(), 22));
-                        LAST_ACCEPTOR_RELAY_REQUEST.set(System.nanoTime());
-                    }
+                    controlSend.accept(request(setup.cid(), 22));
                     relayRequested = true;
                 }
                 if (relay != null
@@ -1041,7 +1034,7 @@ public final class PeerConnector {
                                 udpStarted = true;
                                 lastStart = System.nanoTime();
                                 DatagramSocket socket = udpSocket;
-                                race.spawnUdp(
+                                race.spawn(
                                         socket,
                                         scope ->
                                                 authenticateUdp(

@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class VirtualOrigins {
     private static final VirtualOrigins SHARED = new VirtualOrigins();
 
-    private record Entry(InetSocketAddress origin, Channel owner) {}
+    record Entry(InetSocketAddress origin, Channel owner) {}
 
     private final ConcurrentHashMap<InetSocketAddress, Entry> byEndpoint =
             new ConcurrentHashMap<>();
@@ -42,11 +42,16 @@ public final class VirtualOrigins {
 
     /** Virtual origin of a backend client address, or null for any other connection. */
     public InetSocketAddress lookup(SocketAddress backendClient) {
+        Entry entry = find(backendClient);
+        return entry == null ? null : entry.origin();
+    }
+
+    Entry find(SocketAddress backendClient) {
         if (!(backendClient instanceof InetSocketAddress)) return null;
         InetSocketAddress client = (InetSocketAddress) backendClient;
         if (client.getAddress() == null || !client.getAddress().isLoopbackAddress()) return null;
         Entry entry = byEndpoint.get(client);
-        return entry == null || !entry.owner().isOpen() ? null : entry.origin();
+        return entry == null || !entry.owner().isOpen() ? null : entry;
     }
 
     public int size() {

@@ -10,6 +10,7 @@ import java.util.*;
 
 /** Explicit private file, never copied into status snapshots or public configuration. */
 public final class NetworkSecrets implements AutoCloseable {
+    static final int MAX_FILE_BYTES = 65536;
     private final Map<String, char[]> values = new HashMap<>();
 
     public static NetworkSecrets load(Path directory) throws IOException {
@@ -32,44 +33,69 @@ public final class NetworkSecrets implements AutoCloseable {
                         + "# example-key=your-network-password\n",
                     StandardCharsets.UTF_8);
         }
-        if (Files.isSymbolicLink(path) || Files.size(path) > 65536)
+        return read(path);
+    }
+
+    static NetworkSecrets readExisting(Path directory) throws IOException {
+        Path path = directory.resolve("secrets.properties");
+        return Files.notExists(path, LinkOption.NOFOLLOW_LINKS) ? new NetworkSecrets() : read(path);
+    }
+
+    private static NetworkSecrets read(Path path) throws IOException {
+        if (Files.isSymbolicLink(path) || Files.size(path) > MAX_FILE_BYTES)
             throw new IOException("invalid secrets file");
         Identity.secureFile(path);
         NetworkSecrets secrets = new NetworkSecrets();
         Properties properties = new Properties();
-        try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-            properties.load(reader);
+        try (InputStream stream = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes = stream.readNBytes(MAX_FILE_BYTES + 1);
+            try (Reader reader = new InputStreamReader(
+                    new ByteArrayInputStream(bytes), StandardCharsets.UTF_8.newDecoder())) {
+                if (bytes.length > MAX_FILE_BYTES) throw new IOException("invalid secrets file");
+                properties.load(reader);
+            } finally {
+                Arrays.fill(bytes, (byte) 0);
+            }
+            for (String key : properties.stringPropertyNames()) {
+                secrets.values.put(key, properties.getProperty(key).toCharArray());
+            }
+            return secrets;
+        } catch (IOException | RuntimeException e) {
+            secrets.close();
+            throw e;
+        } finally {
+            properties.clear();
         }
-        for (String key : properties.stringPropertyNames()) {
-            String value = properties.getProperty(key);
-            if (value.length() < 6 || value.length() > 256)
-                throw new IOException(
-                        "secrets.properties: password for '" + key + "' must have 6..256 characters");
-            secrets.values.put(key, value.toCharArray());
-        }
-        properties.clear();
-        return secrets;
     }
 
     public char[] password(String key) {
-        if (key.isEmpty()) return null;
+        return key.isEmpty() ? null : requiredPassword(key).clone();
+    }
+
+    private char[] requiredPassword(String key) {
         char[] value = values.get(key);
         if (value == null)
             throw new IllegalArgumentException(
                     "secrets.properties has no password for '" + key
                             + "'; add " + key + "=<senha> or use /orb join <rede> <senha>");
-        return value.clone();
+        if (value.length < 6 || value.length > 256)
+            throw new IllegalArgumentException(
+                    "secrets.properties: password for '" + key + "' must have 6..256 characters");
+        for (char c : value)
+            if (Character.isISOControl(c))
+                throw new IllegalArgumentException("invalid network password");
+        return value;
     }
 
     public void validate(VpnSettings settings) {
+        validate(settings, "");
+    }
+
+    /** The editor separately validates the new password before staging it. */
+    void validate(VpnSettings settings, String stagedSecret) {
         for (var network : settings.networks()) {
-            char[] p = password(network.secret());
-            if (p != null) {
-                for (char c : p)
-                    if (Character.isISOControl(c))
-                        throw new IllegalArgumentException("invalid network password");
-                Arrays.fill(p, '\0');
-            }
+            String key = network.secret();
+            if (!key.isEmpty() && !key.equals(stagedSecret)) requiredPassword(key);
         }
     }
 

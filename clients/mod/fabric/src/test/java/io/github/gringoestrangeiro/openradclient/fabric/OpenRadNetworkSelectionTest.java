@@ -50,12 +50,12 @@ class OpenRadNetworkSelectionTest {
         var choice = new OpenRadNetworkSelection(draft);
         assertEquals(OpenRadNetworkSelection.Mode.SPECIFIC, choice.mode());
         assertTrue(choice.contains(entry));
-        choice.toggle(entry);
+        assertTrue(choice.toggle(entry, List.of(entry)));
         assertFalse(choice.contains(entry));
         assertFalse(choice.hasChoice());
         choice.apply(draft);
         assertTrue(draft.config().minecraftSelectors().isEmpty());
-        choice.toggle(entry);
+        assertTrue(choice.toggle(entry, List.of(entry)));
         assertTrue(choice.contains(entry));
         assertTrue(choice.hasChoice());
     }
@@ -65,7 +65,7 @@ class OpenRadNetworkSelectionTest {
                 new PublicNetworks.Network("Minecraft [English 2]", 1))).getFirst();
         var draft = new OpenRadMenuDraft(profile(false, List.of(entry.name()), List.of()));
         var selection = new OpenRadNetworkSelection(draft);
-        selection.toggle(entry);
+        assertTrue(selection.toggle(entry, List.of(entry)));
         assertFalse(selection.contains(entry));
         selection.apply(draft);
         assertTrue(draft.config().networks().isEmpty());
@@ -89,13 +89,66 @@ class OpenRadNetworkSelectionTest {
                 List.of(entry.name()), List.of(entry.selector())));
         var choice = new OpenRadNetworkSelection(draft);
         assertTrue(choice.contains(entry));
-        choice.toggle(entry);
+        assertTrue(choice.toggle(entry, List.of(entry)));
         assertFalse(choice.contains(entry));
         choice.apply(draft);
         assertTrue(draft.config().networks().isEmpty());
         assertTrue(draft.config().minecraftSelectors().isEmpty());
         assertFalse(draft.config().autoConnect());
-        choice.toggle(entry);
+        assertTrue(choice.toggle(entry, List.of(entry)));
         assertTrue(choice.contains(entry));
+    }
+
+    @Test void specificChoiceDoesNotJoinOtherNetworksWithTheSameSelector() {
+        var entries = MinecraftNetworks.catalog(List.of(
+                new PublicNetworks.Network("Minecraft [English 2]", 1),
+                new PublicNetworks.Network("Minecraft [english 2]", 1)));
+        assertEquals(entries.get(0).selector(), entries.get(1).selector());
+        var draft = new OpenRadMenuDraft(profile(false, List.of(), List.of()));
+        var choice = new OpenRadNetworkSelection(draft);
+
+        assertTrue(choice.toggle(entries.get(0), entries));
+        choice.apply(draft);
+
+        assertTrue(choice.contains(entries.get(0)));
+        assertFalse(choice.contains(entries.get(1)));
+        assertEquals(List.of(entries.get(0).name()), draft.config().networks());
+        assertTrue(draft.config().minecraftSelectors().isEmpty());
+    }
+
+    @Test void deselectingOneNetworkKeepsOtherMatchesOfAnOldAlias() {
+        var entries = MinecraftNetworks.catalog(List.of(
+                new PublicNetworks.Network("Minecraft [English 2]", 1),
+                new PublicNetworks.Network("Minecraft [english 2]", 1)));
+        var draft = new OpenRadMenuDraft(profile(true, List.of(), List.of("english-2")));
+        var choice = new OpenRadNetworkSelection(draft);
+        assertTrue(choice.contains(entries.get(0)));
+        assertTrue(choice.contains(entries.get(1)));
+
+        assertTrue(choice.toggle(entries.get(0), entries));
+        choice.apply(draft);
+
+        assertFalse(choice.contains(entries.get(0)));
+        assertTrue(choice.contains(entries.get(1)));
+        assertTrue(draft.config().autoConnect());
+        assertEquals(List.of(entries.get(1).name()), draft.config().networks());
+        assertTrue(draft.config().minecraftSelectors().isEmpty());
+    }
+
+    @Test void semicolonNameUsesItsAliasOnlyIfUnambiguous() {
+        var entries = MinecraftNetworks.catalog(List.of(
+                new PublicNetworks.Network("Minecraft [Synthetic; Network 2]", 1),
+                new PublicNetworks.Network("Minecraft [Synthetic Network 2]", 1)));
+        var semicolon = entries.stream().filter(entry -> entry.name().contains(";")).findFirst().orElseThrow();
+        var draft = new OpenRadMenuDraft(profile(false, List.of(), List.of()));
+        var choice = new OpenRadNetworkSelection(draft);
+
+        assertFalse(choice.toggle(semicolon, entries));
+        assertFalse(choice.hasChoice());
+        assertTrue(choice.toggle(semicolon, List.of(semicolon)));
+        choice.apply(draft);
+
+        assertTrue(draft.config().networks().isEmpty());
+        assertEquals(List.of(semicolon.selector()), draft.config().minecraftSelectors());
     }
 }

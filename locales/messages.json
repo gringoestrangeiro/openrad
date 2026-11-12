@@ -474,6 +474,56 @@
     "При каждом повторе задержка удваивается, до пяти минут. Изменения действуют со следующего сбоя.",
     "Thời gian chờ tăng gấp đôi sau mỗi lần thử, tối đa năm phút. Thay đổi áp dụng từ lần lỗi tiếp theo."
   ],
+  "Ethernet TAP · MTU 1500": [
+    "TAP Ethernet · MTU 1500",
+    "Ethernet TAP · MTU 1500",
+    "Ethernet TAP · MTU 1500"
+  ],
+  "Linux interface name saved: {name}": [
+    "Nome da interface Linux salvo: {name}",
+    "Имя интерфейса Linux сохранено: {name}",
+    "Đã lưu tên giao diện Linux: {name}"
+  ],
+  "Service did not return an interface name": [
+    "O serviço não retornou o nome da interface",
+    "Служба не вернула имя интерфейса",
+    "Dịch vụ không trả về tên giao diện"
+  ],
+  "Linux interface name: {name}": [
+    "Nome da interface Linux: {name}",
+    "Имя интерфейса Linux: {name}",
+    "Tên giao diện Linux: {name}"
+  ],
+  "Interface name is already selected": [
+    "Este nome de interface já está selecionado",
+    "Это имя интерфейса уже выбрано",
+    "Tên giao diện này đã được chọn"
+  ],
+  "Interface name saved. Reconnecting to apply it.": [
+    "Nome da interface salvo. Reconectando para aplicar a alteração.",
+    "Имя интерфейса сохранено. Переподключение для применения изменений.",
+    "Đã lưu tên giao diện. Đang kết nối lại để áp dụng."
+  ],
+  "{name} already exists; refusing to touch it": [
+    "{name} já existe; não será alterada",
+    "{name} уже существует; изменение отклонено",
+    "{name} đã tồn tại; sẽ không thay đổi"
+  ],
+  "TCP socket is no longer valid": [
+    "O socket TCP não é mais válido",
+    "TCP-сокет больше недействителен",
+    "Kết nối TCP không còn hợp lệ"
+  ],
+  "Linux VPN interface name": [
+    "Nome da interface VPN no Linux",
+    "Имя VPN-интерфейса в Linux",
+    "Tên giao diện VPN trên Linux"
+  ],
+  "1-15 ASCII letters, digits, '.', '_' or '-'; the name must start with a letter or digit. Saving recreates the VPN interface when connected.": [
+    "Use de 1 a 15 caracteres ASCII: letras, números, '.', '_' ou '-'. O primeiro deve ser uma letra ou número. Ao salvar durante uma conexão, a interface VPN será recriada.",
+    "От 1 до 15 символов ASCII: буквы, цифры, '.', '_' или '-'. Первый символ — буква или цифра. При сохранении активное VPN-подключение пересоздаст интерфейс.",
+    "Dùng 1–15 ký tự ASCII: chữ cái, chữ số, '.', '_' hoặc '-'. Ký tự đầu tiên phải là chữ cái hoặc chữ số. Lưu khi đang kết nối sẽ tạo lại giao diện VPN."
+  ],
   "Device name": [
     "Nome do dispositivo",
     "Имя устройства",
