@@ -14,8 +14,8 @@ android {
         applicationId = "com.openrad.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "2.3.0"
+        versionCode = 9
+        versionName = "2.3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

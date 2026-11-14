@@ -17,6 +17,24 @@ interface SocketProtector {
 
     /** UDP sockets of direct peer paths. */
     fun protect(socket: DatagramSocket): Boolean
+
+    /**
+     * Called when [protect] returned false. The engine keeps going: the tunnel
+     * only routes 26.0.0.0/8 (plus the optional LAN discovery ranges) and is
+     * created after the control connection reaches ONLINE, so refusing to
+     * connect here would deadlock (no connection, no VIP, no tunnel). Some
+     * Android 16 devices refuse every protect() call. [kind] is "TCP" or "UDP".
+     */
+    fun onProtectFailed(kind: String) {}
+}
+
+/** Protects [socket] like [SocketProtector.protect] but never aborts when the platform refuses. */
+internal fun SocketProtector?.protectBestEffort(socket: Socket) {
+    if (this != null && !protect(socket)) onProtectFailed("TCP")
+}
+
+internal fun SocketProtector?.protectBestEffort(socket: DatagramSocket) {
+    if (this != null && !protect(socket)) onProtectFailed("UDP")
 }
 
 /**
@@ -246,7 +264,7 @@ class Framed(val socket: Socket, @Volatile override var stop: AtomicBoolean? = n
             if (stop?.get() == true) throw CancelledException()
             val socket = Socket()
             try {
-                if (protector?.protect(socket) == false) throw IOException("could not protect TCP socket from VPN routing")
+                protector.protectBestEffort(socket)
                 socket.connect(InetSocketAddress(InetAddress.getByName(host), port), timeoutMs)
                 return Framed(socket, stop)
             } catch (e: Exception) {

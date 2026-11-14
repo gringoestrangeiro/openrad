@@ -20,7 +20,7 @@ sharing one wire format:
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
 | Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
-| Android | [`clients/android/`](clients/android/README.md) | stable | 2.3.0 |
+| Android | [`clients/android/`](clients/android/README.md) | stable | 2.3.3 |
 | Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.3.0 |
 | Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.2 |
 | Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.2 |
@@ -84,9 +84,10 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-The current release is **[2.3.2](docs/releases/2.3.2.md)**; see the
-[changelog](CHANGELOG.md) for earlier versions. It updates only the Minecraft
-plugin and mod; the other packages are the 2.3.0 files and keep their names.
+The current release is **[2.3.3](docs/releases/2.3.3.md)**; see the
+[changelog](CHANGELOG.md) for earlier versions. It updates only the Android APK;
+the Minecraft plugin and mod are the 2.3.2 files and the other packages are the
+2.3.0 files, and all keep their names.
 Windows is experimental and the Minecraft builds alpha.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
@@ -94,7 +95,7 @@ Windows is experimental and the Minecraft builds alpha.
 - **Windows:** Run `OpenRad-Setup-2.3.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android:** Install `openrad-2.3.0-android.apk` (Android 8.0 or newer).
+- **Android:** Install `openrad-2.3.3-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
 - **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
   `OpenRadPlugin-2.3.2-paper-<versions>.jar` whose name includes your Paper version (for
@@ -244,7 +245,7 @@ unverified by the release builder. See [Windows build and packaging](docs/window
 | [Architecture](docs/architecture.md) | Components, protocol, transports, and platform interfaces |
 | [Performance](docs/performance.md) | Benchmark methodology and results |
 | [Changelog](CHANGELOG.md) | Version history and older release notes |
-| [Latest release (2.3.2)](docs/releases/2.3.2.md) | Changes, packages, upgrading, validation, and limitations |
+| [Latest release (2.3.3)](docs/releases/2.3.3.md) | Changes, packages, upgrading, validation, and limitations |
 
 ## Development
 
