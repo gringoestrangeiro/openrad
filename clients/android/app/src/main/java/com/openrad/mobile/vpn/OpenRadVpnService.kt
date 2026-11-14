@@ -72,7 +72,13 @@ class OpenRadVpnService : VpnService() {
     private val protector = object : SocketProtector {
         override fun protect(socket: Socket): Boolean = this@OpenRadVpnService.protect(socket)
         override fun protect(socket: DatagramSocket): Boolean = this@OpenRadVpnService.protect(socket)
+        override fun onProtectFailed(kind: String) {
+            if (protectWarned.compareAndSet(false, true)) {
+                Log.w(TAG, "VpnService.protect() refused a $kind socket; continuing unprotected (the tunnel only routes 26.0.0.0/8)")
+            }
+        }
     }
+    private val protectWarned = AtomicBoolean(false)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {

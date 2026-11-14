@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.3.3 — 2026-11-14
+
+Correcao do cliente Android: em aparelhos em que `VpnService.protect()` recusa o socket (relatado no
+Android 16, vivo V2507A), o app nunca conectava: a mensagem era `could not protect TCP socket from
+VPN routing`, a VIP ficava em `awaiting assignment` e o icone de VPN nao aparecia. **So o APK muda**
+(`versionCode` 9); desktop/CLI, Windows, Python, servidor Go, plugin Paper e mod Fabric sao os mesmos
+arquivos das releases anteriores. Sem alteracoes no wire format nem na identidade VPN. Veja as
+[notas da 2.3.3](docs/releases/2.3.3.md) e a issue #24.
+
+- **Android:** a recusa do `protect()` deixa de abortar a conexao (TCP e UDP): o motor segue
+  adiante e o servico registra um aviso unico no logcat. O TUN so e criado depois que a conexao de
+  controle fica ONLINE, entao exigir `protect()` antes disso era um deadlock.
 ## 2.3.2 — 2026-11-07
 
 Correcao do plugin Paper e do mod Fabric: a sessao de controle caia poucos segundos depois de
