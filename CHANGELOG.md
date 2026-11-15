@@ -12,6 +12,14 @@
   real Paper 1.21.1 and Fabric 1.21.1 smoke test covered login, chat, chunks,
   reconnect and shutdown. Official Radmin interoperability and the full
   post-audit build matrix were not independently exercised.
+- Minecraft integration: Paper `secrets.properties` is read leniently again and
+  only the passwords of enabled networks are validated, so a network whose stored
+  password is invalid can still be removed or disabled (regression from combining
+  the audit with the earlier secret-handling changes). Acceptor relay objections
+  are tracked only by the per-runtime `AcceptorRelayGuard`; the unused static
+  guard in `PeerConnector` was removed from the plugin and the mod copy.
+- CI: the Minecraft version-compatibility workflow now also runs for pull
+  requests into and pushes to `2.4.0-dev`.
 
 - Linux CLI: `openrad start` and `openrad retry-interface` run from a terminal
   now ask for sudo directly on that terminal instead of depending on a Polkit

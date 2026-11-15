@@ -83,7 +83,7 @@ Arquivos: `OpenRadPlugin.java`, `config/ConfigEditor.java`, `config/NetworkSecre
 | C2 | M | `OutOfMemoryError` ao criar thread de peer (Java 17 + limite de threads da hospedagem) matava a thread de controle; status ficava CONNECTED parado. | Tratado como falha do peer (backoff, aviso); `Error` inesperado na thread de controle vira RETRY/FAILED com motivo. | `VpnRuntimeTest` (2) |
 | C1 | M (perf.) | Cada worker de peer acordava a cada 20 ms (2 ms ativo) mesmo ocioso. | Espera de até 200 ms sem fluxos nem frames na fila (limitada pelos próximos keepalive/anúncio LAN). | `PeerPollingTest`, medição §5 |
 | C8 | B (perf.) | Seletor da ponte acordava a cada 10 ms mesmo só com TIME_WAIT. | Dorme até a expiração do TIME_WAIT mais próximo, ou 1 s sem conexões. | `VirtualTcpBridgeTest` |
-| N2-call | — | Ligação do reset do guarda de relay (ver N2) em cada nova anexação. | `PeerConnector.attachmentStarted()` em `VpnRuntime`. | — |
+| N2-call | — | Reset do guarda de relay a cada nova anexação. | Na integração do PR #23 substituído por `AcceptorRelayGuard` por runtime (`startAttachment()` em cada anexação); o guarda estático foi removido. | `AcceptorRelayGuardTest` |
 
 Arquivos: `bridge/VirtualTcpBridge.java`, `runtime/VpnRuntime.java`, `docs/virtual-tcp.md`.
 
@@ -92,7 +92,7 @@ Arquivos: `bridge/VirtualTcpBridge.java`, `runtime/VpnRuntime.java`, `docs/virtu
 | ID | Grav. | Problema e causa raiz | Correção | Testes |
 |---|---|---|---|---|
 | N1 | M | Um registro de candidato inválido (op 6/29/7: mais de 32 candidatos, CID errado, endereço mapeado inválido) abortava todo o `connect()`/`accept()` com `IllegalArgumentException` e punha o peer em backoff. O Rust (`src/peer.rs:739-768`, `src/incoming.rs:565-579`) descarta só aquele caminho. | Paridade com o Rust: o registro inválido é descartado e logado (DEBUG); a validação de relay (op 11/23) segue estrita como no Rust. | `PeerConnectorTest` (2) |
-| N2 | M | `ACCEPTOR_RELAY_ALLOWED` era estático e, uma vez desligado por uma recusa até 5 s após qualquer pedido de relay, nunca mais voltava (dura semanas num servidor Paper): peers só-relay deixavam de alcançar o host. | `PeerConnector.attachmentStarted()` reabilita o guarda a cada nova anexação de controle (chamado no plugin e no mod); relógio injetável para teste. | `PeerConnectorTest` |
+| N2 | M | `ACCEPTOR_RELAY_ALLOWED` era estático e, uma vez desligado por uma recusa até 5 s após qualquer pedido de relay, nunca mais voltava (dura semanas num servidor Paper): peers só-relay deixavam de alcançar o host. | Na versão integrada (PR #23), o guarda é uma instância `AcceptorRelayGuard` por runtime: só um pedido de relay realmente enviado por aquela anexação pode ser desligado por uma objeção nos 5 s seguintes, o estado sobrevive à reanexação automática (paridade com o Rust) e é zerado em `/orb reconnect`, reload e reinício do mod. O guarda estático de `PeerConnector` foi removido. | `AcceptorRelayGuardTest` |
 | S3 | B (seg.) | O listener TCP direto (bind curinga, até 40 s) contava sockets brutos: 8 conexões de lixo de qualquer host impediam o peer legítimo de entrar. | `RendezvousGate`: só falhas contam no orçamento; limite de sockets não validados total (8) e por IP (4, com despejo do mais antigo); prazo do rendezvous 3 s → 2 s. | `PeerConnectorTest` |
 | C3 | M (perf.) | `FramedTcp.writeRaw` agendava e cancelava uma tarefa num timer global a cada frame enviado. | Timestamp por stream + um watchdog daemon único (varredura a cada 250 ms, encerra quando não há streams). Prazo de escrita preservado (5,0–5,25 s). | `TransportTest` (4), benchmark §5 |
 | B10 | testes | Testes espelhados do mod estavam defasados (5 classes) e 12 testes de classes espelhadas não existiam no mod (inclusive o da correção IPv6 da 2.3.2). | Testes alinhados/copiados para `clients/mod/core/src/test/.../openradplugin/`. | +12 classes |
@@ -126,7 +126,7 @@ Arquivos (nas duas árvores): `OpenRadClientMod`, `OpenRadController`, `OpenRadM
 | C4 | M (perf.) | Sob tráfego de presença, a varredura O(n) do roster rodava até 100×/s na thread de controle do cliente. | `PeerScanSchedule`: no máximo ~10/s, reação a peer novo em ≤100 ms. | `PeerScanScheduleTest` |
 | C12 | B | `synchronized` + `wait` em threads virtuais prendia carriers (Java 21). | `ReentrantLock` + `Condition` em `OutboundTcpStack.Connection` e `ClientPeerService`. | suítes existentes |
 | R1 | B | `runConnected` esperava workers para sempre engolindo interrupções; a identidade ficava presa e "Conectar" falhava sem explicação. | Espera limitada (15 s) com log; um "keeper" segura o lock da identidade até o worker travado terminar (nunca dois donos). | `PeerShutdownTest` (4) |
-| N2-call | — | Reset do guarda de relay por anexação. | `ClientVpnRuntime`. | — |
+| N2-call | — | Reset do guarda de relay por anexação. | `AcceptorRelayGuard` por runtime, recriado a cada `ClientVpnRuntime`. | `AcceptorRelayGuardTest` |
 
 ---
 
@@ -263,6 +263,17 @@ Executado pelo coordenador em 2026-11-15, com o código final, numa cópia isola
 | V3 ping da lista de servidores | não exercitado no cliente real (o quick play vai direto ao login); coberto pelo S3 do E2E headless |
 
 Achado do teste real: com o servidor Go local, o jogador caiu aos 70 s porque a sessão de controle do plugin estourou o timeout de 90 s. O servidor Go não responde heartbeats (`server/internal/server/control.go:145`); o serviço oficial responde op 4 com op 17. Uma cópia de teste do servidor que responde op 17 eliminou a queda. Isso expôs um comportamento de projeto que vale registrar: **uma queda da sessão de controle (coordenador) derruba todos os jogadores**, porque o runtime reinicia a geração inteira, embora o canal direto entre os peers continue funcionando. Ver §7.
+
+### 9.2 Revalidação da árvore integrada do PR #23 (2.4.0-dev)
+
+A branch `audit/minecraft-stability` combinou esta auditoria com mudanças anteriores (coordenadores personalizados, `AcceptorRelayGuard` por runtime, `ServerNameResolverMixin`, Linux/Windows/Rust/Go). Revalidação feita num clone limpo do PR:
+
+- As 37 correções foram conferidas mecanismo a mecanismo; todas estão presentes. A N2 foi substituída pelo `AcceptorRelayGuard` por runtime; o guarda estático que sobrou em `PeerConnector` foi removido.
+- **Regressão de integração corrigida:** a releitura estrita de `secrets.properties` (senha fora de 6..256 em qualquer chave rejeitava o arquivo inteiro) quebrava `ConfigEditorTest.aNetworkWithAnInvalidPasswordCanStillBeRemoved`. A leitura voltou a ser tolerante e só as senhas de redes ativadas são validadas.
+- **CI:** o workflow de compatibilidade Minecraft não disparava para PRs em `2.4.0-dev`; o gatilho foi incluído.
+- Alvos de `ServerNameResolverMixin` conferidos em 33/33 versões (mapeamentos oficiais; bytecode em 1.21.1, 26.1 e 26.3).
+- Testes locais: plugin 258 (1.20.6, 1.17.1 e 26.3), mod core 190, Fabric 50, builds Fabric 1.17.1/1.19.2/1.20.1/1.21.1/1.21.11 e modern 26.1/26.3, `check-sync`, Python 54, Go (`vet`, `test`, `gofmt`), Rust (`fmt`, 378 testes, `clippy -D warnings`), todos sem falhas.
+- **Teste real** com os JARs do PR **sem nenhum patch**: Paper 1.21.1 build 133 e cliente Minecraft 1.21.1, apontados para o servidor Go do PR por `coordinator.properties` e `modulus.bin` (plugin e mod). O plugin usou o coordenador personalizado apesar de `bootstrap-host` ainda apontar para o serviço oficial, guardando a identidade em `coordinators/127.0.0.1-17301-<fingerprint>`. O jogador entrou pelo IP virtual (`/26.221.175.139`), ficou 173 s com 7 teleportes longos, chat entregue, 0 retransmissões e sem queda (o servidor do PR responde heartbeats), voltou após `orb reconnect` e o Paper parou em 6,3 s sem erro. Um monitor de conexões não registrou nenhum tráfego dos processos de teste para fora do loopback nas portas da VPN nem para o coordenador oficial.
 
 ---
 
