@@ -33,11 +33,11 @@ public final class OpenRadClientMod implements ClientModInitializer {
     private static volatile OpenRadController controller;
     private boolean menuRequested;
     /** Render-thread only; weak so closed screens and their buttons are collected. */
-    private static final java.util.Map<Screen, WeakReference<Button>> MENU_BUTTONS = new java.util.WeakHashMap<>();
+    private static final MenuButtonRegistry<Screen, Button> MENU_BUTTONS =
+            new MenuButtonRegistry<>(OpenRadClientMod::openMenu);
 
     private static Button menuButton(Screen screen) {
-        var button = MENU_BUTTONS.get(screen);
-        return button == null ? null : button.get();
+        return MENU_BUTTONS.get(screen);
     }
 
     public static boolean usesVirtualRoute(String host) {
@@ -81,17 +81,18 @@ public final class OpenRadClientMod implements ClientModInitializer {
             // A window resize re-runs AFTER_INIT, but screens that only reposition their layout
             // (JoinMultiplayerScreen on 1.21+/26.x) keep their widgets: move the existing button
             // instead of stacking another one at every resize.
-            Button existing = menuButton(screen);
+            Button existing = MENU_BUTTONS.get(screen);
+            Button button;
             if (existing != null && screen.children().contains(existing)) {
                 existing.setX(width - 112);
                 existing.setY(5);
-                return;
+                button = existing;
+            } else {
+                button = MENU_BUTTONS.create(screen, open -> Button.builder(Component.literal("OpenRad"), clicked -> open.run())
+                        .bounds(width - 112, 5, 106, 20).build());
+                Screens.getButtons(screen).add(button);
             }
-            Button button = Button.builder(Component.literal("OpenRad"), clicked -> openMenu(screen))
-                    .bounds(width - 112, 5, 106, 20).build();
-            Screens.getButtons(screen).add(button);
-            MENU_BUTTONS.put(screen, new WeakReference<>(button));
-            // Rebuild the tooltip only when the phase changes, not on every client tick.
+            // Fabric recreates the per-screen events before every AFTER_INIT, resize included.
             String[] shown = {null};
             ScreenEvents.afterTick(screen).register(ignored -> {
                 if (menuButton(screen) != button) return; // replaced by a full re-init
@@ -114,7 +115,11 @@ public final class OpenRadClientMod implements ClientModInitializer {
                     return 1;
                 }))
                 .then(literal("connect").executes(ctx -> {
-                    boolean queued = controller.connect(controller.config());
+                    if (controller.invalidConfig()) {
+                        ctx.getSource().sendFeedback(feedback("openrad.menu.config_invalid"));
+                        return 0;
+                    }
+                    boolean queued = controller.connectSaved();
                     ctx.getSource().sendFeedback(feedback(queued ? "openrad.command.connecting" : "openrad.command.already_connecting"));
                     return 1;
                 }))
@@ -130,6 +135,7 @@ public final class OpenRadClientMod implements ClientModInitializer {
         var status = controller.status();
         source.sendFeedback(feedback("openrad.command.status", phase(status.phase()),
                 status.vip().isBlank() ? "—" : status.vip(), status.networks().size(), status.peers()));
+        if (!status.detail().isBlank()) source.sendFeedback(Component.literal("[OpenRad] ").append(Component.literal(status.detail())));
         String message = controller.messageKey();
         if (!message.isBlank()) source.sendFeedback(feedback(message));
         return 1;

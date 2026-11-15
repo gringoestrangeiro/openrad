@@ -5,6 +5,7 @@ import io.github.gringoestrangeiro.openradplugin.bridge.VirtualOrigins;
 import io.github.gringoestrangeiro.openradplugin.config.*;
 import io.github.gringoestrangeiro.openradplugin.diagnostics.HostDiagnostics;
 import io.github.gringoestrangeiro.openradplugin.network.MinecraftNetworks;
+import io.github.gringoestrangeiro.openradplugin.protocol.Wire;
 import io.github.gringoestrangeiro.openradplugin.runtime.GenerationGate;
 import io.github.gringoestrangeiro.openradplugin.runtime.VpnRuntime;
 import io.github.gringoestrangeiro.openradplugin.session.CoordinatorEndpoint;
@@ -19,6 +20,7 @@ import java.nio.file.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.BooleanSupplier;
 
 public final class OpenRadPlugin extends JavaPlugin {
     private volatile VpnSettings settings;
@@ -61,7 +63,7 @@ public final class OpenRadPlugin extends JavaPlugin {
             if (migrateLegacyData(getDataFolder().toPath()))
                 getLogger().info("Configuracao e identidade existentes migradas para OpenRad Plugin.");
         } catch (IOException e) {
-            getLogger().severe("Nao foi possivel migrar a configuracao antiga; VPN nao iniciada.");
+            getLogger().severe(legacyMigrationFailure(legacyDirectory(), getDataFolder().toPath(), e));
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -157,6 +159,22 @@ public final class OpenRadPlugin extends JavaPlugin {
         return false;
     }
 
+    private Path legacyDirectory() {
+        return getDataFolder().toPath().resolveSibling("OpenRadBridge");
+    }
+
+    static String legacyMigrationFailure(Path legacy, Path destination, IOException failure) {
+        return "Nao foi possivel migrar a configuracao antiga de "
+                + legacy
+                + " para "
+                + destination
+                + " ("
+                + safeReason(failure)
+                + "); VPN nao iniciada. Com o servidor parado, mova a pasta antiga para o novo nome"
+                + " ou copie identity.json e secrets.properties para a pasta nova (sem registrar"
+                + " outro dispositivo) e reinicie.";
+    }
+
     private VpnSettings readSettings() throws Exception {
         Path path = getDataFolder().toPath().resolve("config.yml");
         if (Files.isSymbolicLink(path) || Files.size(path) > 256 * 1024)
@@ -193,8 +211,33 @@ public final class OpenRadPlugin extends JavaPlugin {
         return parsed;
     }
 
+    static ConfigEditor.Validator offlinePublicPolicy(BooleanSupplier onlineMode) {
+        return (settings, yaml) ->
+                validateOfflinePublicNetworks(
+                        settings,
+                        onlineMode.getAsBoolean(),
+                        yaml.getBoolean("security.allow-insecure-offline-public-networks", false));
+    }
+
+    static void validateOfflinePublicNetworks(
+            VpnSettings settings, boolean onlineMode, boolean acknowledged) {
+        if (settings.bridge().enabled() && !onlineMode && !acknowledged
+                && hasPublicNetworks(settings)) {
+            throw new IllegalArgumentException("Offline-mode with public Minecraft VPN networks is unsafe. "
+                    + "Enable online-mode=true, or explicitly acknowledge the risk using "
+                    + "security.allow-insecure-offline-public-networks: true.");
+        }
+    }
+
+    private static boolean hasPublicNetworks(VpnSettings settings) {
+        return settings.networks().stream().anyMatch(network -> network.secret().isEmpty())
+                || (settings.minecraftNetworks().enabled()
+                        && !settings.minecraftNetworks().select().isEmpty());
+    }
+
     /**
      * Validates all replacements before stopping the current generation. Reload disconnects flows.
+     * A disabled replacement needs no secrets, so it always retires the running generation.
      */
     private void apply(VpnSettings replacement) throws Exception {
         synchronized (applyLock) {
@@ -203,7 +246,14 @@ public final class OpenRadPlugin extends JavaPlugin {
             CoordinatorEndpoint endpoint = replacement.bridge().enabled()
                     ? CoordinatorEndpoint.load(directory, replacement.bootstrap(), replacement.controlPort())
                     : null;
-            NetworkSecrets secrets = NetworkSecrets.load(directory);
+            if (!replacement.bridge().enabled()) {
+                try {
+                    NetworkSecrets.createIfMissing(directory);
+                } catch (IOException e) {
+                    getLogger().warning("secrets.properties nao pode ser criado: " + safeReason(e));
+                }
+            }
+            NetworkSecrets secrets = NetworkSecrets.loadFor(directory, replacement);
             boolean transferred = false;
             try {
                 secrets.validate(replacement);
@@ -329,7 +379,10 @@ public final class OpenRadPlugin extends JavaPlugin {
                 else {
                     var n = r.snapshot().networks();
                     sender.sendMessage(
-                            "[OpenRad Plugin] Redes: " + (n.isEmpty() ? "nenhuma" : String.join(", ", n)));
+                            "[OpenRad Plugin] Redes: "
+                                    + (n.isEmpty()
+                                            ? "nenhuma"
+                                            : Wire.neutralised(String.join(", ", n))));
                 }
             }
             case "minecraft" -> listMinecraft(sender, args);
@@ -383,6 +436,14 @@ public final class OpenRadPlugin extends JavaPlugin {
                                         VpnSettings replacement =
                                                 sub.equals("reload") ? readSettings() : settings;
                                         if (replacement == null) replacement = readSettings();
+                                        String disabled =
+                                                sub.equals("reconnect")
+                                                        ? reconnectDisabledMessage(replacement)
+                                                        : null;
+                                        if (disabled != null) {
+                                            reply(sender, disabled);
+                                            return;
+                                        }
                                         apply(replacement);
                                         reply(
                                                 sender,
@@ -406,6 +467,14 @@ public final class OpenRadPlugin extends JavaPlugin {
             }
         }
         return true;
+    }
+
+    /** Reconnecting has nothing to restart while the VPN is disabled; null when it is enabled. */
+    static String reconnectDisabledMessage(VpnSettings settings) {
+        return settings.bridge().enabled()
+                ? null
+                : "A VPN esta desativada (bridge.enabled: false); nada foi reiniciado."
+                        + " Use /orb enable para ligar.";
     }
 
     private static void help(CommandSender sender) {
@@ -467,60 +536,35 @@ public final class OpenRadPlugin extends JavaPlugin {
                     () -> {
                         if (generations.stopping()) return;
                         ConfigEditor editor = new ConfigEditor(
-                                getDataFolder().toPath(), getServer().getOnlineMode());
+                                getDataFolder().toPath(), getServer().getOnlineMode(),
+                                offlinePublicPolicy(getServer()::getOnlineMode));
                         char[] password = sub.equals("join") && args.size() == 3
                                 ? args.get(2).toCharArray()
                                 : null;
                         try {
-                            String done;
-                            switch (sub) {
-                                case "join" -> {
-                                    var result = editor.join(args.get(1), password);
-                                    done =
-                                            (result.added() ? "Rede adicionada: " : "Rede atualizada: ")
-                                                    + args.get(1)
-                                                    + (result.secretKey().isEmpty()
-                                                            ? " (publica, sem senha)"
-                                                            : " (senha salva em secrets.properties)");
-                                }
-                                case "leave" -> {
-                                    if (!editor.leave(args.get(1))) {
-                                        reply(sender, "Rede nao configurada: " + args.get(1));
-                                        return;
-                                    }
-                                    done = "Rede removida: " + args.get(1);
-                                }
-                                case "public" -> {
-                                    List<String> selectors = args.subList(1, args.size());
-                                    boolean off =
-                                            selectors.size() == 1
-                                                    && selectors.get(0).equalsIgnoreCase("off");
-                                    editor.publicSelection(off ? List.of() : selectors);
-                                    done =
-                                            off
-                                                    ? "Redes publicas desmarcadas (catalogo apenas listado)."
-                                                    : "Redes publicas selecionadas: "
-                                                            + String.join(", ", selectors);
-                                }
-                                case "force-relay" -> {
-                                    boolean forced = switchValue(args.get(1));
-                                    editor.forceRelay(forced);
-                                    done =
-                                            forced
-                                                    ? "Force relay ativado: somente relay, sem"
-                                                            + " conexoes diretas."
-                                                    : "Force relay desativado: selecao normal de"
-                                                            + " transporte.";
-                                }
-                                default -> {
-                                    editor.enabled(sub.equals("enable"));
-                                    done = sub.equals("enable") ? "VPN ativada." : "VPN desativada.";
-                                }
-                            }
-                            apply(readSettings());
-                            reply(sender, done + " Configuracao aplicada; veja /orb status.");
+                            String done =
+                                    editor.transaction(
+                                            edit -> setupEdit(edit, sub, args, password),
+                                            changed -> {
+                                                if (changed != null) apply(readSettings());
+                                            });
+                            if (done == null) reply(sender, "Rede nao configurada: " + args.get(1));
+                            else reply(sender, done + " Configuracao aplicada; veja /orb status.");
+                        } catch (ConfigEditor.RollbackException e) {
+                            reply(
+                                    sender,
+                                    "Operacao rejeitada: "
+                                            + safeReason(e.original())
+                                            + ". ATENCAO: "
+                                            + e.getMessage()
+                                            + "; confira config.yml e secrets.properties.");
                         } catch (Exception e) {
-                            reply(sender, "Operacao rejeitada: " + safeReason(e));
+                            reply(
+                                    sender,
+                                    "Operacao rejeitada: "
+                                            + safeReason(e)
+                                            + ". Nada foi gravado: config.yml e secrets.properties"
+                                            + " continuam como estavam.");
                         } finally {
                             if (password != null) Arrays.fill(password, '\0');
                         }
@@ -531,6 +575,47 @@ public final class OpenRadPlugin extends JavaPlugin {
         }
     }
 
+    /** Applies one setup command to the files; returns the success text, or null if nothing changed. */
+    private static String setupEdit(ConfigEditor editor, String sub, List<String> args, char[] password)
+            throws IOException {
+        switch (sub) {
+            case "join" -> {
+                var result = editor.join(args.get(1), password);
+                return (result.added() ? "Rede adicionada: " : "Rede atualizada: ")
+                        + args.get(1)
+                        + (result.secretKey().isEmpty()
+                                ? " (publica, sem senha)"
+                                : " (senha salva em secrets.properties)");
+            }
+            case "leave" -> {
+                return editor.leave(args.get(1)) ? "Rede removida: " + args.get(1) : null;
+            }
+            case "public" -> {
+                List<String> selectors = args.subList(1, args.size());
+                boolean off = selectors.size() == 1 && selectors.get(0).equalsIgnoreCase("off");
+                editor.publicSelection(off ? List.of() : selectors);
+                return off
+                        ? "Redes publicas desmarcadas (catalogo apenas listado)."
+                        : "Redes publicas selecionadas: " + String.join(", ", selectors);
+            }
+            case "force-relay" -> {
+                boolean forced = switchValue(args.get(1));
+                editor.forceRelay(forced);
+                return forced
+                        ? "Force relay ativado: somente relay, sem conexoes diretas."
+                        : "Force relay desativado: selecao normal de transporte.";
+            }
+            default -> {
+                editor.enabled(sub.equals("enable"));
+                return sub.equals("enable") ? "VPN ativada." : "VPN desativada.";
+            }
+        }
+    }
+
+    /**
+     * Only the server console and RCON may carry a password. Players, command blocks, command
+     * minecarts and /execute-proxied senders all leave the command text in logs or world data.
+     */
     static boolean acceptsNetworkPassword(CommandSender sender) {
         return sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender;
     }
@@ -555,7 +640,8 @@ public final class OpenRadPlugin extends JavaPlugin {
             if (c == '"') {
                 quoted = !quoted;
                 any = true;
-            } else if (c == '\\' && quoted && i + 1 < line.length()) {
+            } else if (c == '\\' && quoted && i + 1 < line.length()
+                    && (line.charAt(i + 1) == '"' || line.charAt(i + 1) == '\\')) {
                 current.append(line.charAt(++i));
             } else if (c == ' ' && !quoted) {
                 if (any || !current.isEmpty()) out.add(current.toString());
@@ -656,7 +742,7 @@ public final class OpenRadPlugin extends JavaPlugin {
                         "[OpenRad Plugin] "
                                 + entry.selector()
                                 + " | "
-                                + entry.name()
+                                + Wire.neutralised(entry.name())
                                 + " | membros informados: "
                                 + entry.reportedCount()
                                 + (joined ? " | na sessao" : ""));
@@ -670,18 +756,32 @@ public final class OpenRadPlugin extends JavaPlugin {
     }
 
     private void reply(CommandSender sender, String text) {
-        if (generations.stopping()) return;
+        if (generations.stopping() || !isEnabled()) return;
+        boolean delivered =
+                scheduled(
+                        () ->
+                                getServer()
+                                        .getScheduler()
+                                        .runTask(
+                                                this,
+                                                () -> {
+                                                    if (!generations.stopping())
+                                                        sender.sendMessage(
+                                                                "[OpenRad Plugin] " + text);
+                                                }));
+        if (!delivered) getLogger().fine("Reply cancelled during plugin shutdown");
+    }
+
+    /**
+     * Runs a scheduler call; false when the plugin is shutting down. Bukkit rejects tasks from a
+     * disabled plugin with IllegalPluginAccessException, which is not an IllegalStateException.
+     */
+    static boolean scheduled(Runnable scheduling) {
         try {
-            getServer()
-                    .getScheduler()
-                    .runTask(
-                            this,
-                            () -> {
-                                if (!generations.stopping())
-                                    sender.sendMessage("[OpenRad Plugin] " + text);
-                            });
-        } catch (IllegalPluginAccessException e) {
-            getLogger().fine("Reply cancelled during plugin shutdown");
+            scheduling.run();
+            return true;
+        } catch (IllegalStateException | org.bukkit.plugin.IllegalPluginAccessException e) {
+            return false;
         }
     }
 

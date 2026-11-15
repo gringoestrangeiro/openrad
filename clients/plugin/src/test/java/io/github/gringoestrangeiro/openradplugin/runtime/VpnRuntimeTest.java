@@ -5,6 +5,7 @@ import static io.github.gringoestrangeiro.openradplugin.protocol.Wire.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.github.gringoestrangeiro.openradplugin.bridge.VirtualTcpBridge;
 import io.github.gringoestrangeiro.openradplugin.config.*;
 import io.github.gringoestrangeiro.openradplugin.crypto.Identity;
 import io.github.gringoestrangeiro.openradplugin.link.*;
@@ -611,7 +612,13 @@ class VpnRuntimeTest {
                     await(() -> runtime.lanSnapshot().sent() == 1);
                 }
                 VirtualClient client = new VirtualClient(remoteChannel);
+                long synSent = System.nanoTime();
                 client.handshake();
+                long handshakeMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - synSent);
+                System.out.println("idle peer SYN to SYN-ACK through the worker loop: " + handshakeMillis + " ms");
+                assertTrue(
+                        handshakeMillis < 150,
+                        "an idle peer must not wait for its long poll: " + handshakeMillis + " ms");
                 client.echo("hello synthetic backend".getBytes(StandardCharsets.UTF_8));
                 Thread.sleep(350);
                 assertTrue(runtime.snapshot().peers().getFirst().connected(), logs.toString());
@@ -725,6 +732,138 @@ class VpnRuntimeTest {
             control.get(3, TimeUnit.SECONDS);
         } finally {
             disconnect.countDown();
+        }
+    }
+
+    private VpnRuntime runtimeWithPeerThreads(
+            Service service, List<String> logs, ThreadFactory peerThreads) throws IOException {
+        return new VpnRuntime(
+                settings(service.listener.getLocalPort(), 25565, false),
+                directory,
+                NetworkSecrets.load(directory),
+                logs::add,
+                SyntheticControlService.modulus(),
+                peerThreads);
+    }
+
+    @Test
+    void hostThreadLimitFailsOnlyThePeerAttemptAndKeepsTheAttachment() throws Exception {
+        saveIdentity();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        AtomicInteger attempts = new AtomicInteger();
+        try (Service service = new Service();
+                VpnRuntime runtime =
+                        runtimeWithPeerThreads(
+                                service,
+                                logs,
+                                task -> {
+                                    attempts.incrementAndGet();
+                                    throw new OutOfMemoryError("unable to create native thread");
+                                })) {
+            var control =
+                    service.jobs.submit(
+                            () -> {
+                                var attached = service.authenticate(4);
+                                service.attach(attached, membership(LOCAL_IP, true, false, 1, 0));
+                                service.serve(attached);
+                                return null;
+                            });
+            runtime.start();
+            await(
+                    () ->
+                            runtime.snapshot().phase().equals("CONNECTED")
+                                    && runtime.snapshot().lastFailure().contains("peer worker threads"));
+            assertTrue(runtime.snapshot().lastFailure().contains("unable to create native thread"));
+            Thread.sleep(700);
+            assertEquals("CONNECTED", runtime.snapshot().phase(), "the control thread must survive");
+            assertEquals(1, service.accepts.get(), "no reconnect is needed for a failed peer worker");
+            assertEquals(1, attempts.get(), "the failed peer backs off instead of being retried");
+            assertEquals(
+                    1,
+                    logs.stream().filter(line -> line.contains("Could not start a peer worker")).count(),
+                    logs.toString());
+            assertEquals(1, runtime.reachabilitySnapshot().backingOff());
+            stopped(runtime);
+            control.get(3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void unexpectedErrorOnTheControlThreadEndsInVisibleRetryAndReconnects() throws Exception {
+        saveIdentity();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        try (Service service = new Service();
+                VpnRuntime runtime =
+                        runtimeWithPeerThreads(
+                                service,
+                                logs,
+                                task -> {
+                                    throw new InternalError("injected control failure");
+                                })) {
+            var control =
+                    service.jobs.submit(
+                            () -> {
+                                for (int i = 0; i < 2; i++) {
+                                    var attached = service.authenticate(4);
+                                    service.attach(
+                                            attached, membership(LOCAL_IP, true, false, 1, 0));
+                                    service.serve(attached);
+                                }
+                                return null;
+                            });
+            runtime.start();
+            await(() -> service.accepts.get() >= 2);
+            assertTrue(
+                    logs.stream()
+                            .anyMatch(
+                                    line ->
+                                            line.contains("VPN session interrupted")
+                                                    && line.contains("unexpected InternalError")
+                                                    && line.contains("injected control failure")),
+                    logs.toString());
+            stopped(runtime);
+            control.cancel(true);
+        }
+    }
+
+    @Test
+    void deadBridgeIsNoticedAndTheSessionIsReestablished() throws Exception {
+        saveIdentity();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        try (Service service = new Service();
+                VpnRuntime runtime = runtime(service, 25565, false, logs)) {
+            var control =
+                    service.jobs.submit(
+                            () -> {
+                                for (int i = 0; i < 2; i++) {
+                                    var attached = service.authenticate(4);
+                                    service.attach(
+                                            attached, membership(LOCAL_IP, false, false, 0, 0));
+                                    service.serve(attached);
+                                }
+                                return null;
+                            });
+            runtime.start();
+            await(() -> runtime.snapshot().phase().equals("CONNECTED"));
+            VirtualTcpBridge first = runtime.bridge;
+            assertNotNull(first);
+            first.close(); // The selector thread ending is what a fatal bridge error looks like.
+            await(() -> service.accepts.get() >= 2);
+            assertTrue(
+                    logs.stream()
+                            .anyMatch(
+                                    line ->
+                                            line.contains("VPN session interrupted")
+                                                    && line.contains("virtual TCP bridge stopped")),
+                    logs.toString());
+            await(
+                    () ->
+                            runtime.snapshot().phase().equals("CONNECTED")
+                                    && runtime.bridge != null
+                                    && runtime.bridge != first
+                                    && runtime.bridge.isRunning());
+            stopped(runtime);
+            control.cancel(true);
         }
     }
 
@@ -1045,6 +1184,25 @@ class VpnRuntimeTest {
             }
             assertArrayEquals(payload, received.toByteArray());
         }
+    }
+
+    @Test
+    void peerFrameQueueHoldsTwoWindowsOfSeveralFlowsAndCountsEveryDroppedFrame() {
+        // A 15.6 ms OS timer makes one worker drain period absorb ~90 frames per saturated flow; the
+        // former 256 slots were outgrown by a single flow plus its acknowledgements (E2E S5 stall).
+        assertTrue(VpnRuntime.FRAME_QUEUE_CAPACITY >= 4 * 90, "capacity " + VpnRuntime.FRAME_QUEUE_CAPACITY);
+        VpnRuntime.FrameQueue queue = new VpnRuntime.FrameQueue(3);
+        for (int i = 0; i < 3; i++) assertTrue(queue.offer(new byte[] {(byte) i}));
+        assertFalse(queue.offer(new byte[] {9}));
+        assertEquals(1, queue.dropped());
+        assertEquals(0, queue.peek()[0]);
+        assertEquals(0, queue.poll()[0]);
+        assertTrue(queue.offer(new byte[] {10}));
+        assertEquals(3, queue.size());
+        queue.close();
+        assertTrue(queue.isEmpty());
+        assertFalse(queue.offer(new byte[] {11}), "a closed worker accepts nothing");
+        assertEquals(2, queue.dropped());
     }
 
     @FunctionalInterface

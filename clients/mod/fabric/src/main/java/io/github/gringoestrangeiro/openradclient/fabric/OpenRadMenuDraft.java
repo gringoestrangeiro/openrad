@@ -2,6 +2,8 @@ package io.github.gringoestrangeiro.openradclient.fabric;
 
 import io.github.gringoestrangeiro.openradclient.ClientConfig;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /** Unsaved menu state; returning from a child screen never writes a configuration. */
 public final class OpenRadMenuDraft {
@@ -21,6 +23,15 @@ public final class OpenRadMenuDraft {
         maxNetworks = config.maxNetworks();
         forceRelay = config.forceRelay();
     }
+    /** A draft plus whether the configuration it was taken from was still loading. */
+    record Opening(OpenRadMenuDraft draft, boolean pending) {}
+
+    /** Reads initialization first: a config loaded after the read is replaced once pending clears. */
+    static Opening opening(BooleanSupplier initialized, Supplier<ClientConfig> config) {
+        boolean ready = initialized.getAsBoolean();
+        return new Opening(new OpenRadMenuDraft(config.get()), !ready);
+    }
+
     public ClientConfig config() {
         return new ClientConfig(autoConnect, networks, maxPeers, maxConnections, timeout, selectors, maxNetworks, forceRelay);
     }

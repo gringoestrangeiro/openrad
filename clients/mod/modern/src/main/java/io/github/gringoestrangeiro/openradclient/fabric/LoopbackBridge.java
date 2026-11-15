@@ -11,6 +11,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
@@ -39,14 +41,24 @@ public final class LoopbackBridge implements AutoCloseable {
     }
     /** Port 0 cannot accept connections: a connect attempt fails immediately, on loopback only. */
     public static final InetSocketAddress UNREACHABLE = new InetSocketAddress(LOOPBACK, 0);
+    /**
+     * Backstop for a local client that stays connected without any traffic in either direction.
+     * Closes, errors and either side's EOF already tear a lease down; Minecraft itself times out a
+     * silent server after 30 s, so this only has to reclaim a slot from a hung or half-open client.
+     */
+    static final Duration IDLE_TIMEOUT = Duration.ofMinutes(5);
     private final TunnelOpener opener;
+    private final long idleNanos;
     private final Semaphore capacity;
     private final Set<Lease> leases = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public LoopbackBridge(TunnelOpener opener) { this(opener, 16); }
-    public LoopbackBridge(TunnelOpener opener, int maximumConnections) {
+    public LoopbackBridge(TunnelOpener opener, int maximumConnections) { this(opener, maximumConnections, IDLE_TIMEOUT); }
+    LoopbackBridge(TunnelOpener opener, int maximumConnections, Duration idleTimeout) {
         if (maximumConnections < 1 || maximumConnections > 64) throw new IllegalArgumentException("connection limit");
+        if (idleTimeout.toMillis() < 1 || idleTimeout.toMillis() > Integer.MAX_VALUE) throw new IllegalArgumentException("idle timeout");
+        this.idleNanos = idleTimeout.toNanos();
         this.opener = java.util.Objects.requireNonNull(opener);
         this.capacity = new Semaphore(maximumConnections);
     }
@@ -151,18 +163,18 @@ public final class LoopbackBridge implements AutoCloseable {
             socket.setTcpNoDelay(true);
             socket.setReceiveBufferSize(16_384);
             socket.setSendBufferSize(16_384);
-            socket.setSoTimeout(60_000);
+            socket.setSoTimeout((int) (idleNanos / 1_000_000L));
             Tunnel tunnel = opener.open(address, port);
             if (!lease.attach(tunnel)) return;
             pumpsStarted = true;
             Thread.ofVirtual().name("openrad-minecraft-upload").start(() -> {
                 try {
-                    copy(socket.getInputStream(), tunnel.output());
+                    copy(lease, socket.getInputStream(), tunnel.output());
                     tunnel.shutdownOutput();
                     lease.pumpFinished();
                 } catch (IOException | RuntimeException ignored) { lease.close(); }
             });
-            copy(tunnel.input(), socket.getOutputStream());
+            copy(lease, tunnel.input(), socket.getOutputStream());
             socket.shutdownOutput();
             lease.pumpFinished();
         } catch (IOException | RuntimeException ignored) {
@@ -171,10 +183,19 @@ public final class LoopbackBridge implements AutoCloseable {
         } finally { if (!pumpsStarted) lease.close(); }
     }
 
-    private static void copy(InputStream input, OutputStream output) throws IOException {
+    /** A read timeout only ends the lease when neither direction has moved data for the whole idle period. */
+    private void copy(Lease lease, InputStream input, OutputStream output) throws IOException {
         byte[] buffer = new byte[16_384];
-        for (int count; (count = input.read(buffer)) >= 0;) {
+        for (;;) {
+            int count;
+            try { count = input.read(buffer); }
+            catch (SocketTimeoutException timeout) {
+                if (System.nanoTime() - lease.lastActivity >= idleNanos) throw timeout;
+                continue;
+            }
+            if (count < 0) return;
             if (count == 0) continue;
+            lease.lastActivity = System.nanoTime();
             output.write(buffer, 0, count);
             output.flush();
         }
@@ -191,6 +212,7 @@ public final class LoopbackBridge implements AutoCloseable {
         private Tunnel tunnel;
         private Thread worker;
         private int finishedPumps;
+        private volatile long lastActivity = System.nanoTime();
         private Lease(ServerSocket listener) {
             this.listener = listener;
             this.endpoint = new InetSocketAddress(LOOPBACK, listener.getLocalPort());

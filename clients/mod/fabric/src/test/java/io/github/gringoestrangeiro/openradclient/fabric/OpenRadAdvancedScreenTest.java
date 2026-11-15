@@ -9,6 +9,9 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenRadAdvancedScreenTest {
     @Test void openingLongSavedNamesOrSelectorsPreservesEveryEntry() throws Exception {
@@ -33,6 +36,42 @@ class OpenRadAdvancedScreenTest {
                     256, 16, 20, exactNames ? List.of() : retained, 256);
             assertEquals(original, applied, exactNames ? "exact names" : "selectors");
         }
+    }
+
+    @Test void clearingBothNetworkListsTurnsAutoConnectOffInsteadOfFailingDone() {
+        var cleared = OpenRadAdvancedScreen.parse(true, "", "256", "16", "20", "  ", "256", false);
+        assertFalse(cleared.autoConnect());
+        assertTrue(cleared.networks().isEmpty());
+        assertTrue(cleared.minecraftSelectors().isEmpty());
+    }
+
+    @Test void autoConnectStaysOnWhileAnyNetworkRemains() {
+        assertTrue(OpenRadAdvancedScreen.parse(true, "Minecraft [English 1]", "256", "16", "20", "", "256", false).autoConnect());
+        assertTrue(OpenRadAdvancedScreen.parse(true, "", "256", "16", "20", "all-ptbr", "256", true).autoConnect());
+        assertFalse(OpenRadAdvancedScreen.parse(false, "a", "256", "16", "20", "", "256", false).autoConnect());
+    }
+
+    @Test void genuinelyInvalidInputIsStillRejected() {
+        assertThrows(IllegalArgumentException.class,
+                () -> OpenRadAdvancedScreen.parse(true, "a;;b", "256", "16", "20", "", "256", false));
+        assertThrows(IllegalArgumentException.class,
+                () -> OpenRadAdvancedScreen.parse(false, "a", "many", "16", "20", "", "256", false));
+        assertThrows(IllegalArgumentException.class,
+                () -> OpenRadAdvancedScreen.parse(false, "a", "0", "16", "20", "", "256", false));
+    }
+
+    @Test void editingAFieldClearsTheErrorFlag() throws Exception {
+        var screen = headlessScreen();
+        var invalid = OpenRadAdvancedScreen.class.getDeclaredField("invalid");
+        invalid.setAccessible(true);
+        var field = OpenRadAdvancedScreen.class.getDeclaredMethod("field",
+                int.class, int.class, int.class, String.class, String.class, int.class);
+        field.setAccessible(true);
+        var box = (EditBox) field.invoke(screen, 0, 0, 100, "openrad.menu.exact_networks", "a", 16);
+        assertFalse(invalid.getBoolean(screen), "building the field is not an edit");
+        invalid.setBoolean(screen, true);
+        box.setValue("b");
+        assertFalse(invalid.getBoolean(screen));
     }
 
     private static OpenRadAdvancedScreen headlessScreen() throws Exception {

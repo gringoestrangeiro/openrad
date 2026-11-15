@@ -70,7 +70,9 @@ public final class VpnRuntime implements AutoCloseable {
     private final AcceptorRelayGuard relayGuard = new AcceptorRelayGuard();
     private final ThreadPoolExecutor peerExecutor;
     private final Thread worker;
-    private volatile VirtualTcpBridge bridge;
+    volatile VirtualTcpBridge bridge;
+    /** Why peer workers could not be started recently; shown with the CONNECTED snapshot. */
+    private volatile String peerStartProblem = "";
     private volatile LanDiscovery discovery;
     private volatile String discoveryState = "OFFLINE";
     private volatile Snapshot snapshot =
@@ -95,8 +97,9 @@ public final class VpnRuntime implements AutoCloseable {
             NetworkSecrets secrets,
             Consumer<String> log,
             byte[] serviceModulus) {
-        this(settings, directory, secrets, log, new CoordinatorEndpoint(
-                settings.bootstrap(), settings.controlPort(), serviceModulus, directory));
+        this(settings, directory, secrets, log,
+                new CoordinatorEndpoint(settings.bootstrap(), settings.controlPort(), serviceModulus, directory),
+                io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("orb-peer-"));
     }
 
     public VpnRuntime(
@@ -105,6 +108,29 @@ public final class VpnRuntime implements AutoCloseable {
             NetworkSecrets secrets,
             Consumer<String> log,
             CoordinatorEndpoint coordinator) {
+        this(settings, directory, secrets, log, coordinator,
+                io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("orb-peer-"));
+    }
+
+    VpnRuntime(
+            VpnSettings settings,
+            Path directory,
+            NetworkSecrets secrets,
+            Consumer<String> log,
+            byte[] serviceModulus,
+            ThreadFactory peerThreads) {
+        this(settings, directory, secrets, log,
+                new CoordinatorEndpoint(settings.bootstrap(), settings.controlPort(), serviceModulus, directory),
+                peerThreads);
+    }
+
+    VpnRuntime(
+            VpnSettings settings,
+            Path directory,
+            NetworkSecrets secrets,
+            Consumer<String> log,
+            CoordinatorEndpoint coordinator,
+            ThreadFactory peerThreads) {
         this.settings = settings;
         this.directory = directory;
         this.secrets = secrets;
@@ -117,7 +143,7 @@ public final class VpnRuntime implements AutoCloseable {
                         0,
                         TimeUnit.SECONDS,
                         new SynchronousQueue<>(),
-                        io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.virtualFactory("orb-peer-"),
+                        peerThreads,
                         new ThreadPoolExecutor.AbortPolicy());
         worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("OpenRad Plugin-control", this::run);
     }
@@ -199,11 +225,12 @@ public final class VpnRuntime implements AutoCloseable {
                                                 this::own,
                                                 coordinator.modulus())) {
                             own(attached.session());
+                            PeerConnector.attachmentStarted();
                             attachedAt = System.nanoTime();
                             runAttached(identity, attached);
                             failures = 0;
                         }
-                    } catch (Exception e) {
+                    } catch (Exception | Error e) {
                         if (stopped.get()) break;
                         String reason = safeFailure(e);
                         if (e instanceof ServerDisconnect) reason += " during " + controlStage;
@@ -255,7 +282,7 @@ public final class VpnRuntime implements AutoCloseable {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             if (!stopped.get()) {
                 String reason = safeFailure(e);
                 publish("FAILED", "", List.of(), reason);
@@ -409,7 +436,7 @@ public final class VpnRuntime implements AutoCloseable {
                                     catalog.entries(),
                                     catalog.selected(),
                                     problems);
-                    log.accept("Public Minecraft network timed out: " + n.name()
+                    log.accept("Public Minecraft network timed out: " + neutralised(n.name())
                             + "; continuing with remaining networks.");
                 } catch (NetworkJoin.Refused e) {
                     if (!automatic.contains(n.name())) {
@@ -420,7 +447,7 @@ public final class VpnRuntime implements AutoCloseable {
                         networkProblems = List.copyOf(problems);
                         log.accept(
                                 "Configured network not joined: "
-                                        + n.name()
+                                        + neutralised(n.name())
                                         + " - "
                                         + e.getMessage());
                         continue;
@@ -436,7 +463,7 @@ public final class VpnRuntime implements AutoCloseable {
                                     problems);
                     log.accept(
                             "Public Minecraft network refused join: "
-                                    + n.name()
+                                    + neutralised(n.name())
                                     + " ("
                                     + e.code()
                                     + ")");
@@ -456,32 +483,20 @@ public final class VpnRuntime implements AutoCloseable {
             controlStage = "connected session";
             int ip = ipInt(attached.vip());
             var b = settings.bridge();
-            var limits =
-                    new VirtualTcpBridge.Limits(
-                            b.maxPlayers(),
-                            Math.min(b.maxPlayers(), 8),
-                            2048,
-                            256 * 1024,
-                            64L * 1024 * 1024,
-                            Duration.ofSeconds(b.timeoutSeconds()),
-                            Duration.ofSeconds(b.timeoutSeconds()),
-                            Duration.ofMinutes(3),
-                            Duration.ofMinutes(2),
-                            Duration.ofSeconds(30),
-                            8,
-                            b.maxPendingTcp());
-            bridge =
+            VirtualTcpBridge stack =
                     new VirtualTcpBridge(
                             ip,
                             TunnelCodec.mac(attached.vip()),
                             b.virtualPort(),
                             new InetSocketAddress(literal(b.backendHost()), b.backendPort()),
-                            limits,
+                            bridgeLimits(b),
                             (rid, frame) -> {
                                 PeerWorker w = workers.get(rid);
-                                if (w != null && w.channel != null) w.frames.offer(frame);
+                                if (w != null && w.channel != null) w.queue(frame);
                             },
-                            b.forwardPlayerAddress() ? VirtualOrigins.shared() : null);
+                            b.forwardPlayerAddress() ? VirtualOrigins.shared() : null,
+                            log);
+            bridge = stack;
             discoveryState = settings.lanDiscovery() ? "UNAVAILABLE" : "DISABLED";
             if (settings.lanDiscovery()) {
                 try {
@@ -499,8 +514,14 @@ public final class VpnRuntime implements AutoCloseable {
             PeerReachability attempts = new PeerReachability();
             reachability = attempts;
             long discoveryReport = System.nanoTime() + Duration.ofSeconds(60).toNanos();
-            long nextPeerScan = 0L, nextSnapshot = 0L;
+            long nextPeerScan = 0L, nextSnapshot = 0L, lastStartFailureLog = 0L;
             while (!stopped.get()) {
+                if (!stack.isRunning()) {
+                    Throwable cause = stack.failure();
+                    throw new IOException(
+                            "virtual TCP bridge stopped"
+                                    + (cause == null ? "" : " (" + cause + ")"));
+                }
                 long now = System.nanoTime();
                 if (now >= nextPeerScan) {
                     nextPeerScan = now + Duration.ofMillis(200).toNanos();
@@ -601,10 +622,30 @@ public final class VpnRuntime implements AutoCloseable {
                     attempts.started(p.rid());
                     try {
                         peerExecutor.execute(w);
+                        peerStartProblem = "";
                     } catch (RejectedExecutionException e) {
                         workers.remove(p.rid(), w);
                         w.close();
                         attempts.failed(p.rid(), PeerReachability.Failure.OTHER);
+                    } catch (OutOfMemoryError e) {
+                        // The host refused another thread (container or OS limit). That costs
+                        // this peer an attempt, not the whole attachment.
+                        workers.remove(p.rid(), w);
+                        w.close();
+                        attempts.failed(p.rid(), PeerReachability.Failure.OTHER);
+                        peerStartProblem =
+                                "cannot start peer worker threads (" + e.getMessage() + ")";
+                        if (System.nanoTime() - lastStartFailureLog >= START_FAILURE_LOG_INTERVAL
+                                || lastStartFailureLog == 0) {
+                            lastStartFailureLog = System.nanoTime();
+                            log.accept(
+                                    "Could not start a peer worker thread ("
+                                            + e
+                                            + "); the host may have reached its thread limit. The"
+                                            + " peer will be retried with backoff; the VPN stays"
+                                            + " connected.");
+                        }
+                        break;
                     }
                 }
                 } // A network roster is stable between scans; control records are still handled promptly.
@@ -651,7 +692,7 @@ public final class VpnRuntime implements AutoCloseable {
                             membership.networks().values().stream()
                                     .map(Membership.Network::name)
                                     .toList(),
-                            "");
+                            peerStartProblem);
                 }
             }
         }
@@ -814,9 +855,104 @@ public final class VpnRuntime implements AutoCloseable {
                         stack == null ? null : stack.snapshot());
     }
 
+    private static final long START_FAILURE_LOG_INTERVAL = Duration.ofMinutes(1).toNanos();
     private static final Duration IDLE_POLL = Duration.ofMillis(20),
             ACTIVE_POLL = Duration.ofMillis(2);
+    /** Poll of a peer with no virtual TCP flow: inbound data still wakes the read at once. */
+    private static final Duration QUIET_POLL = Duration.ofMillis(200);
     private static final long ACTIVE_WINDOW = Duration.ofMillis(250).toNanos();
+
+    /**
+     * How long a peer worker may block waiting for tunnel data. Only frames the bridge produces
+     * wait for the next poll, because they reach the worker through a queue. Without a flow and
+     * without queued frames the bridge only answers inbound frames, and those wake the read, so
+     * an idle peer sleeps until its next keepalive or LAN advertisement is due.
+     */
+    static Duration pollTimeout(
+            boolean queued, boolean flows, long sinceTrafficNanos, long untilDutyNanos) {
+        if (queued || sinceTrafficNanos < ACTIVE_WINDOW) return ACTIVE_POLL;
+        if (flows) return IDLE_POLL;
+        return Duration.ofNanos(
+                Math.max(ACTIVE_POLL.toNanos(), Math.min(QUIET_POLL.toNanos(), untilDutyNanos)));
+    }
+
+    /**
+     * Per-peer flow cap scales with the global cap so a few members cannot hold every slot, but a
+     * member always keeps two (server-list ping plus login). Half-open flows, whose handshake
+     * never completes, are limited to two per member and expire sooner than established flows.
+     */
+    static VirtualTcpBridge.Limits bridgeLimits(BridgeSettings b) {
+        int perPeer = Math.min(b.maxPlayers(), Math.min(8, Math.max(2, b.maxPlayers() / 4)));
+        return new VirtualTcpBridge.Limits(
+                b.maxPlayers(),
+                perPeer,
+                2048,
+                256 * 1024,
+                64L * 1024 * 1024,
+                Duration.ofSeconds(b.timeoutSeconds()),
+                Duration.ofSeconds(Math.min(b.timeoutSeconds(), HANDSHAKE_SECONDS)),
+                Duration.ofMinutes(3),
+                Duration.ofMinutes(2),
+                Duration.ofSeconds(30),
+                8,
+                b.maxPendingTcp(),
+                Math.min(perPeer, VirtualTcpBridge.Limits.DEFAULT_HALF_OPEN_PER_PEER));
+    }
+
+    private static final int HANDSHAKE_SECONDS = 8;
+
+    /**
+     * Frames queued per peer for the worker. The worker drains between reads, and an OS timer of
+     * 15.6 ms (Windows default) makes one drain period absorb two full windows of every active flow:
+     * about 90 frames per flow, for up to {@code maxConnectionsPerPeer} flows. The previous 256 was
+     * outgrown by a single saturated flow plus acknowledgements; a lost burst is then recovered
+     * one RTO per segment and a bulk transfer stalls.
+     */
+    static final int FRAME_QUEUE_CAPACITY = 512;
+    private static final long DROP_LOG_INTERVAL = Duration.ofSeconds(10).toNanos();
+
+    /** Bounded, non-blocking hand-off of bridge frames to one peer worker; counts what it drops. */
+    static final class FrameQueue {
+        private final ArrayBlockingQueue<byte[]> queue;
+        private final java.util.concurrent.atomic.LongAdder dropped =
+                new java.util.concurrent.atomic.LongAdder();
+        private volatile boolean closed;
+
+        FrameQueue(int capacity) {
+            queue = new ArrayBlockingQueue<>(capacity);
+        }
+
+        boolean offer(byte[] frame) {
+            if (!closed && queue.offer(frame)) return true;
+            dropped.increment();
+            return false;
+        }
+
+        byte[] peek() {
+            return queue.peek();
+        }
+
+        byte[] poll() {
+            return queue.poll();
+        }
+
+        boolean isEmpty() {
+            return queue.isEmpty();
+        }
+
+        int size() {
+            return queue.size();
+        }
+
+        long dropped() {
+            return dropped.sum();
+        }
+
+        void close() {
+            closed = true;
+            queue.clear();
+        }
+    }
 
     private final class PeerWorker implements Runnable, AutoCloseable {
         private final Identity identity;
@@ -834,7 +970,8 @@ public final class VpnRuntime implements AutoCloseable {
         private final Set<AutoCloseable> resources =
                 Collections.newSetFromMap(new IdentityHashMap<>());
         // Room for a full burst: up to 8 flows per peer, each with ~45 segments in flight.
-        private final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(256);
+        private final FrameQueue frames = new FrameQueue(FRAME_QUEUE_CAPACITY);
+        private long lastDropLog;
         private boolean closed;
         private volatile PeerChannel channel;
 
@@ -860,6 +997,21 @@ public final class VpnRuntime implements AutoCloseable {
             this.attempts = reachability;
             this.uesHosts = List.copyOf(uesHosts);
             this.allowedNetworks = allowedNetworks;
+        }
+
+        /** Selector-thread entry: never blocks; a frame that does not fit is lost to TCP and reported. */
+        void queue(byte[] frame) {
+            if (frames.offer(frame)) return;
+            long now = System.nanoTime();
+            if (now - lastDropLog >= DROP_LOG_INTERVAL || lastDropLog == 0) {
+                lastDropLog = now;
+                log.accept(
+                        "Outbound frame queue of peer "
+                                + Long.toUnsignedString(peer.rid())
+                                + " is full; "
+                                + frames.dropped()
+                                + " frame(s) dropped so far and left to TCP retransmission.");
+            }
         }
 
         private synchronized void ownResource(AutoCloseable resource) {
@@ -935,12 +1087,14 @@ public final class VpnRuntime implements AutoCloseable {
                     }
                     // Drain until the queue is empty or the transport window is full; the bound
                     // only keeps a flood from starving the receive side.
+                    boolean backlog = false;
                     for (int i = 0; i < 256; i++) {
                         byte[] frame = frames.peek();
                         if (frame == null) break;
                         if (!connected.sendFrame(frame)) break;
-                        frames.remove();
+                        frames.poll();
                         lastTraffic = now;
+                        backlog = i == 255 && !frames.isEmpty();
                     }
                     if (System.nanoTime() >= keepalive) {
                         if (connected.send(TunnelCodec.keepalive(seq + 1, false))) {
@@ -950,9 +1104,17 @@ public final class VpnRuntime implements AutoCloseable {
                     }
                     // Bridge frames are only drained between reads: while traffic flows, poll
                     // briefly so server-to-player data is not held for a whole 20 ms wait.
-                    boolean busy =
-                            !frames.isEmpty() || System.nanoTime() - lastTraffic < ACTIVE_WINDOW;
-                    if (connected.ready(busy ? ACTIVE_POLL : IDLE_POLL)) {
+                    long until = keepalive - System.nanoTime();
+                    if (lan != null && lastLan != 0)
+                        until = Math.min(until, lastLan + LanDiscovery.SEND_INTERVAL - System.nanoTime());
+                    Duration wait =
+                            pollTimeout(
+                                    !frames.isEmpty(),
+                                    stack != null && stack.activeFlows(peer.rid()) > 0,
+                                    System.nanoTime() - lastTraffic,
+                                    until);
+                    // A drain cut short by its batch bound continues at once, not after a coarse wait.
+                    if (connected.ready(backlog ? Duration.ZERO : wait)) {
                         var packet = connected.receivePacket();
                         lastPacket = System.nanoTime();
                         if (packet instanceof TunnelCodec.Keepalive k) {
@@ -1015,7 +1177,7 @@ public final class VpnRuntime implements AutoCloseable {
                 resources.clear();
             }
             owned.forEach(VpnRuntime::closeQuietly);
-            frames.clear();
+            frames.close();
             if (setup != null) setup.close();
         }
     }
@@ -1107,8 +1269,9 @@ public final class VpnRuntime implements AutoCloseable {
         }
     }
 
-    private static String safeFailure(Exception e) {
+    private static String safeFailure(Throwable e) {
         if (e instanceof IdentityLockBusy) return e.getMessage();
+        if (e instanceof Error) return "unexpected " + e.getClass().getSimpleName() + detail(e);
         return e instanceof java.net.SocketTimeoutException
                 ? "network timeout"
                 : e instanceof java.net.ConnectException
@@ -1126,7 +1289,7 @@ public final class VpnRuntime implements AutoCloseable {
      * This plugin's own messages never include passwords or credentials; show them so an
      * administrator can act (registration recovery, refused joins, limits), bounded in length.
      */
-    private static String detail(Exception e) {
+    private static String detail(Throwable e) {
         String m = e.getMessage();
         if (m == null || m.isBlank()) return "";
         m = m.replaceAll("\\p{Cntrl}", " ");

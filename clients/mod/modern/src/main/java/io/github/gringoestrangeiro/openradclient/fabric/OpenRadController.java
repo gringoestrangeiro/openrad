@@ -2,6 +2,7 @@ package io.github.gringoestrangeiro.openradclient.fabric;
 
 import io.github.gringoestrangeiro.openradclient.ClientConfig;
 import io.github.gringoestrangeiro.openradclient.ClientVpnRuntime;
+import io.github.gringoestrangeiro.openradclient.virtual.OutboundTcpStack;
 
 import io.netty.channel.ChannelFuture;
 
@@ -22,8 +23,52 @@ import java.util.logging.Logger;
 
 /** One serialized owner of config writes and runtime generations; UI calls never wait for I/O. */
 public final class OpenRadController implements AutoCloseable {
+    /** The runtime operations the controller needs; a seam so handover can be tested without a network. */
+    interface Engine extends AutoCloseable {
+        ClientVpnRuntime.Snapshot status();
+        ClientVpnRuntime.CatalogSnapshot minecraftCatalog();
+        List<ClientVpnRuntime.LanServer> lanServers();
+        OutboundTcpStack.Connection openTcp(Inet4Address destination, int port, Duration timeout) throws IOException;
+        boolean connect();
+        void disconnect();
+        boolean awaitStopped(Duration timeout) throws InterruptedException;
+        @Override void close();
+    }
+
+    @FunctionalInterface interface EngineFactory {
+        Engine create(ClientConfig config, Path stateDirectory, Logger logger);
+    }
+
+    private static final class RuntimeEngine implements Engine {
+        private final ClientVpnRuntime runtime;
+        RuntimeEngine(ClientConfig config, Path stateDirectory, Logger logger) {
+            runtime = new ClientVpnRuntime(config, stateDirectory, logger::info);
+        }
+        public ClientVpnRuntime.Snapshot status() { return runtime.status(); }
+        public ClientVpnRuntime.CatalogSnapshot minecraftCatalog() { return runtime.minecraftCatalog(); }
+        public List<ClientVpnRuntime.LanServer> lanServers() { return runtime.lanServers(); }
+        public OutboundTcpStack.Connection openTcp(Inet4Address destination, int port, Duration timeout) throws IOException {
+            return runtime.openTcp(destination, port, timeout);
+        }
+        public boolean connect() { return runtime.connect(); }
+        public void disconnect() { runtime.disconnect(); }
+        public boolean awaitStopped(Duration timeout) throws InterruptedException { return runtime.awaitStopped(timeout); }
+        public void close() { runtime.close(); }
+    }
+
+    /** The previous runtime did not stop in time; its identity is still owned, so nothing new may open it. */
+    private static final class StopTimeoutException extends IOException {
+        private final String messageKey;
+        StopTimeoutException(String messageKey, String detail) {
+            super(detail);
+            this.messageKey = messageKey;
+        }
+    }
+
     private final Path directory;
     private final Logger logger;
+    private final EngineFactory engines;
+    private final Duration stopTimeout;
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             // One admitted UI action plus a reserved shutdown task. close() can race
             // a queued action before the worker has dequeued it.
@@ -31,7 +76,9 @@ public final class OpenRadController implements AutoCloseable {
     private final AtomicBoolean busy = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile ClientConfig config = new ClientConfig(false, List.of());
-    private volatile ClientVpnRuntime runtime;
+    private volatile Engine runtime;
+    /** A closed runtime that has not finished stopping; only the worker touches it. */
+    private Engine stopping;
     private volatile LoopbackBridge bridge = new LoopbackBridge(this::openTunnel);
     private volatile String message = "openrad.menu.loading";
     private volatile ClientVpnRuntime.CatalogSnapshot previousCatalog;
@@ -39,8 +86,13 @@ public final class OpenRadController implements AutoCloseable {
     private volatile boolean invalidConfig;
 
     public OpenRadController(Path directory, Logger logger) {
+        this(directory, logger, RuntimeEngine::new, Duration.ofSeconds(15));
+    }
+    OpenRadController(Path directory, Logger logger, EngineFactory engines, Duration stopTimeout) {
         this.directory = directory;
         this.logger = logger;
+        this.engines = engines;
+        this.stopTimeout = stopTimeout;
     }
 
     public void initialize() {
@@ -52,7 +104,7 @@ public final class OpenRadController implements AutoCloseable {
                 if (closed.get()) return;
                 config = loaded;
                 replaceBridge(loaded);
-                runtime = new ClientVpnRuntime(loaded, directory.resolve("state"), logger::info);
+                runtime = engines.create(loaded, directory.resolve("state"), logger);
                 message = "";
                 if (loaded.autoConnect()) runtime.connect();
             } finally { initialized = true; }
@@ -61,6 +113,7 @@ public final class OpenRadController implements AutoCloseable {
 
     public ClientConfig config() { return config; }
     public boolean initialized() { return initialized; }
+    public boolean invalidConfig() { return invalidConfig; }
     public boolean busy() { return busy.get(); }
     public String messageKey() {
         if (busy()) return "openrad.menu.busy";
@@ -72,18 +125,22 @@ public final class OpenRadController implements AutoCloseable {
         return "openrad.command.connecting".equals(message) && !"CONNECTING".equals(phase)
                 ? "" : message;
     }
+    /** Failure and retry details are actionable; other phases already read well from the phase alone. */
+    static String visibleDetail(String phase, String detail) {
+        return ("FAILED".equals(phase) || "RETRY_WAIT".equals(phase)) && detail != null ? detail : "";
+    }
     public ClientVpnRuntime.Snapshot status() {
-        ClientVpnRuntime current = runtime;
+        Engine current = runtime;
         return current == null ? new ClientVpnRuntime.Snapshot("OFFLINE", "", List.of(), 0, "") : current.status();
     }
     public ClientVpnRuntime.CatalogSnapshot catalog() {
-        ClientVpnRuntime current = runtime;
+        Engine current = runtime;
         ClientVpnRuntime.CatalogSnapshot snapshot = current == null ? null : current.minecraftCatalog();
         if (snapshot != null && !snapshot.entries().isEmpty()) previousCatalog = snapshot;
         return snapshot == null || snapshot.entries().isEmpty() ? previousCatalog : snapshot;
     }
     public List<ClientVpnRuntime.LanServer> lanServers() {
-        ClientVpnRuntime current = runtime;
+        Engine current = runtime;
         return current == null ? List.of() : current.lanServers();
     }
     public InetSocketAddress route(InetSocketAddress destination) {
@@ -100,20 +157,37 @@ public final class OpenRadController implements AutoCloseable {
     }
 
     public boolean connect(ClientConfig draft) {
+        return submit(() -> connectNow(draft));
+    }
+    /**
+     * Connects with the configuration on disk. Unlike a menu draft, this never replaces a file that
+     * failed to load: only an explicit save from the menu may preserve and overwrite it.
+     */
+    public boolean connectSaved() {
         return submit(() -> {
-            apply(draft);
-            if (closed.get()) return;
-            ClientVpnRuntime current = runtime;
-            message = current != null && current.connect() ? "openrad.command.connecting" : "openrad.menu.no_networks";
+            if (invalidConfig) {
+                message = "openrad.menu.config_invalid";
+                return;
+            }
+            connectNow(config);
         });
+    }
+    private void connectNow(ClientConfig draft) throws IOException, InterruptedException {
+        apply(draft);
+        if (closed.get()) return;
+        Engine current = runtime;
+        if (current != null && current.connect()) message = "openrad.command.connecting";
+        else message = draft.networks().isEmpty() && draft.minecraftSelectors().isEmpty()
+                ? "openrad.menu.no_networks" : "openrad.menu.not_started";
     }
     public boolean disconnect() {
         return submit(() -> {
             bridge.closeActive();
-            ClientVpnRuntime current = runtime;
+            Engine current = runtime;
             if (current != null) {
                 current.disconnect();
-                if (!current.awaitStopped(Duration.ofSeconds(15))) throw new IOException("runtime stop timed out");
+                if (!current.awaitStopped(stopTimeout))
+                    throw new StopTimeoutException("openrad.menu.disconnect_timeout", "runtime stop timed out");
             }
             message = "openrad.command.disconnected";
         });
@@ -133,19 +207,28 @@ public final class OpenRadController implements AutoCloseable {
         if (desired.equals(config) && runtime != null) return;
         if (invalidConfig) preserveInvalidConfig();
         desired.save(directory); // A failed write leaves the current working session intact.
-        ClientVpnRuntime old = runtime;
+        Engine old = runtime;
         if (old != null) {
             ClientVpnRuntime.CatalogSnapshot cached = old.minecraftCatalog();
             if (!cached.entries().isEmpty()) previousCatalog = cached;
             bridge.closeActive();
             old.close();
-            if (!old.awaitStopped(Duration.ofSeconds(15))) throw new IOException("old runtime still owns identity");
+            // The closed runtime is never reused; the new configuration is current from here on.
+            runtime = null;
+            config = desired;
+            stopping = old;
+        }
+        if (stopping != null) {
+            // Never open the same persisted identity until its previous owner has fully stopped;
+            // a failed handover is retried by the next connect or save.
+            if (!stopping.awaitStopped(stopTimeout))
+                throw new StopTimeoutException("openrad.menu.handover_timeout", "old runtime still owns identity");
+            stopping = null;
         }
         if (closed.get()) return;
         config = desired;
         replaceBridge(desired);
-        // Never open the same persisted identity until its previous owner has fully stopped.
-        runtime = new ClientVpnRuntime(desired, directory.resolve("state"), logger::info);
+        runtime = engines.create(desired, directory.resolve("state"), logger);
     }
 
     /** Corrupt preferences remain available for repair; the first save never destroys them. */
@@ -164,7 +247,7 @@ public final class OpenRadController implements AutoCloseable {
         bridge = new LoopbackBridge(this::openTunnel, desired.maxConnections());
     }
     private LoopbackBridge.Tunnel openTunnel(Inet4Address address, int port) throws IOException {
-        ClientVpnRuntime current = runtime;
+        Engine current = runtime;
         if (current == null) throw new IOException("OpenRad configuration unavailable");
         var connection = current.openTcp(address, port, Duration.ofSeconds(config.connectionTimeoutSeconds()));
         return new LoopbackBridge.Tunnel() {
@@ -182,7 +265,8 @@ public final class OpenRadController implements AutoCloseable {
             worker.execute(() -> {
                 try { if (!closed.get()) action.run(); }
                 catch (Exception failure) {
-                    message = runtime == null ? "openrad.menu.config_error" : "openrad.menu.save_failed";
+                    message = failure instanceof StopTimeoutException timeout ? timeout.messageKey
+                            : runtime == null ? "openrad.menu.config_error" : "openrad.menu.save_failed";
                     logger.warning("OpenRad settings action failed (" + failure.getClass().getSimpleName() + ")");
                     if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
                 } finally { busy.set(false); }
@@ -198,7 +282,7 @@ public final class OpenRadController implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) return;
         worker.execute(() -> {
             bridge.close();
-            ClientVpnRuntime current = runtime;
+            Engine current = runtime;
             if (current != null) current.close();
         });
         worker.shutdown();

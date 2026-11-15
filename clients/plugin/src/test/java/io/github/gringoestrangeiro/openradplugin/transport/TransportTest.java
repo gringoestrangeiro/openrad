@@ -195,6 +195,81 @@ class TransportTest {
     }
 
     @Test
+    void stalledWriteIsAbortedAboutFiveSecondsAfterItStarts() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0)) {
+            listener.setReceiveBufferSize(1024);
+            try (Socket client = new Socket("127.0.0.1", listener.getLocalPort());
+                    Socket ignored = listener.accept()) {
+                assertTrue(ignored.isConnected());
+                client.setSendBufferSize(1024);
+                try (FramedTcp stream = new FramedTcp(client, Duration.ofMinutes(5))) {
+                    long began = System.nanoTime();
+                    assertThrows(IOException.class, () -> stream.send(new byte[4 * 1024 * 1024]));
+                    long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began);
+                    assertTrue(elapsed >= 4_900, "aborted early after " + elapsed + " ms");
+                    assertTrue(elapsed < 7_000, "aborted late after " + elapsed + " ms");
+                }
+            }
+        }
+    }
+
+    @Test
+    void completedWritesAreNeverAbortedByTheWatchdog() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0);
+                Socket client = new Socket("127.0.0.1", listener.getLocalPort());
+                Socket accepted = listener.accept();
+                FramedTcp stream = new FramedTcp(client, Duration.ofMinutes(1));
+                FramedTcp receiver = new FramedTcp(accepted, Duration.ofMinutes(1))) {
+            for (int i = 0; i < 2_000; i++) {
+                stream.send(new byte[] {(byte) i, 1, 2});
+                assertEquals((byte) i, receiver.receive(16)[0]);
+            }
+            Thread.sleep(600);
+            stream.send(new byte[] {9});
+            assertArrayEquals(new byte[] {9}, receiver.receive(16));
+        }
+    }
+
+    @Test
+    void streamsLeaveTheWriteWatchdogWhenClosed() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0)) {
+            int before = FramedTcp.watchedStreams();
+            Socket client = new Socket("127.0.0.1", listener.getLocalPort());
+            try (Socket accepted = listener.accept()) {
+                assertTrue(accepted.isConnected());
+                FramedTcp stream = new FramedTcp(client, Duration.ofMinutes(1));
+                stream.send(new byte[] {1});
+                assertEquals(before + 1, FramedTcp.watchedStreams());
+                stream.close();
+                assertEquals(before, FramedTcp.watchedStreams());
+            }
+        }
+    }
+
+    @Test
+    void writeWatchdogPrunesClosedSocketsAndExitsWhenIdle() throws Exception {
+        FramedTcp.WriteWatchdog watchdog = new FramedTcp.WriteWatchdog();
+        try (ServerSocket listener = new ServerSocket(0)) {
+            Socket client = new Socket("127.0.0.1", listener.getLocalPort());
+            try (Socket accepted = listener.accept();
+                    FramedTcp stream = new FramedTcp(client, Duration.ofMinutes(1))) {
+                assertTrue(accepted.isConnected());
+                watchdog.add(stream);
+                assertTrue(watchdog.running());
+                assertEquals(1, watchdog.size());
+                client.close();
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while (watchdog.running() && System.nanoTime() < until) Thread.sleep(20);
+                assertFalse(watchdog.running(), "an idle watchdog must stop its thread");
+                assertEquals(0, watchdog.size());
+                watchdog.add(stream);
+                assertTrue(watchdog.running(), "a later stream restarts the watchdog");
+                watchdog.remove(stream);
+            }
+        }
+    }
+
+    @Test
     void relayPairsTicketBeforeMutualAuthentication() throws Exception {
         byte[] ticket = new byte[256];
         Arrays.fill(ticket, (byte) 19);

@@ -80,7 +80,8 @@ One selector thread owns channels and TCP state. The endpoint implements:
 - Exact-sequence RST admission and challenge ACKs for in-window reset attempts;
   reset on backend refusal/error or an expired connection deadline.
 
-Default limits are 128 flows globally, 8 per RID, 2048 queued inbound frames,
+Default limits are 128 flows globally, 8 per RID, 2 incomplete handshakes per RID,
+2048 queued inbound frames,
 60 incomplete TCP handshakes, 256KiB retained bytes per direction per flow, and 64MiB globally accounted
 buffering. The global accounting includes every flow's 64KiB reassembly storage
 plus queued backend bytes, occupied reorder bytes, and retained outbound bytes.
@@ -101,8 +102,12 @@ an expired handshake frees its pending slot without disrupting a healthy flow.
 
 Default deadlines are 5s backend connect, 15s handshake, 3min without stream
 progress, 2min half-close drain, and 30s TIME_WAIT. Arbitrary duplicate ACK traffic
-does not refresh the stream-progress deadline. Production runtime may set the
-flow/connect/handshake limits from configuration. Shutdown closes all channels
+does not refresh the stream-progress deadline. Production runtime derives the
+limits from `bridge` settings (`VpnRuntime.bridgeLimits`): the per-RID cap is
+`min(max-players-through-vpn, 8, max(2, max-players-through-vpn/4))` (7 with the
+default 30 players), at most 2 incomplete handshakes per RID, and a handshake
+deadline of `min(timeout-seconds, 8)` seconds, so a few members cannot hold every
+slot with SYNs they never complete. Shutdown closes all channels
 and releases queues without waiting for TCP teardown on the tunnel.
 
 ## Executed synthetic checks

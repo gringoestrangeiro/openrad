@@ -45,6 +45,26 @@ final class CommandTokensTest {
     }
 
     @Test
+    void backslashInsideQuotesEscapesOnlyQuoteAndBackslash() {
+        assertEquals(List.of("join", "My Net", "pa ss\\word"),
+                OpenRadPlugin.tokens(new String[] {"join", "\"My", "Net\"", "\"pa", "ss\\word\""}));
+        assertEquals(List.of("a b\\c"), OpenRadPlugin.tokens(new String[] {"\"a b\\c\""}));
+        assertEquals(List.of("say \"hi\""), OpenRadPlugin.tokens(new String[] {"\"say \\\"hi\\\"\""}));
+        assertEquals(List.of("x\\y"), OpenRadPlugin.tokens(new String[] {"\"x\\\\y\""}));
+        assertEquals(List.of("trail\\"), OpenRadPlugin.tokens(new String[] {"\"trail\\\\\""}));
+        assertThrows(IllegalArgumentException.class,
+                () -> OpenRadPlugin.tokens(new String[] {"\"dangling\\"}));
+        assertThrows(IllegalArgumentException.class,
+                () -> OpenRadPlugin.tokens(new String[] {"\"open\\\""}));
+    }
+
+    @Test
+    void backslashOutsideQuotesIsLiteral() {
+        assertEquals(List.of("join", "C:\\dir\\x", "a\\b"),
+                OpenRadPlugin.tokens(new String[] {"join", "C:\\dir\\x", "a\\b"}));
+    }
+
+    @Test
     void switchValuesAcceptOnOffAndTheCliTrueFalse() {
         for (String value : List.of("on", "ON", "true", "True"))
             assertEquals(Boolean.TRUE, OpenRadPlugin.switchValue(value));

@@ -17,22 +17,131 @@ import java.util.*;
  * Edits {@code config.yml} and {@code secrets.properties} for the in-game setup commands. Every
  * edit validates the replacement before publishing it. Each file is
  * replaced atomically; password changes publish a fresh secret before switching the YAML
- * reference, so a failed YAML write preserves the previously referenced password.
+ * reference, so a failed YAML write preserves the previously referenced password. A {@link
+ * Validator} rejects edits that are known to be unacceptable before anything is written, and {@link
+ * #transaction} restores both files when a later step (applying the configuration) fails.
  */
 public final class ConfigEditor {
     private static final int MAX_FILE = 256 * 1024;
     private static final System.Logger LOG = System.getLogger(ConfigEditor.class.getName());
+    private static final int MAX_SECRETS = NetworkSecrets.MAX_FILE_BYTES;
 
     private final Path directory;
     private final boolean onlineMode;
+    private final Validator validator;
 
     public ConfigEditor(Path directory) {
-        this(directory, true);
+        this(directory, true, (settings, yaml) -> {});
     }
 
     public ConfigEditor(Path directory, boolean onlineMode) {
+        this(directory, onlineMode, (settings, yaml) -> {});
+    }
+
+    public ConfigEditor(Path directory, Validator validator) {
+        this(directory, true, validator);
+    }
+
+    public ConfigEditor(Path directory, boolean onlineMode, Validator validator) {
         this.directory = directory;
         this.onlineMode = onlineMode;
+        this.validator = Objects.requireNonNull(validator);
+    }
+
+    @FunctionalInterface
+    public interface Validator {
+        /** Throws {@link IllegalArgumentException} when the edited configuration must not be saved. */
+        void check(VpnSettings settings, YamlConfiguration yaml);
+    }
+
+    @FunctionalInterface
+    public interface Edit<T> {
+        T run(ConfigEditor editor) throws Exception;
+    }
+
+    @FunctionalInterface
+    public interface Verification<T> {
+        void run(T result) throws Exception;
+    }
+
+    /** The edit was rejected and the files could not be restored either; they may have changed. */
+    public static final class RollbackException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private final Exception original;
+
+        RollbackException(Exception original, IOException restoreFailure) {
+            super(
+                    "falha ao restaurar config.yml/secrets.properties ("
+                            + restoreFailure.getClass().getSimpleName()
+                            + ": "
+                            + restoreFailure.getMessage()
+                            + ")",
+                    original);
+            this.original = original;
+            addSuppressed(restoreFailure);
+        }
+
+        public Exception original() {
+            return original;
+        }
+    }
+
+    private record Saved(boolean tracked, byte[] bytes) {}
+
+    /**
+     * Runs {@code edit}, then {@code verify} on its result. If either fails, {@code config.yml} and
+     * {@code secrets.properties} are put back exactly as they were (a secrets file that did not exist
+     * is removed again) and the failure is rethrown; if they cannot be restored a {@link
+     * RollbackException} is thrown instead.
+     */
+    public synchronized <T> T transaction(Edit<T> edit, Verification<T> verify) throws Exception {
+        Saved config = save(configPath(), MAX_FILE);
+        Saved secrets = save(secretsPath(), MAX_SECRETS);
+        try {
+            T result = edit.run(this);
+            verify.run(result);
+            return result;
+        } catch (Exception failure) {
+            IOException restoreFailure = null;
+            try {
+                restore(configPath(), config, false);
+            } catch (IOException e) {
+                restoreFailure = e;
+            }
+            try {
+                restore(secretsPath(), secrets, true);
+            } catch (IOException e) {
+                if (restoreFailure == null) restoreFailure = e;
+                else restoreFailure.addSuppressed(e);
+            }
+            if (restoreFailure != null) throw new RollbackException(failure, restoreFailure);
+            throw failure;
+        } finally {
+            if (secrets.bytes() != null) Arrays.fill(secrets.bytes(), (byte) 0);
+        }
+    }
+
+    /** Files this editor refuses to touch (links, oversized) are not tracked: they never change. */
+    private static Saved save(Path path, long limit) throws IOException {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return new Saved(true, null);
+        if (Files.isSymbolicLink(path)
+                || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                || Files.size(path) > limit) return new Saved(false, null);
+        return new Saved(true, Files.readAllBytes(path));
+    }
+
+    private static void restore(Path path, Saved saved, boolean secret) throws IOException {
+        if (!saved.tracked()) return;
+        byte[] current =
+                Files.exists(path, LinkOption.NOFOLLOW_LINKS) ? Files.readAllBytes(path) : null;
+        try {
+            if (Arrays.equals(current, saved.bytes())) return;
+            if (saved.bytes() == null) Files.deleteIfExists(path);
+            else replace(path, saved.bytes(), secret);
+        } finally {
+            if (current != null) Arrays.fill(current, (byte) 0);
+        }
     }
 
     /** Result of {@link #join}: whether the network was new and which secret key it uses. */
@@ -138,6 +247,7 @@ public final class ConfigEditor {
         try (NetworkSecrets secrets = NetworkSecrets.readExisting(directory)) {
             secrets.validate(settings, stagedSecret);
         }
+        validator.check(settings, yaml);
         return settings;
     }
 
@@ -184,9 +294,18 @@ public final class ConfigEditor {
 
     private static List<Map<String, Object>> networks(YamlConfiguration yaml) {
         List<Map<String, Object>> networks = new ArrayList<>();
-        for (Map<?, ?> m : yaml.getMapList("vpn.networks")) {
+        Object raw = yaml.get("vpn.networks");
+        require(
+                raw == null || raw instanceof List<?>,
+                "vpn.networks deve ser uma lista de redes com 'name:'; corrija o config.yml");
+        if (raw == null) return networks;
+        for (Object entry : (List<?>) raw) {
+            require(
+                    entry instanceof Map<?, ?>,
+                    "cada item de vpn.networks precisa de 'name:' (e 'secret:' se for rede privada);"
+                            + " corrija o config.yml");
             Map<String, Object> copy = new LinkedHashMap<>();
-            m.forEach((k, v) -> copy.put(String.valueOf(k), v));
+            ((Map<?, ?>) entry).forEach((k, v) -> copy.put(String.valueOf(k), v));
             networks.add(copy);
         }
         return networks;
@@ -215,7 +334,10 @@ public final class ConfigEditor {
         // A blank line also terminates an EOF continuation before the new key.
         lines.add("");
         lines.add(key + "=" + escape(password));
-        replace(secretsPath(), String.join("\n", lines) + "\n", true);
+        String content = String.join("\n", lines) + "\n";
+        if (content.getBytes(StandardCharsets.UTF_8).length > MAX_SECRETS)
+            throw new IOException("secrets file exceeds size limit");
+        replace(secretsPath(), content, true);
     }
 
     private Set<String> storedSecretKeys() throws IOException {
@@ -283,8 +405,12 @@ public final class ConfigEditor {
     }
 
     private static void replace(Path path, String content, boolean secret) throws IOException {
+        replace(path, content.getBytes(StandardCharsets.UTF_8), secret);
+    }
+
+    private static void replace(Path path, byte[] content, boolean secret) throws IOException {
         int maxBytes = secret ? NetworkSecrets.MAX_FILE_BYTES : MAX_FILE;
-        if (content.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+        if (content.length > maxBytes) {
             throw new IOException(path.getFileName() + " exceeds size limit");
         }
         Path temp = path.resolveSibling(path.getFileName() + ".tmp-" + UUID.randomUUID());
@@ -300,7 +426,7 @@ public final class ConfigEditor {
                 }
                 Identity.secureFile(temp);
             }
-            Files.writeString(temp, content, StandardCharsets.UTF_8);
+            Files.write(temp, content);
             if (Thread.currentThread().isInterrupted())
                 throw new InterruptedIOException("configuration edit cancelled");
             try {

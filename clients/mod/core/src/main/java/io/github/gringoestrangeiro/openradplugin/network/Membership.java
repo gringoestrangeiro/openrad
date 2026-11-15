@@ -104,7 +104,7 @@ public final class Membership {
     private void peer(byte[] value, boolean change) {
         var f = fields(value);
         long rid = wide(f, 0x020001e1);
-        String name = display(field(f, 0x03000304));
+        String name = displayName(field(f, 0x03000304));
         Inet4Address ip = ipv4(number(f, 0x01000305));
         String server = TlvCodec.optional(f, 0x030001c9).map(TlvCodec::text).orElse(null);
         Long explicitState = TlvCodec.optional(f, 0x010003a0).map(TlvCodec::int32).orElse(null);

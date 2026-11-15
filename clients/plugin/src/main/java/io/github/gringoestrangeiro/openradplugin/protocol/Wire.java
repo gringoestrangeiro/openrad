@@ -169,6 +169,11 @@ public final class Wire {
         return text.toString();
     }
 
+    /**
+     * Decodes a peer-controlled name, replacing only ISO control characters. Network names stay
+     * exact enough to be matched against configured names and sent back in joins; use {@link
+     * #displayName} for names that are only presented.
+     */
     public static String display(byte[] b) {
         require(
                 b.length >= 2
@@ -180,6 +185,38 @@ public final class Wire {
         String raw = new String(b, 0, b.length - 2, StandardCharsets.UTF_16BE);
         StringBuilder s = new StringBuilder();
         raw.codePoints().forEach(c -> s.appendCodePoint(Character.isISOControl(c) ? 0xfffd : c));
+        return s.toString();
+    }
+
+    private static final int MAX_DISPLAY_NAME = 64;
+
+    /**
+     * Decodes a peer-controlled name that is only ever presented (consoles, chat, lists): never
+     * use the result as a key. Legacy colour codes, bidirectional and other format characters and
+     * line separators are replaced, and the length is capped.
+     */
+    public static String displayName(byte[] b) {
+        String name = neutralised(display(b));
+        return name.codePointCount(0, name.length()) <= MAX_DISPLAY_NAME
+                ? name
+                : name.substring(0, name.offsetByCodePoints(0, MAX_DISPLAY_NAME));
+    }
+
+    /** Replaces characters that let untrusted text imitate colours, other lines or other text. */
+    public static String neutralised(String text) {
+        StringBuilder s = new StringBuilder(text.length());
+        text.codePoints()
+                .forEach(
+                        c -> {
+                            int type = Character.getType(c);
+                            boolean unsafe =
+                                    c == 0xa7
+                                            || Character.isISOControl(c)
+                                            || type == Character.FORMAT
+                                            || type == Character.LINE_SEPARATOR
+                                            || type == Character.PARAGRAPH_SEPARATOR;
+                            s.appendCodePoint(unsafe ? 0xfffd : c);
+                        });
         return s.toString();
     }
 

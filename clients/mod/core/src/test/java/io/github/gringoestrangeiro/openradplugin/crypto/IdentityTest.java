@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.gringoestrangeiro.openradplugin.protocol.TlvCodec;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,6 +17,7 @@ import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.HexFormat;
+import java.util.Locale;
 
 class IdentityTest {
     @TempDir Path directory;
@@ -85,6 +87,38 @@ class IdentityTest {
         try (var paths = Files.list(directory)) {
             assertEquals(1, paths.count());
         }
+    }
+
+    @Test
+    void saveAcceptsSymlinkedDataDirectoryAndStillRejectsSymlinkedIdentity() throws Exception {
+        Assumptions.assumeTrue(
+                !System.getProperty("os.name").toLowerCase(Locale.ROOT).startsWith("windows"),
+                "symbolic links require a non-Windows filesystem");
+        Path real = Files.createDirectory(directory.resolve("real"));
+        Path link = Files.createSymbolicLink(directory.resolve("link"), real);
+        Path file = link.resolve("identity.json");
+        try (Identity identity = parse(SYNTHETIC)) {
+            identity.save(file);
+            assertFalse(Files.isSymbolicLink(real.resolve("identity.json")));
+            try (Identity loaded = Identity.load(file)) {
+                assertEquals(identity.rid(), loaded.rid());
+                assertEquals(identity.nodeName(), loaded.nodeName());
+                assertArrayEquals(identity.password(), loaded.password());
+                assertArrayEquals(identity.address(), loaded.address());
+            }
+        }
+        assertEquals(
+                PosixFilePermissions.fromString("rw-------"),
+                Files.getPosixFilePermissions(real.resolve("identity.json")));
+        Path other = Files.writeString(real.resolve("other.json"), "synthetic existing file");
+        Path second =
+                Files.createSymbolicLink(real.resolve("identity2.json"), real.resolve("other.json"));
+        try (Identity identity = parse(SYNTHETIC)) {
+            IOException failure = assertThrows(IOException.class, () -> identity.save(second));
+            assertEquals("unsafe identity file path", failure.getMessage());
+        }
+        assertTrue(Files.isSymbolicLink(second));
+        assertEquals("synthetic existing file", Files.readString(other));
     }
 
     @Test

@@ -11,6 +11,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 
 /**
@@ -34,6 +36,10 @@ public final class OutboundTcpStack implements AutoCloseable {
     /** The MSS this endpoint advertises (MSS_OPTION): the peer's largest segment. */
     private static final int RECEIVE_MSS = 1460;
     private static final long SECOND = 1_000_000_000L;
+    /** No stream progress at all; the bridge's idle limit. */
+    private static final long IDLE_TIMEOUT = 180 * SECOND;
+    /** A closing flow is reset after this long without progress; the bridge's half-close limit. */
+    private static final long CLOSE_TIMEOUT = 120 * SECOND;
     private final Inet4Address localVip;
     private final int localIp, maxConnections;
     private final byte[] localMac;
@@ -41,12 +47,15 @@ public final class OutboundTcpStack implements AutoCloseable {
     private final LongSupplier clock;
     private final ConcurrentMap<Key, Connection> connections = new ConcurrentHashMap<>();
     private final ConcurrentMap<Inet4Address, byte[]> negotiatedMacs = new ConcurrentHashMap<>();
-    private final ArrayBlockingQueue<Frame> frames = new ArrayBlockingQueue<>(1024);
+    private final BlockingQueue<Frame> frames = new ArrayBlockingQueue<>(1024);
     private final Object admission = new Object();
     private final SecureRandom random = new SecureRandom();
-    private final ScheduledExecutorService timer;
+    private final ScheduledThreadPoolExecutor timer;
     private final Thread sender;
     private volatile boolean closed;
+    /** Guarded by admission: set only while at least one connection (including TIME_WAIT) exists. */
+    private ScheduledFuture<?> ticking;
+    private volatile long timerRuns, senderWakeups;
     private int nextPort = 49152;
 
     public OutboundTcpStack(Inet4Address localVip, FrameSink sink) {
@@ -71,20 +80,21 @@ public final class OutboundTcpStack implements AutoCloseable {
         this.clock = Objects.requireNonNull(clock);
         nextPort += random.nextInt(16384);
         if (workers) {
-            timer = Executors.newSingleThreadScheduledExecutor(r ->
+            timer = new ScheduledThreadPoolExecutor(1, r ->
                     io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-tcp-timer", r));
-            sender = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-tcp-frames",() -> {
+            timer.setRemoveOnCancelPolicy(true);
+            sender = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-client-tcp-frames", () -> {
                 while (!closed) {
                     try {
-                        Frame frame = frames.poll(100, TimeUnit.MILLISECONDS);
-                        if (frame != null) deliver(frame);
+                        Frame frame = frames.take();
+                        senderWakeups++;
+                        deliver(frame);
                     } catch (InterruptedException e) {
                         if (closed) return;
                     }
                 }
             });
             sender.start();
-            timer.scheduleWithFixedDelay(this::tick, 20, 20, TimeUnit.MILLISECONDS);
         } else {
             timer = null;
             sender = null;
@@ -112,14 +122,18 @@ public final class OutboundTcpStack implements AutoCloseable {
             if (timeWait.size() >= MAX_TIME_WAIT) {
                 Connection oldest = timeWait.stream()
                         .min(Comparator.comparingLong(c -> c.timeWaitUntil)).orElseThrow();
-                synchronized (oldest) { oldest.dispose(); }
+                oldest.lock.lock();
+                try { oldest.dispose(); } finally { oldest.lock.unlock(); }
             }
             int localPort = allocatePort();
             Key key = new Key(ip(destination), port, localPort);
             connection = new Connection(key, destination, timeout.toNanos());
             connections.put(key, connection);
+            if (timer != null && ticking == null)
+                ticking = timer.scheduleWithFixedDelay(this::timerTick, 20, 20, TimeUnit.MILLISECONDS);
         }
-        synchronized (connection) {
+        connection.lock.lock();
+        try {
             if (closed || connection.disposed) {
                 connection.fail(new SocketException("OpenRad TCP stack is closed"), false);
             } else {
@@ -136,6 +150,8 @@ public final class OutboundTcpStack implements AutoCloseable {
             }
             if (connection.failure != null) throw connection.failure;
             return connection;
+        } finally {
+            connection.lock.unlock();
         }
     }
 
@@ -145,33 +161,64 @@ public final class OutboundTcpStack implements AutoCloseable {
         try {
             requireVip(authenticatedPeerVip);
             int peerIp = ip(authenticatedPeerVip);
-            EthernetFrame ethernet = EthernetFrame.parse(raw);
             byte[] peerMac = peerMac(authenticatedPeerVip);
-            if (!Arrays.equals(ethernet.sourceMac(), peerMac)) return;
-            if (ethernet.etherType() == EthernetFrame.ARP) {
-                if (!Arrays.equals(ethernet.destinationMac(), localMac)
-                        && !broadcast(ethernet.destinationMac())) return;
-                ArpPacket arp = ArpPacket.parse(ethernet.payload());
-                // Only answer an authenticated peer that already has an admitted outgoing tuple.
-                if (arp.opcode() == ArpPacket.REQUEST && arp.targetIp() == localIp
-                        && arp.senderIp() == peerIp && Arrays.equals(arp.senderMac(), peerMac)
-                        && connections.keySet().stream().anyMatch(k -> k.peerIp == peerIp)) {
-                    byte[] reply = new ArpPacket(ArpPacket.REPLY, localMac, localIp, peerMac, peerIp).encode();
-                    enqueue(authenticatedPeerVip,
-                            new EthernetFrame(peerMac, localMac, EthernetFrame.ARP, reply).encode());
-                }
+            if (raw.length >= 14 && raw.length <= EthernetFrame.MAX_FRAME_BYTES
+                    && Checksum.u16(raw, 12) == EthernetFrame.ARP) {
+                answerArp(authenticatedPeerVip, peerIp, peerMac, EthernetFrame.parse(raw));
                 return;
             }
-            if (!Arrays.equals(ethernet.destinationMac(), localMac)) return;
-            Ipv4Packet packet = Ipv4Packet.parse(ethernet.payload());
-            if (packet.sourceIp() != peerIp || packet.destinationIp() != localIp) return;
-            TcpSegment tcp = TcpSegment.parse(packet.tcpBytes(), peerIp, localIp);
+            TcpSegment tcp = admitTcp(raw, peerMac, peerIp, localIp, localMac);
+            if (tcp == null) return;
             Connection connection = connections.get(new Key(peerIp, tcp.sourcePort(), tcp.destinationPort()));
-            if (connection != null) synchronized (connection) {
-                connection.receive(tcp);
+            if (connection != null) {
+                connection.lock.lock();
+                try {
+                    connection.receive(tcp);
+                } finally {
+                    connection.lock.unlock();
+                }
             }
         } catch (IllegalArgumentException ignored) {
             // Includes checksums, fragments, options, length and address validation.
+        }
+    }
+
+    private void answerArp(Inet4Address peer, int peerIp, byte[] peerMac, EthernetFrame ethernet) {
+        if (!Arrays.equals(ethernet.sourceMac(), peerMac)) return;
+        if (!Arrays.equals(ethernet.destinationMac(), localMac) && !broadcast(ethernet.destinationMac())) return;
+        ArpPacket arp = ArpPacket.parse(ethernet.payload());
+        // Only answer an authenticated peer that already has an admitted outgoing tuple.
+        if (arp.opcode() == ArpPacket.REQUEST && arp.targetIp() == localIp
+                && arp.senderIp() == peerIp && Arrays.equals(arp.senderMac(), peerMac)
+                && connections.keySet().stream().anyMatch(k -> k.peerIp == peerIp)) {
+            byte[] reply = new ArpPacket(ArpPacket.REPLY, localMac, localIp, peerMac, peerIp).encode();
+            enqueue(peer, new EthernetFrame(peerMac, localMac, EthernetFrame.ARP, reply).encode());
+        }
+    }
+
+    /**
+     * Validates an Ethernet frame in place, exactly as EthernetFrame, Ipv4Packet and TcpSegment
+     * parsing would, without copying the frame; null when the frame is not a well-formed TCP segment
+     * from the bound peer to the local endpoint.
+     */
+    static TcpSegment admitTcp(byte[] raw, byte[] peerMac, int peerIp, int localIp, byte[] localMac) {
+        try {
+            if (raw.length < 14 || raw.length > EthernetFrame.MAX_FRAME_BYTES
+                    || Checksum.u16(raw, 12) != EthernetFrame.IPV4
+                    || !Arrays.equals(raw, 6, 12, peerMac, 0, 6)
+                    || !Arrays.equals(raw, 0, 6, localMac, 0, 6)) return null;
+            int ip = 14, available = raw.length - ip;
+            if (available < 20 || (raw[ip] & 0xff) != 0x45) return null;
+            int total = Checksum.u16(raw, ip + 2);
+            if (total > available || total < 40
+                    || (Checksum.u16(raw, ip + 6) & 0xbfff) != 0
+                    || (raw[ip + 8] & 0xff) == 0 || (raw[ip + 9] & 0xff) != 6
+                    || Checksum.onesComplement(raw, ip, 20) != 0) return null;
+            int source = Checksum.u32(raw, ip + 12), destination = Checksum.u32(raw, ip + 16);
+            if (source != peerIp || destination != localIp) return null;
+            return TcpSegment.parse(raw, ip + 20, total - 20, source, destination);
+        } catch (IllegalArgumentException invalid) {
+            return null;
         }
     }
 
@@ -180,8 +227,13 @@ public final class OutboundTcpStack implements AutoCloseable {
         int peerIp = ip(destination);
         synchronized (admission) {
             for (Connection c : List.copyOf(connections.values())) {
-                if (c.key.peerIp == peerIp) synchronized (c) {
-                    c.fail(new SocketException("OpenRad peer disconnected or membership was revoked"), false);
+                if (c.key.peerIp == peerIp) {
+                    c.lock.lock();
+                    try {
+                        c.fail(new SocketException("OpenRad peer disconnected or membership was revoked"), false);
+                    } finally {
+                        c.lock.unlock();
+                    }
                 }
             }
             frames.removeIf(frame -> frame.destination.equals(destination));
@@ -227,14 +279,26 @@ public final class OutboundTcpStack implements AutoCloseable {
         synchronized (admission) {
             if (closed) return;
             closed = true;
-            for (Connection c : List.copyOf(connections.values())) synchronized (c) {
-                c.fail(new SocketException("OpenRad TCP stack is closed"), false);
+            for (Connection c : List.copyOf(connections.values())) {
+                c.lock.lock();
+                try {
+                    c.fail(new SocketException("OpenRad TCP stack is closed"), false);
+                } finally {
+                    c.lock.unlock();
+                }
             }
             frames.clear();
             negotiatedMacs.clear();
         }
         if (timer != null) timer.shutdownNow();
         if (sender != null) sender.interrupt();
+    }
+
+    long timerRuns() { return timerRuns; }
+    long senderWakeups() { return senderWakeups; }
+    boolean awaitWorkersStopped(long millis) throws InterruptedException {
+        if (sender != null) sender.join(millis);
+        return (sender == null || !sender.isAlive()) && (timer == null || timer.awaitTermination(millis, TimeUnit.MILLISECONDS));
     }
 
     private int allocatePort() throws SocketException {
@@ -269,13 +333,29 @@ public final class OutboundTcpStack implements AutoCloseable {
 
     void tick() {
         long now = clock.getAsLong();
-        for (Connection c : connections.values()) synchronized (c) {
-            // An exception escaping a scheduled task cancels every future tick (retransmissions,
-            // handshake and TIME_WAIT expiry); fail only the affected connection instead.
+        for (Connection c : connections.values()) {
+            c.lock.lock();
             try {
+                // An exception escaping a scheduled task cancels every future tick (retransmissions,
+                // handshake and TIME_WAIT expiry); fail only the affected connection instead.
                 c.tick(now);
             } catch (RuntimeException e) {
                 c.fail(new IOException("OpenRad TCP timer failure", e), true);
+            } finally {
+                c.lock.unlock();
+            }
+        }
+    }
+
+    /** The periodic task: it ends itself as soon as no connection (TIME_WAIT included) is left. */
+    private void timerTick() {
+        timerRuns++;
+        tick();
+        if (!connections.isEmpty()) return;
+        synchronized (admission) {
+            if (connections.isEmpty() && ticking != null) {
+                ticking.cancel(false);
+                ticking = null;
             }
         }
     }
@@ -338,11 +418,15 @@ public final class OutboundTcpStack implements AutoCloseable {
         private final Inet4Address destination;
         private final byte[] peerMac, receiveRing = new byte[CAPACITY];
         private final BitSet present = new BitSet(CAPACITY);
+        private final ReentrantLock lock = new ReentrantLock();
+        private final Condition changed = lock.newCondition();
         private final ArrayDeque<ByteBuffer> unsent = new ArrayDeque<>();
         private final ArrayDeque<Flight> flights = new ArrayDeque<>();
         private final long initialSequence, createdAt, handshakeTimeout;
         private long sendUna, sendNext, receiveNext, readSequence, remoteSyn;
         private long windowSequence, windowAck, pendingFin = -1, lastProgress, closeAt;
+        /** Highest sequence outstanding when loss recovery began; a partial ACK below it exposes the next hole. */
+        private long recover;
         private volatile long timeWaitUntil;
         private long rto = SECOND, lastProbe;
         /** Right edge of the receive window in the last emitted segment. */
@@ -370,26 +454,36 @@ public final class OutboundTcpStack implements AutoCloseable {
         public OutputStream output() { return output; }
 
         /** Sends FIN after queued data, retaining the independent inbound half of the stream. */
-        public synchronized void shutdownOutput() throws IOException {
-            checkOpen();
-            outputClosed = true;
-            if (closeAt == 0) closeAt = clock.getAsLong();
-            flushPending();
-            notifyAll();
+        public void shutdownOutput() throws IOException {
+            lock.lock();
+            try {
+                checkOpen();
+                outputClosed = true;
+                if (closeAt == 0) closeAt = clock.getAsLong();
+                flushPending();
+                changed.signalAll();
+            } finally {
+                lock.unlock();
+            }
         }
 
         /** Nonblocking graceful close. The bounded FIN retransmission state remains until timeout. */
-        @Override public synchronized void close() {
-            if (applicationClosed) return;
-            applicationClosed = outputClosed = true;
-            if (closeAt == 0) closeAt = clock.getAsLong();
-            if (!disposed) flushPending();
-            notifyAll();
+        @Override public void close() {
+            lock.lock();
+            try {
+                if (applicationClosed) return;
+                applicationClosed = outputClosed = true;
+                if (closeAt == 0) closeAt = clock.getAsLong();
+                if (!disposed) flushPending();
+                changed.signalAll();
+            } finally {
+                lock.unlock();
+            }
         }
 
         private void await(long nanos) throws IOException {
             try {
-                TimeUnit.NANOSECONDS.timedWait(this, Math.max(1, nanos));
+                changed.awaitNanos(Math.max(1, nanos));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 InterruptedIOException interrupted = new InterruptedIOException("OpenRad TCP operation cancelled");
@@ -424,9 +518,14 @@ public final class OutboundTcpStack implements AutoCloseable {
                         fail(new ConnectException("OpenRad destination refused the connection"), false);
                     return;
                 }
-                if ((tcp.flags() & ~(ECE | CWR)) != (SYN | ACK)
-                        || unwrap(tcp.acknowledgement(), sendNext) != sendNext
-                        || tcp.payload().length != 0) return;
+                if ((tcp.flags() & ACK) != 0 && unwrap(tcp.acknowledgement(), sendNext) != sendNext) {
+                    // RFC 793/5961: an unacceptable ACK in SYN-SENT (for example the challenge ACK of a
+                    // bridge that still holds a reused source port) is answered with <SEQ=SEG.ACK><CTL=RST>
+                    // while the handshake stays pending and the SYN keeps being retransmitted.
+                    emitReset(tcp.acknowledgement());
+                    return;
+                }
+                if ((tcp.flags() & ~(ECE | CWR)) != (SYN | ACK) || tcp.payloadLength() != 0) return;
                 int negotiatedMss;
                 try { negotiatedMss = mss(tcp.options()); }
                 catch (IllegalArgumentException malformed) { return; }
@@ -440,12 +539,12 @@ public final class OutboundTcpStack implements AutoCloseable {
                 established = true;
                 acknowledge(sendNext, false);
                 ack();
-                notifyAll();
+                changed.signalAll();
                 return;
             }
             long sequence = unwrap(tcp.sequence(), receiveNext);
             if (timeWaitUntil != 0) {
-                if ((tcp.flags() & FIN) != 0 && sequence + tcp.payload().length == receiveNext - 1) {
+                if ((tcp.flags() & FIN) != 0 && sequence + tcp.payloadLength() == receiveNext - 1) {
                     ack();
                     timeWaitUntil = clock.getAsLong() + 30 * SECOND;
                 }
@@ -462,7 +561,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                 return;
             }
             if ((tcp.flags() & ACK) == 0) return;
-            int length = tcp.payload().length + ((tcp.flags() & FIN) != 0 ? 1 : 0);
+            int length = tcp.payloadLength() + ((tcp.flags() & FIN) != 0 ? 1 : 0);
             if (!acceptable(sequence, length)) { ack(); return; }
             long acknowledgement = unwrap(tcp.acknowledgement(), sendUna);
             if (acknowledgement > sendNext) { ack(); return; }
@@ -482,11 +581,12 @@ public final class OutboundTcpStack implements AutoCloseable {
 
         private void receiveData(TcpSegment tcp, long sequence) {
             if (receivedFin) { ack(); return; }
-            byte[] bytes = tcp.payload();
+            int payloadLength = tcp.payloadLength();
             long right = readSequence + WIRE_WINDOW;
             if (pendingFin >= 0) right = Math.min(right, pendingFin);
-            int from = (int) Math.min(bytes.length, Math.max(0, receiveNext - sequence));
-            int end = (int) Math.min(bytes.length, Math.max(0, right - sequence));
+            int from = (int) Math.min(payloadLength, Math.max(0, receiveNext - sequence));
+            int end = (int) Math.min(payloadLength, Math.max(0, right - sequence));
+            byte[] bytes = end > from ? tcp.copyPayload(from, end) : EMPTY;
             for (int i = from; i < end; ) {
                 int index = (int) (sequence + i) & 65535;
                 int run = Math.min(end - i, CAPACITY - index);
@@ -494,7 +594,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                 int clear = present.nextSetBit(index);
                 int stop = clear < 0 || clear >= index + run ? index + run : clear;
                 if (stop > index) {
-                    System.arraycopy(bytes, i, receiveRing, index, stop - index);
+                    System.arraycopy(bytes, i - from, receiveRing, index, stop - index);
                     present.set(index, stop);
                     i += stop - index;
                 } else {
@@ -502,7 +602,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                     i += Math.min(run, next - index);
                 }
             }
-            long finSequence = sequence + bytes.length;
+            long finSequence = sequence + payloadLength;
             if ((tcp.flags() & FIN) != 0 && finSequence >= receiveNext
                     && finSequence < readSequence + WIRE_WINDOW && pendingFin < 0)
                 pendingFin = finSequence;
@@ -519,7 +619,7 @@ public final class OutboundTcpStack implements AutoCloseable {
             if (receiveNext != before) lastProgress = clock.getAsLong();
             ack();
             maybeTimeWait();
-            notifyAll();
+            changed.signalAll();
         }
 
         private void acknowledge(long acknowledgement, boolean duplicateCandidate) {
@@ -528,6 +628,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                 if (duplicateCandidate && peerWindow != 0 && !flights.isEmpty() && ++duplicateAcks == 3) {
                     slowStartThreshold = Math.max(2 * peerMss, (int) (sendNext - sendUna) / 2);
                     congestionWindow = slowStartThreshold;
+                    recover = sendNext;
                     retransmit(flights.peekFirst(), false);
                 }
                 return;
@@ -558,8 +659,19 @@ public final class OutboundTcpStack implements AutoCloseable {
                         : Math.max(1, peerMss * acknowledgedBytes / Math.max(1, congestionWindow));
                 congestionWindow = Math.min(WIRE_WINDOW, congestionWindow + increment);
             }
+            if (!flights.isEmpty() && acknowledgedBytes > 0) {
+                Flight next = flights.peekFirst();
+                // RFC 6298 5.3: new data acknowledged restarts the retransmission timer, so the next
+                // segment of a lost burst is not mistaken for a fresh timeout (which would collapse
+                // the window and double the RTO once more for every segment in recovery).
+                next.sentAt = now;
+                // RFC 6582 partial ACK: the cumulative ACK stopped short of the data outstanding when
+                // recovery began, so the following segment was lost too; resend it now instead of one
+                // (backed-off) timeout later.
+                if (sendUna < recover && peerWindow != 0 && !disposed) retransmit(next, false);
+            }
             maybeTimeWait();
-            notifyAll();
+            changed.signalAll();
         }
 
         private void updateRtt(long sample) {
@@ -577,6 +689,10 @@ public final class OutboundTcpStack implements AutoCloseable {
             if (!established || disposed || timeWaitUntil != 0) return;
             long capacity = Math.min(peerWindow, congestionWindow) - (sendNext - sendUna);
             while (capacity > 0 && !unsent.isEmpty()) {
+                // Sender silly-window avoidance (RFC 1122 4.2.3.4): while data is in flight, a window
+                // that has opened by less than a segment waits for the next ACK instead of leaving as
+                // a sliver, which would multiply the frames (and ACKs) of a saturated flow.
+                if (capacity < peerMss && unsentBytes > capacity && sendNext != sendUna) break;
                 ByteBuffer buffer = unsent.peekFirst();
                 int size = (int) Math.min(Math.min(peerMss, buffer.remaining()), capacity);
                 byte[] bytes = new byte[size];
@@ -609,8 +725,13 @@ public final class OutboundTcpStack implements AutoCloseable {
             advertisedRight = acknowledgement + window;
             TcpSegment tcp = new TcpSegment(key.localPort, key.peerPort, wire(sequence), wire(acknowledgement),
                     flags, window, options, data);
-            byte[] packet = new Ipv4Packet(localIp, key.peerIp, 64, tcp.encode(localIp, key.peerIp)).encode();
-            enqueue(destination, new EthernetFrame(peerMac, localMac, EthernetFrame.IPV4, packet).encode());
+            enqueue(destination, tcp.encodeIpv4Frame(peerMac, localMac, localIp, key.peerIp, 64));
+        }
+
+        /** A bare RST whose sequence number is the unacceptable acknowledgement it answers. */
+        private void emitReset(long sequence) {
+            TcpSegment tcp = new TcpSegment(key.localPort, key.peerPort, sequence, 0, RST, 0, EMPTY, EMPTY);
+            enqueue(destination, tcp.encodeIpv4Frame(peerMac, localMac, localIp, key.peerIp, 64));
         }
 
         private void ack() { emit(sendNext, receiveNext, ACK, EMPTY, EMPTY); }
@@ -626,6 +747,7 @@ public final class OutboundTcpStack implements AutoCloseable {
                 slowStartThreshold = Math.max(2 * peerMss, (int) (sendNext - sendUna) / 2);
                 congestionWindow = peerMss;
                 rto = Math.min(8 * SECOND, rto * 2);
+                recover = sendNext;
             }
             send(flight);
         }
@@ -640,8 +762,8 @@ public final class OutboundTcpStack implements AutoCloseable {
                 fail(new SocketTimeoutException("OpenRad TCP handshake timed out"), true);
                 return;
             }
-            if (established && (now - lastProgress >= 3 * 60 * SECOND
-                    || (closeAt != 0 && now - closeAt >= 30 * SECOND))) {
+            if (established && (now - lastProgress >= IDLE_TIMEOUT
+                    || (closeAt != 0 && now - Math.max(closeAt, lastProgress) >= CLOSE_TIMEOUT))) {
                 fail(new SocketTimeoutException("OpenRad TCP idle/close timeout"), true);
                 return;
             }
@@ -685,7 +807,7 @@ public final class OutboundTcpStack implements AutoCloseable {
             bufferedSend = unsentBytes = 0;
             // Preserve already-received bytes for a reader after an orderly FIN exchange.
             if (failure != null || applicationClosed) present.clear();
-            notifyAll();
+            changed.signalAll();
         }
 
         private final class TcpInput extends InputStream {
@@ -696,7 +818,8 @@ public final class OutboundTcpStack implements AutoCloseable {
             @Override public int read(byte[] target, int offset, int length) throws IOException {
                 Objects.checkFromIndexSize(offset, length, target.length);
                 if (length == 0) return 0;
-                synchronized (Connection.this) {
+                lock.lock();
+                try {
                     while (true) {
                         if (failure != null) throw failure;
                         if (applicationClosed) throw new SocketException("OpenRad TCP input is closed");
@@ -714,22 +837,30 @@ public final class OutboundTcpStack implements AutoCloseable {
                             readSequence += count;
                             // Every data segment is already ACKed with the current window. A
                             // read only needs its own update when the peer may be blocked by a
-                            // nearly closed window (receiver silly-window avoidance).
+                            // nearly closed window, and then only once the window has grown by a
+                            // segment (RFC 1122 4.2.3.3). A smaller opening is learned from the
+                            // sender's persist probe, whose reply always carries the real window.
                             if (!disposed && !receivedFin
                                     && advertisedRight - receiveNext < 2 * RECEIVE_MSS
-                                    && readSequence + WIRE_WINDOW > advertisedRight) ack();
+                                    && readSequence + WIRE_WINDOW - advertisedRight
+                                            >= Math.min(RECEIVE_MSS, CAPACITY / 2)) ack();
                             return count;
                         }
                         if (receivedFin && readSequence >= pendingFin) return -1;
                         if (disposed || closed) throw new SocketException("OpenRad TCP input is closed");
                         await(SECOND);
                     }
+                } finally {
+                    lock.unlock();
                 }
             }
             @Override public int available() throws IOException {
-                synchronized (Connection.this) {
+                lock.lock();
+                try {
                     if (failure != null) throw failure;
                     return (int) Math.max(0, (receivedFin ? pendingFin : receiveNext) - readSequence);
+                } finally {
+                    lock.unlock();
                 }
             }
             @Override public void close() { Connection.this.close(); }
@@ -739,7 +870,8 @@ public final class OutboundTcpStack implements AutoCloseable {
             @Override public void write(int value) throws IOException { write(new byte[] {(byte) value}); }
             @Override public void write(byte[] source, int offset, int length) throws IOException {
                 Objects.checkFromIndexSize(offset, length, source.length);
-                synchronized (Connection.this) {
+                lock.lock();
+                try {
                     checkWritable();
                     while (length > 0) {
                         while (bufferedSend == CAPACITY) {
@@ -755,6 +887,8 @@ public final class OutboundTcpStack implements AutoCloseable {
                         length -= size;
                         flushPending();
                     }
+                } finally {
+                    lock.unlock();
                 }
             }
             private void checkWritable() throws IOException {
@@ -763,9 +897,12 @@ public final class OutboundTcpStack implements AutoCloseable {
             }
             /** Like a socket: written bytes are already queued for sending; never waits for ACKs. */
             @Override public void flush() throws IOException {
-                synchronized (Connection.this) {
+                lock.lock();
+                try {
                     checkWritable();
                     flushPending();
+                } finally {
+                    lock.unlock();
                 }
             }
             @Override public void close() throws IOException { shutdownOutput(); }

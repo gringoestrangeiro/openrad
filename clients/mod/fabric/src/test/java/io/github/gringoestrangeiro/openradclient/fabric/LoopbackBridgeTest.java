@@ -243,6 +243,77 @@ class LoopbackBridgeTest {
         assertFalse(LoopbackBridge.isVirtualLiteral(null));
     }
 
+    private static LoopbackBridge.Tunnel pipeTunnel(PipedInputStream response, PipedOutputStream reply, CountDownLatch closed) {
+        return new LoopbackBridge.Tunnel() {
+            public InputStream input() { return response; }
+            public OutputStream output() { return reply; }
+            public void close() throws IOException {
+                try { response.close(); reply.close(); }
+                finally { closed.countDown(); }
+            }
+        };
+    }
+
+    @Test void clientSilenceDoesNotDropAConnectionWhileTheServerKeepsSending() throws Exception {
+        CountDownLatch closed = new CountDownLatch(1);
+        var reply = new java.util.concurrent.atomic.AtomicReference<PipedOutputStream>();
+        try (var bridge = new LoopbackBridge((ip, port) -> {
+            var response = new PipedInputStream(1_024);
+            var output = new PipedOutputStream(response);
+            reply.set(output);
+            return pipeTunnel(response, output, closed);
+        }, 1, java.time.Duration.ofMillis(300))) {
+            try (Socket minecraft = new Socket()) {
+                minecraft.connect(bridge.route(vpn()), 2_000);
+                minecraft.setSoTimeout(3_000);
+                var input = minecraft.getInputStream();
+                long until = System.nanoTime() + java.time.Duration.ofMillis(1_500).toNanos();
+                int received = 0;
+                while (System.nanoTime() < until) {
+                    PipedOutputStream server;
+                    while ((server = reply.get()) == null) Thread.sleep(5);
+                    server.write(1);
+                    server.flush();
+                    assertEquals(1, input.read(), "server data keeps flowing though the client sends nothing");
+                    received++;
+                    Thread.sleep(100);
+                }
+                assertTrue(received >= 10);
+                assertEquals(1, closed.getCount(), "an active connection must not be closed by the idle limit");
+            }
+            assertTrue(closed.await(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test void connectionWithNoTrafficInEitherDirectionIsReclaimedAfterTheIdleLimit() throws Exception {
+        CountDownLatch closed = new CountDownLatch(1);
+        try (var bridge = new LoopbackBridge((ip, port) -> {
+            var response = new PipedInputStream(1_024);
+            return pipeTunnel(response, new PipedOutputStream(response), closed);
+        }, 1, java.time.Duration.ofMillis(300))) {
+            try (Socket minecraft = new Socket()) {
+                minecraft.connect(bridge.route(vpn()), 2_000);
+                minecraft.setSoTimeout(5_000);
+                assertEquals(-1, minecraft.getInputStream().read());
+                assertTrue(closed.await(2, TimeUnit.SECONDS));
+            }
+            long until = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
+            while (true) {
+                try {
+                    assertTrue(bridge.route(vpn()).getAddress().isLoopbackAddress());
+                    break;
+                } catch (IllegalStateException stillHeld) {
+                    if (System.nanoTime() > until) throw stillHeld;
+                    Thread.sleep(20);
+                }
+            }
+        }
+    }
+
+    @Test void defaultIdleLimitIsFarLongerThanAMinecraftLoginQueueWait() {
+        assertTrue(LoopbackBridge.IDLE_TIMEOUT.compareTo(java.time.Duration.ofMinutes(2)) >= 0);
+    }
+
     @Test void unresolvedIpv4LiteralIsInterceptedWithoutDns() throws Exception {
         try (var bridge = new LoopbackBridge((ip, port) -> { throw new IOException("VPN offline"); })) {
             InetSocketAddress literal = InetSocketAddress.createUnresolved("26.4.5.6", 25565);

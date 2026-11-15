@@ -136,4 +136,19 @@ class NetworkJoinTest {
                 IllegalArgumentException.class,
                 () -> join.handle(response(ID, 1), new Membership(OWN_RID)));
     }
+
+    @Test
+    void wrongPasswordReplyIsReportedAsWrongPassword() {
+        try (NetworkJoin join = new NetworkJoin(NAME, "wrong-password".toCharArray(), ID, SEQUENCE)) {
+            join.start();
+            byte[] failed =
+                    io.github.gringoestrangeiro.openradplugin.crypto.ShRecord.record(
+                            0x10000000, new byte[4]);
+            var refused =
+                    assertThrows(
+                            NetworkJoin.Refused.class,
+                            () -> join.handle(authReply(failed), new Membership(OWN_RID)));
+            assertTrue(refused.getMessage().contains("wrong network password"));
+        }
+    }
 }

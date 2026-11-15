@@ -67,5 +67,9 @@
   "openrad.network.mainbutton": "ネットワーク: %s",
   "openrad.network.short.none": "なし",
   "openrad.network.short.all": "すべて",
-  "openrad.network.short.specific": "%s件"
+  "openrad.network.short.specific": "%s件",
+  "openrad.menu.disconnect_timeout": "切断に時間がかかっています。しばらくしてからもう一度お試しください。",
+  "openrad.menu.handover_timeout": "設定は保存されましたが、以前の接続がまだ終了していません。しばらくしてからもう一度お試しください。",
+  "openrad.menu.not_started": "接続を開始できませんでした。しばらくしてからもう一度お試しください。",
+  "openrad.menu.config_invalid": "保存されている設定が無効です。OpenRadメニューを開いて保存し、置き換えてください。"
 }

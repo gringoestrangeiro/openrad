@@ -53,7 +53,7 @@ O plugin não modifica `online-mode`. Mantenha a autenticação de jogador que s
 
 `bridge.max-players-through-vpn` limita fluxos TCP simultâneos, incluindo conexões auxiliares/handshakes do Minecraft; não é uma contagem exata de jogadores. Há também limite interno de8 fluxos por peer e `bridge.max-pending-tcp` para handshakes pendentes. O runtime limita peers com `vpn.max-peers` e até8 handshakes de peer simultâneos. Filas, memória e deadlines adicionais estão em `virtual-tcp.md`.
 
-`/orb reload` valida a nova configuração/segredos antes de encerrar conexões. Uma alteração inválida não substitui a configuração vigente. Uma configuração válida reinicia a geração e desconecta jogadores. `/orb reconnect` mantém a configuração atual validada. Retirar uma rede revoga seu acesso local; não apaga a participação no serviço.
+`/orb reload` valida a nova configuração/segredos antes de encerrar conexões. Uma alteração inválida não substitui a configuração vigente. Uma configuração válida reinicia a geração e desconecta jogadores; com `bridge.enabled: false` ela não precisa de `secrets.properties` e encerra a VPN em execução. `/orb reconnect` mantém a configuração atual validada (com a VPN desativada, apenas avisa que nada foi reiniciado). Retirar uma rede revoga seu acesso local; não apaga a participação no serviço.
 
 Se houver `registration.pending` sem identidade salva, preserve esse estado. Registro automático permanece bloqueado porque o serviço pode já ter emitido a credencial. Uma decisão deliberada por nova identidade requer tratar esse perfil separadamente; não apague marcadores automaticamente em scripts de recuperação.
 

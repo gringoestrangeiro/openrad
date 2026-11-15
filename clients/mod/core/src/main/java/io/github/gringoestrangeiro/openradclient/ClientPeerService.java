@@ -13,9 +13,11 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** One attachment generation. A single worker owns each encrypted channel and its cipher state. */
-final class ClientPeerService implements AutoCloseable {
+final class ClientPeerService implements AutoCloseable, PeerShutdown.Stoppable {
     private static final PeerConnector.Policy ALL_TRANSPORTS = new PeerConnector.Policy(true, true, true);
     /** Force relay suppresses direct transport setup in both directions (Rust relay-only mode). */
     private static final PeerConnector.Policy RELAY_ONLY = new PeerConnector.Policy(false, false, true);
@@ -34,7 +36,8 @@ final class ClientPeerService implements AutoCloseable {
     private final ThreadPoolExecutor executor;
     private final AsyncResourceCloser resourceCloser;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Object changed = new Object();
+    private final ReentrantLock changeLock = new ReentrantLock();
+    private final Condition changed = changeLock.newCondition();
     private final LanServerRegistry lan = new LanServerRegistry();
     private final OutboundTcpStack stack;
     private volatile Map<Long, PeerAuthorization.Grant> authorized = Map.of();
@@ -99,7 +102,8 @@ final class ClientPeerService implements AutoCloseable {
             else if (Long.compareUnsigned(identity.rid(), rid) > 0 && workers.remove(rid, worker))
                 worker.close();
         }
-        synchronized (changed) {
+        changeLock.lock();
+        try {
             for (long rid : requested.keySet()) {
                 if (!next.containsKey(rid) || workers.containsKey(rid) || workers.size() < maxPeers) continue;
                 List<PeerCapacityPlanner.Candidate> residents = workers.values().stream()
@@ -119,6 +123,8 @@ final class ClientPeerService implements AutoCloseable {
                             System.nanoTime() + TimeUnit.SECONDS.toNanos(30), old.lastStarted()));
                 }
             }
+        } finally {
+            changeLock.unlock();
         }
         int connecting = (int) workers.values().stream().filter(w -> w.channel == null).count();
         int free = Math.max(0, maxPeers - workers.size());
@@ -179,7 +185,8 @@ final class ClientPeerService implements AutoCloseable {
         long rid = grant.peer().rid();
         PeerChannel selectedChannel;
         try {
-            synchronized (changed) {
+            changeLock.lock();
+            try {
                 requested.merge(rid, 1, Integer::sum);
                 while (true) {
                     if (closed.get()) throw new IOException("OpenRad session closed");
@@ -192,12 +199,14 @@ final class ClientPeerService implements AutoCloseable {
                     }
                     long remaining = until - System.nanoTime();
                     if (remaining <= 0) throw new SocketTimeoutException("OpenRad authenticated peer connection timed out");
-                    try { TimeUnit.NANOSECONDS.timedWait(changed, remaining); }
+                    try { changed.awaitNanos(remaining); }
                     catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
                         throw new InterruptedIOException("OpenRad connection interrupted");
                     }
                 }
+            } finally {
+                changeLock.unlock();
             }
             long remaining = until - System.nanoTime();
             if (remaining <= 0) throw new SocketTimeoutException("OpenRad connection timed out");
@@ -221,19 +230,32 @@ final class ClientPeerService implements AutoCloseable {
         PeerAuthorization.Grant grant = authorizedByVip.get(destination);
         if (grant == null) throw new IOException("OpenRad destination authorization revoked");
         PeerWorker worker = workers.get(grant.peer().rid());
-        if (worker == null || worker.channel == null || !worker.offer(frame))
-            throw new IOException("OpenRad peer unavailable or outbound frame queue full");
+        boolean queued;
+        try {
+            queued = worker != null && worker.channel != null && worker.offer(frame);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedIOException("OpenRad frame delivery interrupted");
+        }
+        if (!queued) throw new IOException("OpenRad peer unavailable or outbound frame queue full");
     }
 
-    private void signalChanged() { synchronized (changed) { changed.notifyAll(); } }
+    private void signalChanged() {
+        changeLock.lock();
+        try {
+            changed.signalAll();
+        } finally {
+            changeLock.unlock();
+        }
+    }
 
     private final class PeerWorker implements Runnable, AutoCloseable {
         final PeerAuthorization.Grant grant;
         final IncomingHub.Setup setup;
         final AsyncResourceCloser.Lease cleanup;
-        final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(128);
+        final PeerFrameQueue frames = new PeerFrameQueue();
         final Set<AutoCloseable> resources = Collections.newSetFromMap(new IdentityHashMap<>());
-        boolean stopped;
+        volatile boolean stopped;
         volatile PeerChannel channel;
 
         PeerWorker(PeerAuthorization.Grant grant, IncomingHub.Setup setup, AsyncResourceCloser.Lease cleanup) {
@@ -251,7 +273,8 @@ final class ClientPeerService implements AutoCloseable {
             if (reject) closeQuietly(resource);
         }
         // The stack hands over a freshly encoded frame it never touches again: no copy needed.
-        synchronized boolean offer(byte[] frame) { return !stopped && frames.offer(frame); }
+        /** Never called with the monitor held: a full queue makes the producer wait briefly. */
+        boolean offer(byte[] frame) throws InterruptedException { return !stopped && frames.offer(frame); }
         synchronized boolean stopped() { return stopped; }
         boolean authorized() { return PeerAuthorization.stillBound(grant, authorized.get(grant.peer().rid())); }
 
@@ -284,12 +307,14 @@ final class ClientPeerService implements AutoCloseable {
                 long keepalive = System.nanoTime() + Duration.ofSeconds(15).toNanos(), lastPacket = System.nanoTime();
                 long lastTraffic = 0;
                 while (!stopped() && !closed.get() && authorized()) {
+                    boolean backlog = false;
                     for (int i = 0; i < 256; i++) {
                         if (stopped() || closed.get() || !authorized()) break;
                         byte[] frame = frames.peek();
                         if (frame == null || !connected.sendFrame(frame)) break;
                         frames.poll();
                         lastTraffic = System.nanoTime();
+                        backlog = i == 255 && !frames.isEmpty();
                     }
                     if (System.nanoTime() >= keepalive && connected.send(TunnelCodec.keepalive(sequence + 1, false))) {
                         sequence++;
@@ -298,7 +323,8 @@ final class ClientPeerService implements AutoCloseable {
                     // Outbound frames are drained only between reads: poll briefly while traffic
                     // flows so client-to-server packets are not held for a full 20 ms wait.
                     boolean busy = !frames.isEmpty() || System.nanoTime() - lastTraffic < ACTIVE_WINDOW;
-                    if (connected.ready(busy ? ACTIVE_POLL : IDLE_POLL)) {
+                    // A drain cut short by its batch bound continues at once instead of after a (coarse) wait.
+                    if (connected.ready(backlog ? Duration.ZERO : busy ? ACTIVE_POLL : IDLE_POLL)) {
                         TunnelCodec.Packet packet = connected.receivePacket();
                         lastPacket = System.nanoTime();
                         if (packet instanceof TunnelCodec.Keepalive alive && !alive.reply())
@@ -341,7 +367,7 @@ final class ClientPeerService implements AutoCloseable {
                 channel = null;
                 owned = List.copyOf(resources);
                 resources.clear();
-                frames.clear();
+                frames.close();
             }
             if (setup != null) setup.close();
             cleanup.finish(owned);
@@ -363,9 +389,15 @@ final class ClientPeerService implements AutoCloseable {
         signalChanged();
     }
 
-    void awaitStopped() throws InterruptedException {
-        while (!executor.awaitTermination(1, TimeUnit.SECONDS)) { }
-        while (!resourceCloser.awaitStopped(Duration.ofSeconds(1))) { }
+    @Override public boolean awaitStopped(Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        if (!executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS)) return false;
+        return resourceCloser.awaitStopped(Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
+    }
+
+    @Override public String describeRunning() {
+        return "peer worker threads " + executor.getActiveCount() + ", cleanup tasks "
+                + resourceCloser.pending();
     }
     private static void closeQuietly(AutoCloseable value) {
         try { value.close(); } catch (Exception ignored) { }

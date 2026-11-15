@@ -67,5 +67,9 @@
   "openrad.network.mainbutton": "Escolher redes: %s",
   "openrad.network.short.none": "Nenhuma",
   "openrad.network.short.all": "Todas",
-  "openrad.network.short.specific": "%s selecionadas"
+  "openrad.network.short.specific": "%s selecionadas",
+  "openrad.menu.disconnect_timeout": "A desconexão está demorando demais. Tente novamente em instantes.",
+  "openrad.menu.handover_timeout": "Configurações salvas, mas a conexão anterior ainda está encerrando. Tente novamente em instantes.",
+  "openrad.menu.not_started": "A conexão não foi iniciada. Tente novamente em instantes.",
+  "openrad.menu.config_invalid": "A configuração salva é inválida. Abra o menu OpenRad e salve para substituí-la."
 }

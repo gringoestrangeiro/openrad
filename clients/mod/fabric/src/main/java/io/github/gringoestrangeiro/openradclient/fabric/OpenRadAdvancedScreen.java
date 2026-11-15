@@ -61,16 +61,26 @@ public final class OpenRadAdvancedScreen extends Screen {
         // Valid saved lists may exceed the limit used for new UI input.
         box.setMaxLength(Math.max(limit, value.length()));
         box.setValue(value);
+        box.setResponder(edited -> invalid = false);
         return addRenderableWidget(box);
     }
     private static List<String> split(String value) {
         return value.isBlank() ? List.of() : Arrays.stream(value.split(";", -1)).map(String::trim).toList();
     }
+    /** Like the network picker, emptying both lists switches auto-connect off instead of failing validation. */
+    static io.github.gringoestrangeiro.openradclient.ClientConfig parse(boolean autoConnect, String names,
+            String peers, String connections, String timeout, String selectors, String maxNetworks, boolean forceRelay) {
+        List<String> exact = split(names), technical = split(selectors);
+        return new io.github.gringoestrangeiro.openradclient.ClientConfig(
+                autoConnect && !(exact.isEmpty() && technical.isEmpty()), exact,
+                Integer.parseInt(peers), Integer.parseInt(connections), Integer.parseInt(timeout),
+                technical, Integer.parseInt(maxNetworks), forceRelay);
+    }
     private void apply() {
         try {
-            var config = new io.github.gringoestrangeiro.openradclient.ClientConfig(draft.autoConnect,
-                    split(names.getValue()), Integer.parseInt(peers.getValue()), Integer.parseInt(connections.getValue()),
-                    Integer.parseInt(timeout.getValue()), split(selectors.getValue()), Integer.parseInt(maxNetworks.getValue()), forceRelay);
+            var config = parse(draft.autoConnect, names.getValue(), peers.getValue(), connections.getValue(),
+                    timeout.getValue(), selectors.getValue(), maxNetworks.getValue(), forceRelay);
+            draft.autoConnect = config.autoConnect();
             draft.maxPeers = config.maxPeers();
             draft.maxConnections = config.maxConnections();
             draft.timeout = config.connectionTimeoutSeconds();

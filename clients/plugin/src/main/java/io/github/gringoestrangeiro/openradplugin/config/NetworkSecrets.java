@@ -13,7 +13,17 @@ public final class NetworkSecrets implements AutoCloseable {
     static final int MAX_FILE_BYTES = 65536;
     private final Map<String, char[]> values = new HashMap<>();
 
-    public static NetworkSecrets load(Path directory) throws IOException {
+    /**
+     * Secrets for a replacement configuration. A disabled bridge never uses them, so a missing or
+     * invalid password must not prevent turning the VPN off: it gets an empty set and the file is not
+     * read.
+     */
+    public static NetworkSecrets loadFor(Path directory, VpnSettings settings) throws IOException {
+        return settings.bridge().enabled() ? load(directory) : new NetworkSecrets();
+    }
+
+    /** Creates the owner-only template {@code secrets.properties} when it does not exist yet. */
+    public static void createIfMissing(Path directory) throws IOException {
         Path path = directory.resolve("secrets.properties");
         Files.createDirectories(directory);
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
@@ -33,7 +43,11 @@ public final class NetworkSecrets implements AutoCloseable {
                         + "# example-key=your-network-password\n",
                     StandardCharsets.UTF_8);
         }
-        return read(path);
+    }
+
+    public static NetworkSecrets load(Path directory) throws IOException {
+        createIfMissing(directory);
+        return read(directory.resolve("secrets.properties"));
     }
 
     static NetworkSecrets readExisting(Path directory) throws IOException {
@@ -93,6 +107,7 @@ public final class NetworkSecrets implements AutoCloseable {
 
     /** The editor separately validates the new password before staging it. */
     void validate(VpnSettings settings, String stagedSecret) {
+        if (!settings.bridge().enabled()) return;
         for (var network : settings.networks()) {
             String key = network.secret();
             if (!key.isEmpty() && !key.equals(stagedSecret)) requiredPassword(key);

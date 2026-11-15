@@ -5,32 +5,77 @@ import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.time.Duration;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Bounded four-byte big-endian framing, including the direct TCP rendezvous. */
 public final class FramedTcp implements RecordTransport {
-    private static final ScheduledThreadPoolExecutor WRITE_TIMER = writeTimer();
+    private static final long WRITE_LIMIT = Duration.ofSeconds(5).toNanos();
+    private static final long NO_WRITE = Long.MAX_VALUE, WRITE_EXPIRED = Long.MIN_VALUE;
+    private static final WriteWatchdog WATCHDOG = new WriteWatchdog();
 
-    private static ScheduledThreadPoolExecutor writeTimer() {
-        ScheduledThreadPoolExecutor timer =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, "openrad-tcp-write-deadlines");
-                            t.setDaemon(true);
-                            t.setContextClassLoader(ClassLoader.getPlatformClassLoader());
-                            return t;
-                        });
-        timer.setRemoveOnCancelPolicy(true);
-        timer.setKeepAliveTime(1, TimeUnit.SECONDS);
-        timer.allowCoreThreadTimeOut(true);
-        return timer;
+    /**
+     * Closes the socket of any write that outlives its deadline. Writers only publish a
+     * timestamp; this single daemon thread sweeps the streams that have written, and exits as soon
+     * as none is left so that it never outlives its plugin class loader.
+     */
+    static final class WriteWatchdog implements Runnable {
+        private static final long SWEEP = Duration.ofMillis(250).toNanos();
+        private final Set<FramedTcp> streams =
+                Collections.newSetFromMap(new IdentityHashMap<>());
+        private boolean running;
+
+        synchronized void add(FramedTcp stream) {
+            streams.add(stream);
+            if (running) return;
+            Thread thread = new Thread(this, "openrad-tcp-write-watchdog");
+            thread.setDaemon(true);
+            thread.setContextClassLoader(ClassLoader.getPlatformClassLoader());
+            thread.start();
+            running = true;
+        }
+
+        synchronized void remove(FramedTcp stream) {
+            streams.remove(stream);
+        }
+
+        synchronized int size() {
+            return streams.size();
+        }
+
+        synchronized boolean running() {
+            return running;
+        }
+
+        @Override
+        public void run() {
+            while (true) {
+                FramedTcp[] live;
+                synchronized (this) {
+                    streams.removeIf(stream -> stream.socket.isClosed());
+                    if (streams.isEmpty()) {
+                        running = false;
+                        return;
+                    }
+                    live = streams.toArray(new FramedTcp[0]);
+                }
+                long now = System.nanoTime();
+                for (FramedTcp stream : live) stream.abortStalledWrite(now);
+                LockSupport.parkNanos(SWEEP);
+            }
+        }
     }
 
     private final Socket socket;
     private final PushbackInputStream input;
     private final OutputStream output;
+    private final ReentrantLock writeLock = new ReentrantLock();
+    private final AtomicLong writeDeadline = new AtomicLong(NO_WRITE);
+    private volatile boolean watched;
     private long deadline;
     private int records;
     private long received;
@@ -146,28 +191,42 @@ public final class FramedTcp implements RecordTransport {
 
     private void writeRaw(byte[]... parts) throws IOException {
         checkDeadline();
-        AtomicBoolean active = new AtomicBoolean(true);
-        long budget = Math.min(5_000_000_000L, deadline - System.nanoTime());
-        ScheduledFuture<?> timer =
-                WRITE_TIMER.schedule(
-                        () -> {
-                            if (active.compareAndSet(true, false))
-                                try {
-                                    socket.close();
-                                } catch (IOException ignored) {
-                                }
-                        },
-                        Math.max(1, budget),
-                        TimeUnit.NANOSECONDS);
+        writeLock.lock();
         try {
-            for (byte[] part : parts) output.write(part);
-            output.flush();
-            if (!active.compareAndSet(true, false))
-                throw new SocketTimeoutException("TCP write deadline");
+            long now = System.nanoTime();
+            long limit = now + Math.max(1, Math.min(WRITE_LIMIT, deadline - now));
+            writeDeadline.set(limit);
+            if (!watched) {
+                watched = true;
+                WATCHDOG.add(this);
+            }
+            boolean expired;
+            try {
+                for (byte[] part : parts) output.write(part);
+                output.flush();
+            } finally {
+                expired = !writeDeadline.compareAndSet(limit, NO_WRITE);
+            }
+            if (expired) throw new SocketTimeoutException("TCP write deadline");
         } finally {
-            active.set(false);
-            timer.cancel(false);
+            writeLock.unlock();
         }
+    }
+
+    private void abortStalledWrite(long now) {
+        long limit = writeDeadline.get();
+        if (limit != NO_WRITE
+                && limit != WRITE_EXPIRED
+                && now >= limit
+                && writeDeadline.compareAndSet(limit, WRITE_EXPIRED))
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+    }
+
+    static int watchedStreams() {
+        return WATCHDOG.size();
     }
 
     @Override
@@ -257,6 +316,10 @@ public final class FramedTcp implements RecordTransport {
 
     @Override
     public void close() throws IOException {
-        socket.close();
+        try {
+            socket.close();
+        } finally {
+            if (watched) WATCHDOG.remove(this);
+        }
     }
 }

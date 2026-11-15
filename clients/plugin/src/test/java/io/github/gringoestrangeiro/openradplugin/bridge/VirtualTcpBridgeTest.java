@@ -1218,6 +1218,327 @@ class VirtualTcpBridgeTest {
         }
     }
 
+    private static VirtualTcpBridge.Limits halfOpenLimits(int perPeer, Duration handshake) {
+        return new VirtualTcpBridge.Limits(
+                8,
+                perPeer,
+                64,
+                65536,
+                2 * 1024 * 1024,
+                Duration.ofSeconds(2),
+                handshake,
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(5),
+                Duration.ofMillis(100),
+                2,
+                8);
+    }
+
+    private static VirtualTcpBridge routedBridge(
+            Backend backend,
+            VirtualTcpBridge.Limits limits,
+            Map<Long, BlockingQueue<TcpSegment>> replies)
+            throws IOException {
+        return routedBridge(backend, limits, replies, line -> {});
+    }
+
+    private static VirtualTcpBridge routedBridge(
+            Backend backend,
+            VirtualTcpBridge.Limits limits,
+            Map<Long, BlockingQueue<TcpSegment>> replies,
+            java.util.function.Consumer<String> log)
+            throws IOException {
+        return new VirtualTcpBridge(
+                LOCAL,
+                LOCAL_MAC,
+                PORT,
+                backend.address(),
+                limits,
+                (rid, frame) -> {
+                    var ip = Ipv4Packet.parse(EthernetFrame.parse(frame).payload());
+                    replies.computeIfAbsent(rid, key -> new LinkedBlockingQueue<>())
+                            .add(TcpSegment.parse(ip.tcpBytes(), ip.sourceIp(), ip.destinationIp()));
+                },
+                null,
+                log);
+    }
+
+    /** Completes a handshake and returns the next client sequence and server sequence. */
+    private static long[] establish(
+            VirtualTcpBridge bridge,
+            BlockingQueue<TcpSegment> wire,
+            InboundFirewall.PeerGrant grant,
+            int port)
+            throws InterruptedException {
+        sendTcp(bridge, grant, port, 7000, 0, SYN, EMPTY);
+        TcpSegment synAck = take(wire);
+        assertEquals(SYN | ACK, synAck.flags());
+        long serverNext = synAck.sequence() + 1;
+        sendTcp(bridge, grant, port, 7001, serverNext, ACK, EMPTY);
+        return new long[] {7001, serverNext};
+    }
+
+    private static TcpSegment takeWhere(
+            BlockingQueue<TcpSegment> wire, java.util.function.Predicate<TcpSegment> wanted)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            TcpSegment segment = wire.poll(50, TimeUnit.MILLISECONDS);
+            if (segment != null && wanted.test(segment)) return segment;
+        }
+        return fail("expected segment never arrived");
+    }
+
+    @Test
+    void faultsInOneConnectionResetOnlyThatConnectionAreLoggedAndLeaveOthersRunning()
+            throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        try (Backend backend =
+                        new Backend(socket -> socket.getInputStream().transferTo(socket.getOutputStream()));
+                VirtualTcpBridge bridge =
+                        routedBridge(backend, VirtualTcpBridge.Limits.defaults(), replies, logs::add)) {
+            var grant = grantFor(GRANT.rid());
+            var wire = replies.computeIfAbsent(GRANT.rid(), k -> new LinkedBlockingQueue<>());
+            long[] healthy = establish(bridge, wire, grant, 44000);
+            long[] doomed = establish(bridge, wire, grant, 44001);
+            await(
+                    () ->
+                            bridge.state(GRANT.rid(), 44000) == VirtualTcpBridge.TcpState.ESTABLISHED
+                                    && bridge.state(GRANT.rid(), 44001)
+                                            == VirtualTcpBridge.TcpState.ESTABLISHED);
+            bridge.faultProbe =
+                    (where, rid, port) -> {
+                        if (where.equals("segment") && (port == 44001 || port >= 45000))
+                            throw new IllegalStateException("injected segment fault");
+                    };
+            sendTcp(bridge, grant, 44001, doomed[0], doomed[1], ACK | PSH, new byte[] {1, 2, 3});
+            TcpSegment reset = takeWhere(wire, s -> (s.flags() & RST) != 0);
+            assertEquals(44001, reset.destinationPort());
+            await(() -> bridge.snapshot().connections() == 1);
+            assertEquals(1, logs.size(), logs.toString());
+            assertTrue(logs.get(0).contains("IllegalStateException"), logs.get(0));
+            assertTrue(logs.get(0).contains("injected segment fault"), logs.get(0));
+            assertTrue(logs.get(0).contains("port 44001"), logs.get(0));
+            assertTrue(bridge.isRunning());
+
+            // The untouched connection still echoes through the real backend.
+            sendTcp(
+                    bridge,
+                    grant,
+                    44000,
+                    healthy[0],
+                    healthy[1],
+                    ACK | PSH,
+                    "still alive".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            TcpSegment echo =
+                    takeWhere(wire, s -> s.destinationPort() == 44000 && s.payloadLength() > 0);
+            assertEquals(
+                    "still alive",
+                    new String(echo.payload(), java.nio.charset.StandardCharsets.US_ASCII));
+
+            // Faults on a fresh SYN reset the peer too; reports are rate limited, not lost.
+            for (int port = 45000; port < 45005; port++)
+                sendTcp(bridge, grant, port, 100, 0, SYN, EMPTY);
+            for (int i = 0; i < 5; i++) {
+                TcpSegment answer = takeWhere(wire, s -> s.destinationPort() >= 45000);
+                assertEquals(RST | ACK, answer.flags());
+            }
+            assertEquals(6, bridge.faults());
+            assertEquals(1, logs.size(), "reports within the interval are rate limited");
+            assertTrue(bridge.isRunning());
+        }
+    }
+
+    @Test
+    void timerFaultResetsOnlyTheAffectedConnection() throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge =
+                        routedBridge(backend, VirtualTcpBridge.Limits.defaults(), replies, logs::add)) {
+            var grant = grantFor(GRANT.rid());
+            var wire = replies.computeIfAbsent(GRANT.rid(), k -> new LinkedBlockingQueue<>());
+            establish(bridge, wire, grant, 44000);
+            establish(bridge, wire, grant, 44001);
+            await(
+                    () ->
+                            bridge.state(GRANT.rid(), 44000) == VirtualTcpBridge.TcpState.ESTABLISHED
+                                    && bridge.state(GRANT.rid(), 44001)
+                                            == VirtualTcpBridge.TcpState.ESTABLISHED);
+            bridge.faultProbe =
+                    (where, rid, port) -> {
+                        if (where.equals("timer") && port == 44001)
+                            throw new IllegalArgumentException("injected timer fault");
+                    };
+            TcpSegment reset = takeWhere(wire, s -> (s.flags() & RST) != 0);
+            assertEquals(44001, reset.destinationPort());
+            await(() -> bridge.snapshot().connections() == 1);
+            assertEquals(VirtualTcpBridge.TcpState.ESTABLISHED, bridge.state(GRANT.rid(), 44000));
+            assertEquals(1, logs.size(), logs.toString());
+            assertTrue(logs.get(0).contains("injected timer fault"), logs.get(0));
+            assertTrue(bridge.isRunning());
+        }
+    }
+
+    @Test
+    void fatalErrorStopsTheBridgeVisiblyAndIsReported() throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        List<String> logs = new CopyOnWriteArrayList<>();
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge =
+                        routedBridge(backend, VirtualTcpBridge.Limits.defaults(), replies, logs::add)) {
+            var grant = grantFor(GRANT.rid());
+            var wire = replies.computeIfAbsent(GRANT.rid(), k -> new LinkedBlockingQueue<>());
+            establish(bridge, wire, grant, 44000);
+            assertTrue(bridge.isRunning());
+            assertNull(bridge.failure());
+            bridge.faultProbe =
+                    (where, rid, port) -> {
+                        throw new InternalError("injected fatal error");
+                    };
+            sendTcp(bridge, grant, 44000, 7001, 1, ACK, EMPTY);
+            await(() -> !bridge.isRunning());
+            assertInstanceOf(InternalError.class, bridge.failure());
+            assertEquals(1, logs.size(), logs.toString());
+            assertTrue(logs.get(0).contains("injected fatal error"), logs.get(0));
+            assertTrue(logs.get(0).contains("stopped"), logs.get(0));
+            assertEquals(0, bridge.snapshot().connections());
+            assertFalse(
+                    bridge.accept(
+                            grant,
+                            ethernet(
+                                    PEER_MAC,
+                                    PEER,
+                                    new TcpSegment(1, PORT, 1, 0, SYN, 1, EMPTY, EMPTY))));
+        }
+    }
+
+    @Test
+    void bridgeWithOnlyTimeWaitTombstonesSleepsUntilTheirExpiryInsteadOfPolling()
+            throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        var d = VirtualTcpBridge.Limits.defaults();
+        var limits =
+                new VirtualTcpBridge.Limits(
+                        8,
+                        8,
+                        64,
+                        65536,
+                        2 * 1024 * 1024,
+                        d.connectTimeout(),
+                        d.handshakeTimeout(),
+                        d.idleTimeout(),
+                        d.halfCloseTimeout(),
+                        Duration.ofMillis(1200),
+                        4);
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge = routedBridge(backend, limits, replies)) {
+            var wire = replies.computeIfAbsent(GRANT.rid(), k -> new LinkedBlockingQueue<>());
+            closeCleanly(bridge, wire, GRANT.rid(), 46000);
+            await(() -> bridge.state(GRANT.rid(), 46000) == VirtualTcpBridge.TcpState.TIME_WAIT);
+            long before = bridge.selectorPasses();
+            Thread.sleep(500);
+            long passes = bridge.selectorPasses() - before;
+            System.out.println("TIME_WAIT-only selector passes in 500 ms: " + passes);
+            assertTrue(
+                    passes <= 5,
+                    "selector polled " + passes + " times while only TIME_WAIT remained");
+            long expiryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (bridge.snapshot().connections() != 0 && System.nanoTime() < expiryDeadline)
+                Thread.sleep(10);
+            assertEquals(0, bridge.snapshot().connections(), "TIME_WAIT tombstone never expired");
+            assertEquals(0, bridge.snapshot().bufferedBytes());
+        }
+    }
+
+    @Test
+    void ordinaryPingLoginAndImmediateReconnectFlowsSucceedBesideHalfOpenAttackers()
+            throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        var limits =
+                new VirtualTcpBridge.Limits(
+                        8,
+                        2,
+                        64,
+                        65536,
+                        2 * 1024 * 1024,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(10),
+                        Duration.ofSeconds(5),
+                        Duration.ofMillis(100),
+                        2,
+                        8,
+                        2);
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge = routedBridge(backend, limits, replies)) {
+            for (long rid = 100; rid < 103; rid++)
+                for (int port = 40000; port < 40002; port++)
+                    sendTcp(bridge, grantFor(rid), port, 500, 0, SYN, EMPTY);
+            for (long rid = 100; rid < 103; rid++)
+                for (int i = 0; i < 2; i++)
+                    assertEquals(SYN | ACK, take(replies.computeIfAbsent(rid, k -> new LinkedBlockingQueue<>())).flags());
+            assertEquals(6, bridge.snapshot().connections());
+            var player = replies.computeIfAbsent(GRANT.rid(), k -> new LinkedBlockingQueue<>());
+            closeCleanly(bridge, player, GRANT.rid(), 43000); // server-list ping
+            closeCleanly(bridge, player, GRANT.rid(), 43001); // login
+            closeCleanly(bridge, player, GRANT.rid(), 43002); // reconnect right away
+            assertEquals(0, bridge.snapshot().resets(), "player flows must never be reset");
+        }
+    }
+
+    private static InboundFirewall.PeerGrant grantFor(long rid) {
+        return new InboundFirewall.PeerGrant(rid, true, Set.of("synthetic"), PEER, PEER_MAC);
+    }
+
+    @Test
+    void halfOpenSynsPerPeerAreCappedSoFewMembersCannotExhaustTheBridge() throws Exception {
+        // Eight slots, four per peer: before the half-open cap two members that never finish a
+        // handshake held every slot. Each now keeps two, so a third and a fourth member still
+        // get in.
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge =
+                        routedBridge(backend, halfOpenLimits(4, Duration.ofSeconds(5)), replies)) {
+            for (long rid = 100; rid < 103; rid++)
+                for (int port = 40000; port < 40004; port++)
+                    sendTcp(bridge, grantFor(rid), port, 500, 0, SYN, EMPTY);
+            for (long rid = 100; rid < 103; rid++) {
+                // Resets are immediate while SYN-ACKs follow the backend connect: compare as a set.
+                List<Integer> flags = new ArrayList<>();
+                for (int i = 0; i < 4; i++) flags.add(take(replies.computeIfAbsent(rid, k -> new LinkedBlockingQueue<>())).flags());
+                assertEquals(2, flags.stream().filter(f -> f == (SYN | ACK)).count(), "member " + rid);
+                assertEquals(2, flags.stream().filter(f -> f == (RST | ACK)).count(), "member " + rid);
+            }
+            assertEquals(6, bridge.snapshot().connections());
+            sendTcp(bridge, grantFor(200), 41000, 700, 0, SYN, EMPTY);
+            assertEquals(SYN | ACK, take(replies.computeIfAbsent(200L, k -> new LinkedBlockingQueue<>())).flags());
+            await(() -> backend.accepted.get() == 7);
+        }
+    }
+
+    @Test
+    void completingAHandshakeFreesTheHalfOpenAllowanceOfThatMember() throws Exception {
+        Map<Long, BlockingQueue<TcpSegment>> replies = new ConcurrentHashMap<>();
+        try (Backend backend = new Backend(socket -> socket.getInputStream().readAllBytes());
+                VirtualTcpBridge bridge =
+                        routedBridge(backend, halfOpenLimits(4, Duration.ofSeconds(5)), replies)) {
+            var grant = grantFor(300);
+            var queue = replies.computeIfAbsent(300L, k -> new LinkedBlockingQueue<>());
+            sendTcp(bridge, grant, 42000, 900, 0, SYN, EMPTY);
+            TcpSegment first = take(queue);
+            sendTcp(bridge, grant, 42001, 900, 0, SYN, EMPTY);
+            assertEquals(SYN | ACK, take(queue).flags());
+            sendTcp(bridge, grant, 42002, 900, 0, SYN, EMPTY);
+            assertEquals(RST | ACK, take(queue).flags());
+            sendTcp(bridge, grant, 42000, 901, wire(first.sequence() + 1), ACK, EMPTY);
+            await(() -> bridge.state(300, 42000) == VirtualTcpBridge.TcpState.ESTABLISHED);
+            sendTcp(bridge, grant, 42002, 900, 0, SYN, EMPTY);
+            assertEquals(SYN | ACK, take(queue).flags());
+        }
+    }
+
     private static void sendTcp(
             VirtualTcpBridge bridge,
             InboundFirewall.PeerGrant grant,
@@ -1273,6 +1594,74 @@ class VirtualTcpBridgeTest {
                         EthernetFrame.IPV4,
                         new Ipv4Packet(ip, LOCAL, 64, tcp.encode(ip, LOCAL)).encode())
                 .encode();
+    }
+
+    /** Data segments of the bridge until the wire stays quiet for {@code quietMillis}. */
+    private static List<TcpSegment> dataSegments(Client client, long quietMillis)
+            throws InterruptedException {
+        List<TcpSegment> data = new ArrayList<>();
+        for (TcpSegment segment;
+                (segment = client.wire.poll(quietMillis, TimeUnit.MILLISECONDS)) != null; )
+            if (segment.payloadLength() > 0) data.add(segment);
+        return data;
+    }
+
+    @Test
+    void partialAcknowledgementDuringLossRecoveryResendsTheNextHoleAtOnce() throws Exception {
+        try (Backend backend =
+                        new Backend(
+                                socket -> {
+                                    socket.getOutputStream().write(new byte[12000]);
+                                    socket.getOutputStream().flush();
+                                    socket.getInputStream().readAllBytes();
+                                });
+                Client client = new Client(backend.address())) {
+            client.handshake();
+            List<TcpSegment> burst = dataSegments(client, 300);
+            assertTrue(burst.size() >= 6, "the initial window carries most of the 12000 bytes");
+            TcpSegment first = burst.get(0), second = burst.get(1), third = burst.get(2);
+            // Nothing is acknowledged: the retransmission timer resends the first hole.
+            TcpSegment resent;
+            do resent = client.take();
+            while (resent.sequence() != first.sequence());
+            long secondSequence = unwrap(second.sequence(), client.serverNext);
+            // The first hole is filled, the second was lost as well: the bridge must not wait for
+            // another (backed-off) timeout.
+            client.send(client.next, secondSequence, ACK, EMPTY, EMPTY);
+            long begin = System.nanoTime();
+            TcpSegment next;
+            do next = client.take();
+            while (next.sequence() != second.sequence());
+            // After the first timeout the RTO is at least 400 ms: only a partial ACK is this fast.
+            assertTrue(
+                    System.nanoTime() - begin < TimeUnit.MILLISECONDS.toNanos(300),
+                    "the next hole was resent only after a timeout");
+            client.send(client.next, unwrap(third.sequence(), client.serverNext), ACK, EMPTY, EMPTY);
+            do next = client.take();
+            while (next.sequence() != third.sequence());
+            assertTrue(client.bridge.snapshot().retransmissions() >= 3);
+        }
+    }
+
+    @Test
+    void aWindowThatOpenedByLessThanASegmentWaitsWhileDataIsInFlight() throws Exception {
+        try (Backend backend =
+                        new Backend(
+                                socket -> {
+                                    socket.getOutputStream().write(new byte[5000]);
+                                    socket.getOutputStream().flush();
+                                    socket.getInputStream().readAllBytes();
+                                });
+                Client client = new Client(backend.address())) {
+            client.advertisedWindow = 3000;
+            client.handshake();
+            // Quiet for less than the 200 ms minimum retransmission timeout: originals only.
+            List<TcpSegment> burst = dataSegments(client, 120);
+            assertEquals(
+                    List.of(1460, 1460),
+                    burst.stream().map(TcpSegment::payloadLength).toList(),
+                    "the 80 bytes of window left over must not leave as a sliver");
+        }
     }
 
     @FunctionalInterface

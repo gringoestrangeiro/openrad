@@ -16,6 +16,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /**
  * Bounded candidate negotiation. Coordinator records alone authorize endpoints and shared secrets.
@@ -48,6 +49,53 @@ public final class PeerConnector {
     private PeerConnector() {}
 
     private static final long SECOND = 1_000_000_000L;
+    private static final System.Logger LOG = System.getLogger(PeerConnector.class.getName());
+    private static final AtomicBoolean ACCEPTOR_RELAY_ALLOWED = new AtomicBoolean(true);
+    private static final AtomicLong LAST_ACCEPTOR_RELAY_REQUEST = new AtomicLong();
+    private static volatile LongSupplier clock = System::nanoTime;
+
+    /**
+     * Disable acceptor-initiated relay requests until the next {@link #attachmentStarted()} if the
+     * attachment objects within five seconds of one.
+     */
+    public static boolean serverObjected() {
+        long requested = LAST_ACCEPTOR_RELAY_REQUEST.get();
+        if (requested != 0 && clock.getAsLong() - requested < 5 * SECOND) {
+            ACCEPTOR_RELAY_ALLOWED.set(false);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Re-enable acceptor-initiated relay requests. The guard protects one control attachment, so
+     * every new attachment must call this before it can accept peers; an objection by an earlier
+     * attachment says nothing about the new one.
+     */
+    public static void attachmentStarted() {
+        LAST_ACCEPTOR_RELAY_REQUEST.set(0);
+        ACCEPTOR_RELAY_ALLOWED.set(true);
+    }
+
+    static boolean acceptorRelayAllowed() {
+        return ACCEPTOR_RELAY_ALLOWED.get();
+    }
+
+    static void acceptorRelayRequested() {
+        LAST_ACCEPTOR_RELAY_REQUEST.set(clock.getAsLong());
+    }
+
+    static void useClock(LongSupplier replacement) {
+        clock = replacement;
+    }
+
+    private static void dropped(String record, IllegalArgumentException reason) {
+        LOG.log(
+                System.Logger.Level.DEBUG,
+                "ignoring invalid peer {0} record: {1}",
+                record,
+                reason.getMessage());
+    }
 
     private static void closeQuietly(AutoCloseable c) {
         try {
@@ -718,14 +766,23 @@ public final class PeerConnector {
                         case 6 -> {
                             if (policy.tcp) {
                                 require(cid != null, "TCP candidates before offer");
-                                tcp = candidates(data, cid, 6, 0x1236, route);
-                                tcpSeen = true;
+                                try {
+                                    tcp = candidates(data, cid, 6, 0x1236, route);
+                                    tcpSeen = true;
+                                } catch (IllegalArgumentException invalid) {
+                                    dropped("TCP candidate", invalid);
+                                }
                             }
                         }
                         case 29 -> {
                             if (policy.udp) {
                                 require(cid != null, "UDP candidates before offer");
-                                udp = candidates(data, cid, 29, 0x127c, route);
+                                try {
+                                    udp = candidates(data, cid, 29, 0x127c, route);
+                                } catch (IllegalArgumentException invalid) {
+                                    dropped("UDP candidate", invalid);
+                                    continue;
+                                }
                                 var body = TlvCodec.optional(f, 0x127c);
                                 long n =
                                         body.isEmpty()
@@ -740,7 +797,11 @@ public final class PeerConnector {
                         case 7 -> {
                             if (policy.udp) {
                                 require(cid != null, "mapped candidate before offer");
-                                mapped = mapped(data, cid, route, true);
+                                try {
+                                    mapped = mapped(data, cid, route, true);
+                                } catch (IllegalArgumentException invalid) {
+                                    dropped("mapped UDP candidate", invalid);
+                                }
                             }
                         }
                         case 23 -> {
@@ -781,6 +842,74 @@ public final class PeerConnector {
         } catch (IOException | RuntimeException e) {
             closeQuietly(coord);
             throw e;
+        }
+    }
+
+    /**
+     * Admission control for unvalidated sockets on the wildcard rendezvous listener. Only sockets
+     * whose rendezvous failed or timed out consume the failure budget, concurrent unvalidated
+     * sockets are bounded in total and per remote address (a new socket evicts the oldest one of
+     * its address), and an address that keeps failing is dropped on accept.
+     */
+    private static final class RendezvousGate {
+        static final int CONCURRENT = 8,
+                PER_ADDRESS = 4,
+                FAILURES_PER_ADDRESS = 32,
+                FAILURES = 256;
+        private final ArrayDeque<Attempt> active = new ArrayDeque<>();
+        private final Map<InetAddress, Integer> failuresByAddress = new HashMap<>();
+        private int failures;
+
+        final class Attempt {
+            private final InetAddress from;
+            private final Socket socket;
+
+            private Attempt(InetAddress from, Socket socket) {
+                this.from = from;
+                this.socket = socket;
+            }
+
+            /** A validated socket can no longer be evicted. */
+            void validated() {
+                synchronized (RendezvousGate.this) {
+                    active.remove(this);
+                }
+            }
+
+            void failed() {
+                synchronized (RendezvousGate.this) {
+                    if (active.remove(this)) RendezvousGate.this.failed(from);
+                }
+            }
+        }
+
+        synchronized boolean saturated() {
+            return active.size() >= CONCURRENT || failures >= FAILURES;
+        }
+
+        /** Returns null when the socket must be closed without validation. */
+        synchronized Attempt admit(Socket socket) {
+            InetAddress from = socket.getInetAddress();
+            if (failuresByAddress.getOrDefault(from, 0) >= FAILURES_PER_ADDRESS) return null;
+            int same = 0;
+            for (Attempt a : active) if (a.from.equals(from)) same++;
+            if (same >= PER_ADDRESS)
+                for (Iterator<Attempt> it = active.iterator(); it.hasNext(); ) {
+                    Attempt oldest = it.next();
+                    if (!oldest.from.equals(from)) continue;
+                    it.remove();
+                    failed(from);
+                    closeQuietly(oldest.socket);
+                    break;
+                }
+            Attempt attempt = new Attempt(from, socket);
+            active.add(attempt);
+            return attempt;
+        }
+
+        private void failed(InetAddress from) {
+            failures++;
+            failuresByAddress.merge(from, 1, Integer::sum);
         }
     }
 
@@ -882,7 +1011,7 @@ public final class PeerConnector {
             int accepted = 0;
             BlockingQueue<MappingResult> mappings = new ArrayBlockingQueue<>(1);
             BlockingQueue<FramedTcp> validated = new ArrayBlockingQueue<>(8);
-            AtomicInteger validating = new AtomicInteger();
+            RendezvousGate gate = new RendezvousGate();
             AtomicBoolean tcpAuth = new AtomicBoolean();
             int recordsSeen = 0;
             if (policy.tcp) {
@@ -924,32 +1053,39 @@ public final class PeerConnector {
                 if (won != null) return won;
                 if (recordsSeen == 0 && accepted == 0 && System.nanoTime() - began > 15 * SECOND)
                     throw new IOException("incoming offer abandoned");
-                if (listener != null && accepted < 8 && validating.get() < 4) {
-                    try {
-                        Socket socket = listener.accept();
-                        accepted++;
-                        Scope validation = race.resources.own(new Scope());
-                        validation.own(socket);
-                        validating.incrementAndGet();
-                        race.jobs.submit(
-                                () -> {
-                                    try {
-                                        FramedTcp stream =
-                                                validation.own(
-                                                        new FramedTcp(socket, remaining(until, 3)));
-                                        stream.acceptRendezvous(peer.rid(), setup.cid());
-                                        validation.releaseAll();
-                                        race.resources.own(stream);
-                                        if (!validated.offer(stream)) closeQuietly(stream);
-                                    } catch (Exception ignored) {
-                                        validation.close();
-                                    } finally {
-                                        validating.decrementAndGet();
-                                    }
-                                });
-                    } catch (SocketTimeoutException ignored) {
-                    }
-                }
+                if (listener != null)
+                    for (int burst = 0; burst < 16 && !gate.saturated(); burst++)
+                        try {
+                            Socket socket = listener.accept();
+                            accepted++;
+                            RendezvousGate.Attempt attempt = gate.admit(socket);
+                            if (attempt == null) {
+                                closeQuietly(socket);
+                                continue;
+                            }
+                            Scope validation = race.resources.own(new Scope());
+                            validation.own(socket);
+                            race.jobs.submit(
+                                    () -> {
+                                        try {
+                                            FramedTcp stream =
+                                                    validation.own(
+                                                            new FramedTcp(
+                                                                    socket, remaining(until, 2)));
+                                            stream.acceptRendezvous(peer.rid(), setup.cid());
+                                            attempt.validated();
+                                            validation.releaseAll();
+                                            race.resources.own(stream);
+                                            if (!validated.offer(stream)) closeQuietly(stream);
+                                        } catch (Exception ignored) {
+                                            attempt.failed();
+                                            validation.close();
+                                            race.resources.release(validation);
+                                        }
+                                    });
+                        } catch (SocketTimeoutException idle) {
+                            break;
+                        }
                 if (!tcpAuth.get()) {
                     FramedTcp stream = validated.poll();
                     if (stream != null) {
@@ -1021,15 +1157,18 @@ public final class PeerConnector {
                     throw new IOException("incoming cancelled", e);
                 }
                 if (data == null) continue;
-                var f = fields(data);
                 int operation = TlvCodec.operation(data);
-                require(wide(f, 0x020001c1) == setup.cid(), "incoming CID mismatch");
                 recordsSeen++;
                 switch (operation) {
                     case 29 -> {
                         if (policy.udp && !udpStarted && udpSocket != null) {
-                            List<InetSocketAddress> endpoints =
-                                    candidates(data, setup.cid(), 29, 0x127c, routeIp);
+                            List<InetSocketAddress> endpoints;
+                            try {
+                                endpoints = candidates(data, setup.cid(), 29, 0x127c, routeIp);
+                            } catch (IllegalArgumentException invalid) {
+                                dropped("incoming UDP candidate", invalid);
+                                continue;
+                            }
                             if (!endpoints.isEmpty()) {
                                 udpStarted = true;
                                 lastStart = System.nanoTime();
@@ -1053,7 +1192,12 @@ public final class PeerConnector {
                         }
                     }
                     case 7 -> {
-                        if (policy.udp) mapped = mapped(data, setup.cid(), routeIp, false);
+                        if (policy.udp)
+                            try {
+                                mapped = mapped(data, setup.cid(), routeIp, false);
+                            } catch (IllegalArgumentException invalid) {
+                                dropped("incoming mapped UDP candidate", invalid);
+                            }
                     }
                     case 23 -> {
                         if (policy.relay && relay == null) {

@@ -15,9 +15,11 @@ import java.io.*;
 import java.net.Inet4Address;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
@@ -55,6 +57,8 @@ public final class ClientVpnRuntime implements AutoCloseable {
     private volatile Set<String> activeNetworkNames = Set.of();
     private volatile CatalogSnapshot catalog = new CatalogSnapshot("OFFLINE", List.of(), Set.of(), List.of());
     private final AtomicLong lastIncomingRejectLog = new AtomicLong();
+    /** Closed peer generations whose workers outlived PEER_STOP_WAIT; they still own the identity. */
+    private final List<ClientPeerService> stragglers = new CopyOnWriteArrayList<>();
     /** What the attachment was doing; reported with a service disconnect to explain it. */
     private volatile String controlStage = "authenticating";
 
@@ -115,7 +119,11 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 current == null ? 0 : current.connectedCount(), detail);
     }
 
+    /** Bound on the control thread's wait for a closed generation's workers (see PeerShutdown). */
+    static final Duration PEER_STOP_WAIT = Duration.ofSeconds(15);
+
     private void worker() {
+        FileChannel lockFile = null;
         try {
             CoordinatorEndpoint coordinator;
             try {
@@ -127,16 +135,50 @@ public final class ClientVpnRuntime implements AutoCloseable {
             }
             Path identityDirectory = coordinator.identityDirectory();
             Files.createDirectories(identityDirectory);
-            try (FileChannel lockFile = FileChannel.open(identityDirectory.resolve("identity.lock"),
+            Path identityLock = identityDirectory.resolve("identity.lock");
+            if (Files.isSymbolicLink(identityLock))
+                throw new IOException("identity lock symlink not permitted");
+            lockFile = FileChannel.open(identityLock,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
-                 FileLock lock = lockFile.tryLock()) {
-                if (lock == null) throw new IOException("OpenRad identity is already in use");
-                workerLocked(coordinator);
-            }
+            if (lockFile.tryLock() == null) throw new IOException("OpenRad identity is already in use");
+            workerLocked(coordinator);
+        } catch (OverlappingFileLockException inUse) {
+            if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
+                    "OpenRad identity is already in use (peer workers of a previous session may still be stopping)");
         } catch (Exception error) {
             if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
                     "Unable to own OpenRad identity (" + error.getClass().getSimpleName() + ")");
+        } finally {
+            releaseIdentity(lockFile);
         }
+    }
+
+    /**
+     * Closing the channel releases the lock. It is handed to a keeper instead while a closed peer
+     * generation still runs, so a new attachment can never share the identity with an old one.
+     */
+    private void releaseIdentity(FileChannel lockFile) {
+        if (lockFile == null) return;
+        List<ClientPeerService> pending = List.copyOf(stragglers);
+        stragglers.clear();
+        if (!pending.isEmpty()) {
+            PeerShutdown.holdUntilStopped(pending, lockFile, logger);
+            return;
+        }
+        try {
+            lockFile.close();
+        } catch (IOException failure) {
+            logger.accept("Unable to release the OpenRad identity lock (" + failure.getClass().getSimpleName() + ")");
+        }
+    }
+
+    private boolean abandonedByStragglers() {
+        if (stragglers.isEmpty()) return false;
+        logger.accept("OpenRad stopped: peer workers of the previous session did not terminate;"
+                + " the identity stays locked until they do");
+        if (!stopped.get()) state = new Snapshot("FAILED", "", List.of(), 0,
+                "Peer workers of the previous session did not stop; Connect works again once they finish");
+        return true;
     }
 
     /** A session that stayed attached this long was healthy: restart backoff (Rust daemon). */
@@ -153,6 +195,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
         var relayGuard = new AcceptorRelayGuard();
         int failures = 0;
         while (!stopped.get()) {
+            if (abandonedByStragglers()) break;
             long attachedAt = 0;
             try {
                 // Closing or interrupting a registration after registration.pending is written
@@ -178,6 +221,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                      Attachment connection = Attachment.connect(
                         identity, coordinator.port(), identity.nodeName(), this::own, coordinator.modulus())) {
                     own(connection.session());
+                    PeerConnector.attachmentStarted();
                     attachedAt = System.nanoTime();
                     update("JOINING_NETWORKS", connection.vip().getHostAddress(),
                             connection.membership(), "");
@@ -185,7 +229,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 }
                 if (!stopped.get()) throw new IOException("control session ended");
             } catch (Exception ex) {
-                if (stopped.get()) break;
+                if (stopped.get() || abandonedByStragglers()) break;
                 String description = ex instanceof IOException && ex.getMessage() != null
                         ? ex.getMessage() : ex.getClass().getSimpleName();
                 // Do not log remote record content, credentials or keys.
@@ -257,7 +301,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
         };
     }
 
-    private void handle(byte[] record, Membership membership, ClientPeerService peerService) throws IOException {
+    private ControlEvent handle(byte[] record, Membership membership, ClientPeerService peerService) throws IOException {
         ControlEvent event;
         try {
             event = classify(record);
@@ -288,6 +332,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 }
             }
         }
+        return event;
     }
 
     private void runConnected(Identity identity, Attachment connection, CoordinatorEndpoint coordinator,
@@ -305,17 +350,10 @@ public final class ClientVpnRuntime implements AutoCloseable {
             activeNetworkNames = Set.of();
             if (current != null) {
                 current.close();
-                // Keep identity.lock until every old peer coordinator has relinquished this
-                // identity. UI handover uses awaitStopped(timeout), so it remains bounded.
-                boolean interrupted = Thread.interrupted();
-                try {
-                    while (true) {
-                        try { current.awaitStopped(); break; }
-                        catch (InterruptedException shutdownSignal) { interrupted = true; }
-                    }
-                } finally {
-                    if (interrupted) Thread.currentThread().interrupt();
-                }
+                // identity.lock must not pass to a new attachment while an old peer worker may
+                // still use this identity. The wait is bounded: a worker that never stops leaves the
+                // lock with a keeper (see worker()) instead of pinning this control thread forever.
+                if (!PeerShutdown.await(current, PEER_STOP_WAIT, logger)) stragglers.add(current);
             }
         }
     }
@@ -419,8 +457,9 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 problems.isEmpty() ? "Control authenticated; " + peerService.connectedCount() + " authenticated peer channel(s)"
                         : String.join("; ", problems));
         long snapshot = System.nanoTime();
-        long lastControl = System.nanoTime();
-        long nextPeerScan = 0;
+        long lastSnapshot = snapshot;
+        long lastControl = snapshot;
+        PeerScanSchedule scans = new PeerScanSchedule(snapshot);
         while (!stopped.get()) {
             long now = System.nanoTime();
             if (now >= heartbeat) {
@@ -428,25 +467,29 @@ public final class ClientVpnRuntime implements AutoCloseable {
                 heartbeat = now + Duration.ofSeconds(10).toNanos();
             }
             // Wake for a due scan/snapshot instead of always waiting the full 100 ms.
-            long wait = Math.max(1_000_000L, Math.min(100_000_000L, Math.min(nextPeerScan, snapshot) - now));
+            long wait = Math.max(1_000_000L, Math.min(100_000_000L,
+                    Math.min(scans.untilNext(now), snapshot - now)));
             if (session.ready(Duration.ofNanos(wait))) {
-                handle(session.receive(), membership, peerService);
+                ControlEvent event = handle(session.receive(), membership, peerService);
                 lastControl = System.nanoTime();
-                // Coalesce bursts of membership records into one scan/snapshot.
-                long soon = lastControl + Duration.ofMillis(10).toNanos();
-                snapshot = Math.min(snapshot, soon);
-                nextPeerScan = Math.min(nextPeerScan, soon);
+                // Coalesce bursts of membership records: the O(roster) peer scan and the status
+                // snapshot are rate limited instead of running after every record. A refusal
+                // changes neither the roster nor any peer setup.
+                snapshot = Math.min(snapshot, Math.max(lastControl + Duration.ofMillis(10).toNanos(),
+                        lastSnapshot + Duration.ofMillis(100).toNanos()));
+                if (event != ControlEvent.REFUSAL) scans.recordHandled(lastControl);
             }
-            if (System.nanoTime() >= nextPeerScan) {
+            if (scans.due(System.nanoTime())) {
                 peerService.tick(membership);
-                nextPeerScan = System.nanoTime() + Duration.ofMillis(100).toNanos();
+                scans.scanned(System.nanoTime());
             }
             if (System.nanoTime() - lastControl > Duration.ofSeconds(90).toNanos())
                 throw new IOException("control heartbeat timeout");
             if (System.nanoTime() >= snapshot) {
                 update("CONNECTED", ip, membership,
                         problems.isEmpty() ? "Control authenticated; " + peerService.connectedCount() + " authenticated peer channel(s)" : String.join("; ", problems));
-                snapshot = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+                lastSnapshot = System.nanoTime();
+                snapshot = lastSnapshot + Duration.ofSeconds(1).toNanos();
             }
         }
     }

@@ -19,6 +19,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Consumer;
 
 /**
  * A deliberately scoped, passive IPv4/TCP endpoint. It never opens a TAP adapter or routes IP.
@@ -57,7 +58,11 @@ public final class VirtualTcpBridge implements AutoCloseable {
             Duration halfCloseTimeout,
             Duration timeWait,
             int maxRetransmissions,
-            int maxPendingConnections) {
+            int maxPendingConnections,
+            int maxHalfOpenPerPeer) {
+        /** Half-open flows one peer may hold unless the caller chooses otherwise. */
+        public static final int DEFAULT_HALF_OPEN_PER_PEER = 2;
+
         /** Compatibility overload; total flow capacity was historically the pending-SYN bound. */
         public Limits(
                 int maxConnections,
@@ -86,6 +91,36 @@ public final class VirtualTcpBridge implements AutoCloseable {
                     maxConnections);
         }
 
+        /** Compatibility overload with the default per-peer half-open allowance. */
+        public Limits(
+                int maxConnections,
+                int maxConnectionsPerPeer,
+                int inboundQueueFrames,
+                int bufferBytesPerConnection,
+                long globalBufferedBytes,
+                Duration connectTimeout,
+                Duration handshakeTimeout,
+                Duration idleTimeout,
+                Duration halfCloseTimeout,
+                Duration timeWait,
+                int maxRetransmissions,
+                int maxPendingConnections) {
+            this(
+                    maxConnections,
+                    maxConnectionsPerPeer,
+                    inboundQueueFrames,
+                    bufferBytesPerConnection,
+                    globalBufferedBytes,
+                    connectTimeout,
+                    handshakeTimeout,
+                    idleTimeout,
+                    halfCloseTimeout,
+                    timeWait,
+                    maxRetransmissions,
+                    maxPendingConnections,
+                    Math.min(maxConnectionsPerPeer, DEFAULT_HALF_OPEN_PER_PEER));
+        }
+
         public Limits {
             if (maxConnections < 1
                     || maxConnections > 65536
@@ -99,7 +134,9 @@ public final class VirtualTcpBridge implements AutoCloseable {
                     || maxRetransmissions < 1
                     || maxRetransmissions > 20
                     || maxPendingConnections < 1
-                    || maxPendingConnections > 65536) {
+                    || maxPendingConnections > 65536
+                    || maxHalfOpenPerPeer < 1
+                    || maxHalfOpenPerPeer > maxConnectionsPerPeer) {
                 throw new IllegalArgumentException("invalid bridge limits");
             }
             for (Duration duration :
@@ -129,7 +166,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
                     Duration.ofMinutes(2),
                     Duration.ofSeconds(30),
                     8,
-                    60);
+                    60,
+                    DEFAULT_HALF_OPEN_PER_PEER);
         }
     }
 
@@ -149,6 +187,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
 
     private static final int RECEIVE_RING = 65536;
     private static final long IDLE_SELECT_MILLIS = 1000;
+    private static final long FAULT_LOG_INTERVAL = Duration.ofSeconds(10).toNanos();
+    private static final long FAULT_BACKOFF_MILLIS = 50;
     private static final byte[] EMPTY = new byte[0];
     private static final byte[] MSS_OPTION = {2, 4, 5, (byte) 0xb4};
     private final int localIp, exposedPort;
@@ -167,8 +207,10 @@ public final class VirtualTcpBridge implements AutoCloseable {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Map<Key, Connection> connections = new HashMap<>();
     private final Map<Long, Integer> perPeer = new HashMap<>();
-    private final Map<Long, Integer> activePerPeer = new HashMap<>();
-    private int activeConnections;
+    // Read by peer workers deciding how closely to poll; written only by the selector thread.
+    private final Map<Long, Integer> activePerPeer = new ConcurrentHashMap<>();
+    private final Map<Long, Integer> halfOpenPerPeer = new HashMap<>();
+    private int activeConnections, halfOpen;
     private volatile Map<Key, TcpState> publishedStates = Map.of();
     private final SecureRandom random = new SecureRandom();
     private final LongAdder accepted = new LongAdder(), rejected = new LongAdder();
@@ -177,6 +219,19 @@ public final class VirtualTcpBridge implements AutoCloseable {
     // Selector-thread scratch: backend reads land here and only the bytes read are queued.
     private final ByteBuffer readScratch = ByteBuffer.allocate(16 * 1024);
     private final List<Connection> tickList = new ArrayList<>();
+    private final Consumer<String> log;
+    private volatile Throwable terminalFailure;
+    private volatile long faults, selectorPasses;
+    // Selector-thread only: at most one fault report per interval, the rest are only counted.
+    private long lastFaultLog;
+    private int suppressedFaults;
+    /** Test seam: invoked before each connection's segment handling and timer work. */
+    volatile FaultProbe faultProbe;
+
+    @FunctionalInterface
+    interface FaultProbe {
+        void at(String where, long rid, int port);
+    }
 
     public VirtualTcpBridge(
             int localIp,
@@ -213,6 +268,24 @@ public final class VirtualTcpBridge implements AutoCloseable {
             FrameSender sender,
             VirtualOrigins origins)
             throws IOException {
+        this(localIp, localMac, exposedPort, backend, limits, sender, origins, DEFAULT_LOG);
+    }
+
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(VirtualTcpBridge.class.getName());
+    private static final Consumer<String> DEFAULT_LOG = LOGGER::warning;
+
+    /** {@code log} receives fault reports from the selector thread and must not block. */
+    public VirtualTcpBridge(
+            int localIp,
+            byte[] localMac,
+            int exposedPort,
+            InetSocketAddress backend,
+            Limits limits,
+            FrameSender sender,
+            VirtualOrigins origins,
+            Consumer<String> log)
+            throws IOException {
         if (localMac.length != 6
                 || (localMac[0] & 1) != 0
                 || exposedPort < 1
@@ -229,6 +302,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
         this.limits = Objects.requireNonNull(limits);
         this.sender = Objects.requireNonNull(sender);
         this.origins = origins;
+        this.log = Objects.requireNonNull(log);
         incoming = new ArrayBlockingQueue<>(limits.inboundQueueFrames());
         selector = Selector.open();
         worker = io.github.gringoestrangeiro.openradplugin.util.ThreadCompat.platformUnstarted("openrad-virtual-tcp", this::run);
@@ -291,6 +365,34 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 backendFailures);
     }
 
+    /**
+     * Flows of {@code rid} that can still produce bridge-originated frames (everything except
+     * TIME_WAIT tombstones). Cheap and safe to call from any thread.
+     */
+    public int activeFlows(long rid) {
+        return activePerPeer.getOrDefault(rid, 0);
+    }
+
+    /** False once the selector thread ended, whether closed or because of a failure. */
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    /** The error or I/O failure that ended the selector thread, or null. */
+    public Throwable failure() {
+        return terminalFailure;
+    }
+
+    /** Contained per-connection failures since start (diagnostics and tests). */
+    long faults() {
+        return faults;
+    }
+
+    /** Completed selector passes (diagnostics and tests). */
+    long selectorPasses() {
+        return selectorPasses;
+    }
+
     /** Immutable diagnostic view published by the selector; an unused tuple is in LISTEN. */
     public TcpState state(long rid, int peerPort) {
         return publishedStates.getOrDefault(
@@ -313,56 +415,19 @@ public final class VirtualTcpBridge implements AutoCloseable {
     private void run() {
         try {
             while (running.get()) {
-                revokePending();
-                for (int i = 0; i < 256; i++) {
-                    Input input = incoming.poll();
-                    if (input == null) break;
-                    if (input.epoch() == epochs.getOrDefault(input.grant().rid(), 0L))
-                        process(input);
-                    else rejected.increment();
-                }
-                synchronized (admission) {
-                    // Once every queued input and revocation was consumed, epoch tombstones
-                    // can be discarded. Otherwise a long-lived attachment would retain every RID.
-                    if (incoming.isEmpty() && revocations.isEmpty() && !epochs.isEmpty())
-                        epochs.keySet().removeIf(rid -> !perPeer.containsKey(rid));
-                }
-                // Without connections there is no timer to run: every input, revocation and
-                // close wakes the selector, so idle bridges need not poll at 100 Hz.
-                selector.select(
-                        !incoming.isEmpty() ? 1 : connections.isEmpty() ? IDLE_SELECT_MILLIS : 10);
-                Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
-                while (keys.hasNext()) {
-                    SelectionKey selected = keys.next();
-                    keys.remove();
-                    Connection connection = (Connection) selected.attachment();
-                    if (!selected.isValid() || connection.closed) continue;
-                    try {
-                        if (selected.isConnectable()) connection.connected();
-                        if (selected.isValid() && selected.isWritable()) connection.writeBackend();
-                        if (selected.isValid() && selected.isReadable()) connection.readBackend();
-                    } catch (IOException | CancelledKeyException e) {
-                        connection.failBackend();
-                    }
-                }
-                long now = System.nanoTime();
-                tickList.addAll(connections.values());
                 try {
-                    for (Connection connection : tickList) {
-                        connection.tick(now);
-                        if (!connection.closed) connection.interests();
-                    }
-                } finally {
-                    tickList.clear();
-                }
-                if (statesChanged()) {
-                    Map<Key, TcpState> states = new HashMap<>();
-                    connections.forEach((key, connection) -> states.put(key, connection.state()));
-                    publishedStates = Map.copyOf(states);
+                    pass();
+                } catch (RuntimeException e) {
+                    // One unexpected failure must not end the bridge for every other player.
+                    fault("selector pass", null, null, e);
+                    selector.select(FAULT_BACKOFF_MILLIS);
                 }
             }
         } catch (IOException e) {
             backendFailures++;
+            terminate("selector I/O failure", e);
+        } catch (Throwable e) {
+            terminate("fatal error", e);
         } finally {
             running.set(false);
             for (Connection connection : List.copyOf(connections.values())) connection.dispose();
@@ -375,6 +440,146 @@ public final class VirtualTcpBridge implements AutoCloseable {
             } catch (IOException ignored) {
             }
         }
+    }
+
+    private void terminate(String what, Throwable failure) {
+        terminalFailure = failure;
+        if (running.get())
+            log.accept(
+                    "Virtual TCP bridge stopped after "
+                            + what
+                            + ": "
+                            + describe(failure)
+                            + "; all virtual flows were closed.");
+    }
+
+    private void pass() throws IOException {
+        revokePending();
+        for (int i = 0; i < 256; i++) {
+            Input input = incoming.poll();
+            if (input == null) break;
+            if (input.epoch() != epochs.getOrDefault(input.grant().rid(), 0L)) {
+                rejected.increment();
+                continue;
+            }
+            try {
+                process(input);
+            } catch (RuntimeException e) {
+                fault("inbound frame", null, null, e);
+            }
+        }
+        synchronized (admission) {
+            // Once every queued input and revocation was consumed, epoch tombstones
+            // can be discarded. Otherwise a long-lived attachment would retain every RID.
+            if (incoming.isEmpty() && revocations.isEmpty() && !epochs.isEmpty())
+                epochs.keySet().removeIf(rid -> !perPeer.containsKey(rid));
+        }
+        selector.select(selectMillis());
+        selectorPasses++;
+        Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
+        while (keys.hasNext()) {
+            SelectionKey selected = keys.next();
+            keys.remove();
+            Connection connection = (Connection) selected.attachment();
+            if (!selected.isValid() || connection.closed) continue;
+            try {
+                if (selected.isConnectable()) connection.connected();
+                if (selected.isValid() && selected.isWritable()) connection.writeBackend();
+                if (selected.isValid() && selected.isReadable()) connection.readBackend();
+            } catch (IOException | CancelledKeyException e) {
+                connection.failBackend();
+            } catch (RuntimeException e) {
+                fault("backend I/O", connection.key, connection, e);
+            }
+        }
+        long now = System.nanoTime();
+        tickList.addAll(connections.values());
+        try {
+            for (Connection connection : tickList) {
+                if (connection.closed) continue;
+                try {
+                    probe("timer", connection.key);
+                    connection.tick(now);
+                    if (!connection.closed) connection.interests();
+                } catch (RuntimeException e) {
+                    fault("timer", connection.key, connection, e);
+                }
+            }
+        } finally {
+            tickList.clear();
+        }
+        if (statesChanged()) {
+            Map<Key, TcpState> states = new HashMap<>();
+            connections.forEach((key, connection) -> states.put(key, connection.state()));
+            publishedStates = Map.copyOf(states);
+        }
+    }
+
+    /**
+     * How long the selector may sleep. Inputs, revocations and close wake it, so only timers
+     * bound the wait: without connections there are none, with only TIME_WAIT tombstones just
+     * their expiry. Live flows keep the 10 ms pass that drives retransmission, persist and
+     * buffer-pressure interest refreshes.
+     */
+    private long selectMillis() {
+        if (!incoming.isEmpty()) return 1;
+        if (connections.isEmpty()) return IDLE_SELECT_MILLIS;
+        long now = System.nanoTime(), earliest = Long.MAX_VALUE;
+        for (Connection connection : connections.values()) {
+            if (connection.timeWaitUntil == 0) return 10;
+            earliest = Math.min(earliest, connection.timeWaitUntil - now);
+        }
+        return Math.max(1, Math.min(IDLE_SELECT_MILLIS, (earliest + 999_999L) / 1_000_000L));
+    }
+
+    private void probe(String where, Key key) {
+        FaultProbe probe = faultProbe;
+        if (probe != null) probe.at(where, key.rid(), key.port());
+    }
+
+    /**
+     * Contains a failure to the connection it happened on: the peer gets a reset and the rest of
+     * the bridge keeps running. The report is rate limited; the exception is never dropped.
+     */
+    private void fault(String where, Key key, Connection connection, RuntimeException failure) {
+        faults++;
+        long now = System.nanoTime();
+        if (lastFaultLog == 0 || now - lastFaultLog >= FAULT_LOG_INTERVAL) {
+            lastFaultLog = now;
+            String similar =
+                    suppressedFaults == 0
+                            ? ""
+                            : " (" + suppressedFaults + " similar faults not logged)";
+            suppressedFaults = 0;
+            log.accept(
+                    "Virtual TCP bridge fault in "
+                            + where
+                            + (key == null
+                                    ? ""
+                                    : " for peer "
+                                            + Long.toUnsignedString(key.rid())
+                                            + " port "
+                                            + key.port())
+                            + ": "
+                            + describe(failure)
+                            + similar);
+        } else suppressedFaults++;
+        if (connection == null) return;
+        try {
+            connection.abort();
+        } catch (RuntimeException abortFailure) {
+            failure.addSuppressed(abortFailure);
+            connection.dispose();
+        }
+    }
+
+    private static String describe(Throwable failure) {
+        StackTraceElement[] trace = failure.getStackTrace();
+        return failure
+                + (trace.length == 0 ? "" : " at " + trace[0])
+                + (failure.getSuppressed().length == 0
+                        ? ""
+                        : " (+" + failure.getSuppressed().length + " suppressed)");
     }
 
     /** Whether the published immutable view differs from the live connection states. */
@@ -410,6 +615,22 @@ public final class VirtualTcpBridge implements AutoCloseable {
         }
         TcpSegment tcp = ((InboundFirewall.AdmittedTcp) result).segment();
         Key key = new Key(input.grant().rid(), tcp.sourcePort());
+        try {
+            probe("segment", key);
+            handle(input, tcp, key);
+        } catch (RuntimeException e) {
+            Connection affected = connections.get(key);
+            if (affected == null)
+                try {
+                    reset(input.grant(), tcp);
+                } catch (RuntimeException resetFailure) {
+                    e.addSuppressed(resetFailure);
+                }
+            fault("segment", key, affected, e);
+        }
+    }
+
+    private void handle(Input input, TcpSegment tcp, Key key) {
         Connection connection = connections.get(key);
         if (connection != null && connection.epoch != input.epoch()) {
             connection.dispose();
@@ -444,8 +665,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
             return;
         }
         if (activeConnections >= limits.maxConnections()
-                || connections.values().stream().filter(c -> !c.established).count()
-                        >= limits.maxPendingConnections()
+                || halfOpen >= limits.maxPendingConnections()
+                || halfOpenPerPeer.getOrDefault(key.rid(), 0) >= limits.maxHalfOpenPerPeer()
                 || activePerPeer.getOrDefault(key.rid(), 0) >= limits.maxConnectionsPerPeer()
                 || bufferedBytes + RECEIVE_RING > limits.globalBufferedBytes()) {
             rejected.increment();
@@ -458,7 +679,9 @@ public final class VirtualTcpBridge implements AutoCloseable {
             connections.put(key, created);
             perPeer.merge(key.rid(), 1, Integer::sum);
             activePerPeer.merge(key.rid(), 1, Integer::sum);
+            halfOpenPerPeer.merge(key.rid(), 1, Integer::sum);
             activeConnections++;
+            halfOpen++;
             connectionCount = connections.size();
             bufferedBytes += RECEIVE_RING;
             created.start();
@@ -532,8 +755,9 @@ public final class VirtualTcpBridge implements AutoCloseable {
     private void emit(long rid, byte[] frame) {
         try {
             sender.send(rid, frame);
-        } catch (RuntimeException ignored) {
-            /* A dropped transport write is recovered by the TCP timer. */
+        } catch (RuntimeException e) {
+            // A dropped transport write is recovered by the TCP timer; still report it.
+            fault("frame sender", null, null, e);
         }
     }
 
@@ -597,6 +821,8 @@ public final class VirtualTcpBridge implements AutoCloseable {
         SelectionKey selection;
         InetSocketAddress origin, originEndpoint;
         long receiveNext, sendUna, sendNext, windowSeq, windowAck, lastProgress = createdAt;
+        /** Highest sequence outstanding when loss recovery began; a partial ACK below it exposes the next hole. */
+        long recover;
         long pendingFin = -1,
                 halfCloseAt,
                 timeWaitUntil,
@@ -614,7 +840,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 finAcked,
                 closed;
         boolean peerClosedFirst;
-        boolean quotaReleased;
+        boolean quotaReleased, halfOpenReleased;
 
         Connection(Key key, InboundFirewall.PeerGrant grant, TcpSegment syn, int mss, long epoch) {
             this.key = key;
@@ -734,6 +960,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
             if (!established) {
                 if (acknowledgement != ourSyn + 1 || seq != receiveNext) return;
                 established = true;
+                releaseHalfOpen();
                 lastProgress = System.nanoTime();
             }
             if (acknowledgement >= sendUna) {
@@ -861,6 +1088,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 if (duplicateCandidate && peerWindow != 0 && !flights.isEmpty() && ++duplicateAcks == 3) {
                     slowStartThreshold = Math.max(2 * mss, (int) (sendNext - sendUna) / 2);
                     congestionWindow = slowStartThreshold;
+                    recover = sendNext;
                     retransmit(flights.peekFirst(), false);
                 }
                 return;
@@ -891,7 +1119,14 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 // RFC 6298 5.3: new data acknowledged restarts the retransmission timer, so the
                 // next lost segment of a burst is not treated as an RTO timeout (which would
                 // collapse the window and double the RTO for every segment in recovery).
-                if (!flights.isEmpty()) flights.peekFirst().sentAt = now;
+                if (!flights.isEmpty()) {
+                    Flight next = flights.peekFirst();
+                    next.sentAt = now;
+                    // RFC 6582 partial ACK: the cumulative ACK stopped short of the data outstanding
+                    // when recovery began, so the following segment was lost as well. Resend it now
+                    // instead of one (backed-off) timeout later.
+                    if (sendUna < recover && peerWindow != 0 && !closed) retransmit(next, false);
+                }
                 int increase =
                         congestionWindow < slowStartThreshold
                                 ? Math.min(dataAcknowledged, mss)
@@ -977,6 +1212,10 @@ public final class VirtualTcpBridge implements AutoCloseable {
             if (!established || closed || timeWaitUntil != 0) return;
             long capacity = Math.min(peerWindow, congestionWindow) - (sendNext - sendUna);
             while (!toPeer.isEmpty() && capacity > 0) {
+                // Sender silly-window avoidance (RFC 1122 4.2.3.4): while data is in flight a window
+                // that opened by less than a segment waits for the next ACK instead of leaving as a
+                // sliver, which would multiply the frames (and ACKs) of a saturated flow.
+                if (capacity < mss && unsentBytes > capacity && sendNext != sendUna) break;
                 ByteBuffer next = toPeer.peekFirst();
                 int size = (int) Math.min(Math.min(mss, next.remaining()), capacity);
                 byte[] data = new byte[size];
@@ -1040,6 +1279,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
                 slowStartThreshold = Math.max(2 * mss, (int) (sendNext - sendUna) / 2);
                 congestionWindow = mss;
                 retransmitNanos = Math.min(8_000_000_000L, retransmitNanos * 2);
+                recover = sendNext;
             }
             send(flight);
         }
@@ -1160,6 +1400,7 @@ public final class VirtualTcpBridge implements AutoCloseable {
             if (closed) return;
             closed = true;
             releaseQuota();
+            releaseHalfOpen();
             closeChannel();
             if (connections.remove(key, this)) {
                 bufferedBytes -= RECEIVE_RING + backendQueued + reordered + outboundBuffered;
@@ -1170,6 +1411,14 @@ public final class VirtualTcpBridge implements AutoCloseable {
             toBackend.clear();
             flights.clear();
             releaseRing();
+        }
+
+        void releaseHalfOpen() {
+            if (halfOpenReleased) return;
+            halfOpenReleased = true;
+            halfOpen--;
+            halfOpenPerPeer.computeIfPresent(
+                    key.rid(), (rid, count) -> count == 1 ? null : count - 1);
         }
 
         void releaseQuota() {

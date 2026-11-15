@@ -17,8 +17,11 @@ public final class OpenRadMenuScreen extends Screen {
     private Button connect, save, networks, automatic, advanced;
 
     public OpenRadMenuScreen(Screen parent, OpenRadController controller) {
-        this(parent, controller, new OpenRadMenuDraft(controller.config()));
-        initialDraftPending = !controller.initialized();
+        this(parent, controller, OpenRadMenuDraft.opening(controller::initialized, controller::config));
+    }
+    private OpenRadMenuScreen(Screen parent, OpenRadController controller, OpenRadMenuDraft.Opening opening) {
+        this(parent, controller, opening.draft());
+        initialDraftPending = opening.pending();
     }
     OpenRadMenuScreen(Screen parent, OpenRadController controller, OpenRadMenuDraft draft) {
         super(Component.literal("OpenRad"));
@@ -90,6 +93,8 @@ public final class OpenRadMenuScreen extends Screen {
                 status.vip().isBlank() ? "—" : status.vip(), status.networks().size(), status.peers()), width / 2, 46, 0xFFA5B8B3);
         String feedback = controller.messageKey();
         if (feedback.isBlank() && draft.selectors.isEmpty() && draft.networks.isEmpty()) feedback = "openrad.menu.no_networks";
+        String detail = OpenRadController.visibleDetail(status.phase(), status.detail());
+        if (!detail.isBlank()) graphics.drawCenteredString(font, font.plainSubstrByWidth(detail, width - 24), width / 2, 58, 0xFFFF8585);
         if (!feedback.isBlank()) graphics.drawCenteredString(font, Component.translatable(feedback), width / 2, height - 44, 0xFFFFD37F);
         else if (controller.active()) graphics.drawCenteredString(font,
                 font.plainSubstrByWidth(OpenRadI18n.tr("openrad.menu.reconnect_note").getString(), width - 24), width / 2, height - 44, 0xFFA5B8B3);

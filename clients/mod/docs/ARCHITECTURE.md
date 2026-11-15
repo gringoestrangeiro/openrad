@@ -68,7 +68,9 @@ alvo nem proxy que aceite destinos fornecidos pelo cliente local. O worker abre
 o stream autorizado e copia dados em ambas as direções com buffers de 16 KiB e
 backpressure por escrita bloqueante. A capacidade acompanha `max-connections`
 (padrão 16, máximo 64). Accept expira após 5 s, setup usa
-`connection-timeout-seconds` (padrão 20), leitura local ociosa expira após 60 s.
+`connection-timeout-seconds` (padrão 20) e uma conexão sem tráfego em nenhuma
+das direções por 5 min é encerrada (o tráfego só do servidor, como em filas de
+login, mantém a conexão aberta).
 Recursos são fechados no EOF, erro, desconexão e encerramento do jogo.
 
 Uma conexão 26/8 não usa a pilha IP do host para alcançar o destino virtual:

@@ -50,6 +50,8 @@ final class AsyncResourceCloser implements AutoCloseable {
         if (reserved == 0) executor.shutdown();
     }
 
+    synchronized int pending() { return reserved; }
+
     boolean awaitStopped(Duration timeout) throws InterruptedException {
         return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
     }

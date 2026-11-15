@@ -27,6 +27,10 @@ class PeerConnectorTest {
         return (Inet4Address) InetAddress.getByName(value);
     }
 
+    static InetAddress address(String value) throws Exception {
+        return InetAddress.getByName(value);
+    }
+
     static byte[] server(int op) {
         return u32(SERVER_OP, op);
     }
@@ -44,6 +48,113 @@ class PeerConnectorTest {
         return concat(server(operation), u64(0x020001c1, 99), tlv(root, value));
     }
 
+    static byte[] manyCandidates(int count) {
+        List<byte[]> entries = new ArrayList<>();
+        for (int i = 0; i < count; i++)
+            entries.add(
+                    tlv(
+                            0x127d,
+                            concat(
+                                    text(0x030001c2, "127.0.0.1"),
+                                    u32(0x010001c3, 40000 + i))));
+        return concat(entries.toArray(byte[][]::new));
+    }
+
+    @FunctionalInterface
+    interface Prelude {
+        void run(int listenerPort) throws Exception;
+    }
+
+    static void assertIncomingTcpEstablishes(List<byte[]> queued, Prelude prelude)
+            throws Exception {
+        List<AutoCloseable> resources = new CopyOnWriteArrayList<>();
+        BlockingQueue<byte[]> adverts = new LinkedBlockingQueue<>();
+        try (IncomingHub hub = new IncomingHub();
+                ExecutorService jobs = Executors.newVirtualThreadPerTaskExecutor();
+                Identity remote =
+                        new Identity(
+                                22,
+                                ip("26.0.0.2"),
+                                "Remote",
+                                new byte[16],
+                                "remote-password".getBytes(),
+                                "127.0.0.1")) {
+            hub.ingest(offer(11));
+            for (byte[] record : queued) hub.ingest(record);
+            var setup = hub.take(11).orElseThrow();
+            var peer =
+                    new Membership.Peer(
+                            11, "Local", ip("26.0.0.1"), "127.0.0.1", 1, Set.of("network"));
+            Future<PeerChannel> incoming =
+                    jobs.submit(
+                            () ->
+                                    PeerConnector.accept(
+                                            setup,
+                                            remote,
+                                            remote.vip(),
+                                            peer,
+                                            ip("127.0.0.1"),
+                                            new PeerConnector.Policy(true, true, false),
+                                            adverts::add,
+                                            resources::add));
+            byte[] advert = adverts.poll(3, TimeUnit.SECONDS);
+            assertNotNull(advert);
+            int port =
+                    (int)
+                            number(
+                                    fields(field(fields(field(fields(advert), 0x1230)), 0x127d)),
+                                    0x010001c3);
+            prelude.run(port);
+            try (FramedTcp stream =
+                    FramedTcp.connect(
+                            new InetSocketAddress("127.0.0.1", port), Duration.ofSeconds(5))) {
+                stream.peerRendezvous(11, 99, 7);
+                try (PeerChannel channel =
+                                PeerChannel.connect(
+                                        stream,
+                                        PeerChannel.Path.DIRECT_TCP,
+                                        "peer-password".getBytes(),
+                                        11,
+                                        peer.vip(),
+                                        22);
+                        PeerChannel accepted = incoming.get(6, TimeUnit.SECONDS)) {
+                    assertTrue(channel.send(new byte[] {42}));
+                    assertArrayEquals(new byte[] {42}, accepted.receive());
+                }
+            }
+        } finally {
+            closeAll(resources);
+        }
+    }
+
+    @Test
+    void incomingInvalidUdpAndMappedRecordsOnlyDropTheirOwnPath() throws Exception {
+        assertIncomingTcpEstablishes(
+                List.of(
+                        candidates(29, 0x127c, manyCandidates(33)),
+                        candidates(7, 0x1237, new byte[0]),
+                        concat(server(29), u64(0x020001c1, 99), tlv(0x127c, new byte[] {1}))),
+                port -> {});
+    }
+
+    @Test
+    void incomingJunkConnectionsCannotExhaustTheRendezvousBudget() throws Exception {
+        List<Socket> idle = new ArrayList<>();
+        try {
+            assertIncomingTcpEstablishes(
+                    List.of(),
+                    port -> {
+                        for (int i = 0; i < 20; i++) {
+                            Socket junk = new Socket("127.0.0.1", port);
+                            if (i % 2 == 0) junk.close();
+                            else idle.add(junk);
+                        }
+                    });
+        } finally {
+            for (Socket socket : idle) socket.close();
+        }
+    }
+
     static void closeAll(List<AutoCloseable> resources) {
         for (AutoCloseable c : resources)
             try {
@@ -53,22 +164,157 @@ class PeerConnectorTest {
     }
 
     @Test
-    void candidateAddressesMatchCurrentCanonicalPeerPolicy() throws Exception {
+    void acceptorRelayGuardIsReenabledByEachAttachment() {
+        long[] now = {1_000_000_000L};
+        PeerConnector.useClock(() -> now[0]);
+        try {
+            PeerConnector.attachmentStarted();
+            assertTrue(PeerConnector.acceptorRelayAllowed());
+            assertFalse(PeerConnector.serverObjected(), "no request has been made");
+            PeerConnector.acceptorRelayRequested();
+            now[0] += 2_000_000_000L;
+            assertTrue(PeerConnector.serverObjected());
+            assertFalse(PeerConnector.acceptorRelayAllowed());
+            PeerConnector.attachmentStarted();
+            assertTrue(PeerConnector.acceptorRelayAllowed());
+            assertFalse(PeerConnector.serverObjected(), "the new attachment has no request yet");
+            assertTrue(PeerConnector.acceptorRelayAllowed());
+        } finally {
+            PeerConnector.useClock(System::nanoTime);
+            PeerConnector.attachmentStarted();
+        }
+    }
+
+    @Test
+    void objectionLongAfterTheLastAcceptorRelayRequestDoesNotDisableRequests() {
+        long[] now = {1_000_000_000L};
+        PeerConnector.useClock(() -> now[0]);
+        try {
+            PeerConnector.attachmentStarted();
+            PeerConnector.acceptorRelayRequested();
+            now[0] += 5_000_000_000L;
+            assertFalse(PeerConnector.serverObjected());
+            assertTrue(PeerConnector.acceptorRelayAllowed());
+            PeerConnector.acceptorRelayRequested();
+            now[0] += 4_999_999_999L;
+            assertTrue(PeerConnector.serverObjected());
+            assertFalse(PeerConnector.acceptorRelayAllowed());
+        } finally {
+            PeerConnector.useClock(System::nanoTime);
+            PeerConnector.attachmentStarted();
+        }
+    }
+
+    @Test
+    void candidateAddressesMatchCanonicalRustPolicy() throws Exception {
         InetAddress publicRoute = ip("148.113.190.78");
-        // Authenticated peers can advertise NAT/LAN endpoints; connectivity policy
-        // and peer authentication apply independently of this address filter.
-        for (String allowed : List.of("8.8.8.8", "10.0.0.1", "10.3.4.5",
-                "169.254.1.2", "100.64.0.1", "192.168.1.7")) {
-            assertEquals(ip(allowed),
+        for (String allowed : List.of("10.0.0.1", "10.3.4.5", "169.254.1.2",
+                "100.64.0.1", "192.168.1.7", "fd00::1", "::ffff:10.0.0.1")) {
+            assertEquals(address(allowed),
                     PeerConnector.candidateAddress(allowed, publicRoute), allowed);
         }
-        for (String denied : List.of("127.0.0.1", "224.0.0.1",
-                "255.255.255.255", "0.1.2.3", "fe80::1")) {
+        for (String denied : List.of("224.0.0.1", "255.255.255.255", "0.1.2.3", "fe80::1")) {
             assertThrows(IllegalArgumentException.class,
                     () -> PeerConnector.candidateAddress(denied, publicRoute), denied);
         }
+        assertThrows(IllegalArgumentException.class,
+                () -> PeerConnector.candidateAddress("127.0.0.1", publicRoute));
         assertEquals(ip("127.0.0.1"),
                 PeerConnector.candidateAddress("127.0.0.1", ip("127.0.0.1")));
+    }
+
+    @Test
+    void coordinatorHostResolutionAcceptsPrivateAndHostnameEndpoints() throws Exception {
+        assertEquals(address("127.0.0.1"), PeerConnector.coordinatorAddress("127.0.0.1"));
+        assertEquals(address("::1"), PeerConnector.coordinatorAddress("::1"));
+        assertEquals(address("10.8.0.1"), PeerConnector.coordinatorAddress("10.8.0.1"));
+        assertEquals(address("fd00::1"), PeerConnector.coordinatorAddress("fd00::1"));
+        assertTrue(PeerConnector.coordinatorAddress("localhost").isLoopbackAddress());
+    }
+
+    @Test
+    void coordinatorHostRejectsOversizedAndControlCharacterNames() {
+        assertThrows(IllegalArgumentException.class,
+                () -> PeerConnector.coordinatorAddress("a".repeat(254)));
+        assertThrows(IllegalArgumentException.class,
+                () -> PeerConnector.coordinatorAddress("peer\nexample.net"));
+        assertThrows(IllegalArgumentException.class,
+                () -> PeerConnector.coordinatorAddress("   "));
+    }
+
+    @Test
+    void coordinatorDnsTimeoutsCannotAccumulateUninterruptibleLookupWorkers() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger started = new java.util.concurrent.atomic.AtomicInteger();
+        PeerConnector.CoordinatorLookup blockedLookup = host -> {
+            started.incrementAndGet();
+            active.incrementAndGet();
+            try {
+                // Native name resolution may not react to Thread.interrupt().
+                while (release.getCount() != 0) {
+                    try { release.await(); }
+                    catch (InterruptedException ignored) {}
+                }
+                return InetAddress.getLoopbackAddress();
+            } finally {
+                active.decrementAndGet();
+            }
+        };
+        try {
+            for (int i = 0; i < 8; i++) {
+                assertThrows(IOException.class, () -> PeerConnector.coordinatorAddress(
+                        "synthetic.invalid", blockedLookup, Duration.ofMillis(50)));
+            }
+            assertTrue(started.get() > 0, "the test must execute an actual lookup worker");
+            assertTrue(active.get() <= 4,
+                    "timed-out lookups must remain bounded; still active=" + active.get());
+        } finally {
+            release.countDown();
+            long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (active.get() != 0 && System.nanoTime() < until) Thread.sleep(5);
+            assertEquals(0, active.get(), "all synthetic lookup workers must finish");
+        }
+    }
+
+    @Test
+    void relayHostOnPrivateAddressIsAccepted() throws Exception {
+        List<AutoCloseable> resources = new CopyOnWriteArrayList<>();
+        BlockingQueue<byte[]> advertisements = new LinkedBlockingQueue<>();
+        try (IncomingHub hub = new IncomingHub();
+                ExecutorService jobs = Executors.newVirtualThreadPerTaskExecutor();
+                Identity remote =
+                        new Identity(
+                                22, ip("26.0.0.2"), "Remote", new byte[16],
+                                "remote-password".getBytes(), "127.0.0.1")) {
+            hub.ingest(offer(11));
+            IncomingHub.Setup setup = hub.take(11).orElseThrow();
+            var peer = new Membership.Peer(
+                    11, "Local", ip("26.0.0.1"), "127.0.0.1", 1, Set.of("network"));
+            Future<PeerChannel> incoming = jobs.submit(
+                    () -> PeerConnector.accept(
+                            setup, remote, remote.vip(), peer, ip("10.8.0.1"),
+                            new PeerConnector.Policy(false, false, true),
+                            advertisements::add, resources::add));
+            byte[] request = advertisements.poll(5, TimeUnit.SECONDS);
+            assertNotNull(request, "relay fallback must still be requested");
+            assertEquals(22,
+                    (int) number(fields(request),
+                            io.github.gringoestrangeiro.openradplugin.protocol.TlvCodec.CLIENT_OP));
+            byte[] ticket = new byte[256];
+            Arrays.fill(ticket, (byte) 17);
+            hub.ingest(concat(
+                    server(23), u64(0x020001c1, 99),
+                    tlv(0x123f, concat(
+                            text(0x030001cb, "10.8.0.5"),
+                            u32(0x010001cc, 65000),
+                            tlv(0x090001ca, ticket)))));
+            Thread.sleep(300);
+            assertFalse(incoming.isDone(), "private relay host must not be policy-rejected");
+            incoming.cancel(true);
+        } finally {
+            closeAll(resources);
+        }
     }
 
     @Test
@@ -232,12 +478,13 @@ class PeerConnectorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"tcp", "udp", "relay"})
+    @ValueSource(strings = {"tcp", "tcp-after-invalid-records", "udp", "relay"})
     void authenticatedCoordinatorHubAndSelectedTransportExchangeEthernet(String path)
             throws Exception {
+        boolean tcp = path.startsWith("tcp"), invalid = path.endsWith("invalid-records");
         var policy =
                 new PeerConnector.Policy(
-                        path.equals("tcp"), path.equals("udp"), path.equals("relay"));
+                        tcp, path.equals("udp") || invalid, path.equals("relay"));
         List<AutoCloseable> resources = new CopyOnWriteArrayList<>();
         BlockingQueue<byte[]> advertisements = new LinkedBlockingQueue<>();
         CountDownLatch finished = new CountDownLatch(1);
@@ -264,7 +511,7 @@ class PeerConnectorTest {
             hub.ingest(offer(11));
             IncomingHub.Setup setup = hub.take(11).orElseThrow();
             List<ServerSocket> stalled = new ArrayList<>();
-            if (path.equals("tcp"))
+            if (tcp)
                 for (int i = 0; i < 3; i++) {
                     ServerSocket listener = new ServerSocket(0, 16, ip("127.0.0.1"));
                     stalled.add(listener);
@@ -353,7 +600,7 @@ class PeerConnectorTest {
                                                             io.github.gringoestrangeiro
                                                                     .openradplugin.protocol.TlvCodec
                                                                     .CLIENT_OP);
-                                    if (path.equals("tcp")) {
+                                    if (tcp) {
                                         assertEquals(2, requestOp);
                                         byte[] advert = advertisements.poll(5, TimeUnit.SECONDS);
                                         assertNotNull(advert);
@@ -369,6 +616,18 @@ class PeerConnectorTest {
                                                                             listener
                                                                                     .getLocalPort()))));
                                         entries.add(field(fields(advert), 0x1230));
+                                        if (invalid) {
+                                            authenticated.send(
+                                                    candidates(6, 0x1236, manyCandidates(33)));
+                                            authenticated.send(
+                                                    concat(
+                                                            server(6),
+                                                            u64(0x020001c1, 100),
+                                                            tlv(0x1236, manyCandidates(1))));
+                                            authenticated.send(
+                                                    candidates(29, 0x127c, manyCandidates(33)));
+                                            authenticated.send(candidates(7, 0x1237, new byte[0]));
+                                        }
                                         authenticated.send(
                                                 candidates(
                                                         6,
@@ -434,12 +693,12 @@ class PeerConnectorTest {
                                     resources::add,
                                     SyntheticControlService.modulus());
                     PeerChannel accepted = incoming.get(15, TimeUnit.SECONDS)) {
-                if (path.equals("tcp"))
+                if (tcp)
                     assertTrue(
                             System.nanoTime() - began < 3_000_000_000L,
                             "four lanes must bypass three stalled candidates");
                 assertEquals(
-                        path.equals("tcp")
+                        tcp
                                 ? PeerChannel.Path.DIRECT_TCP
                                 : path.equals("udp")
                                         ? PeerChannel.Path.DIRECT_UDP

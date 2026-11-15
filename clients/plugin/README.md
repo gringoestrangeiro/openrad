@@ -26,11 +26,11 @@ Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio serv
 
 Pronto: o comando grava `config.yml`, guarda a senha em `secrets.properties` (nunca no YAML), liga a VPN do plugin e aplica tudo sem reiniciar o servidor. A porta do Minecraft é detectada automaticamente (`bridge.backend-port: 0`).
 
-> A senha não é aceita de jogadores, só pelo console: comandos digitados por jogadores ficam registrados no log do Paper. Em painéis que guardam histórico do console, prefira editar `secrets.properties` (veja abaixo).
+> A senha só é aceita pelo console do servidor (ou RCON): comandos digitados por jogadores, command blocks, minecarts de comando e `/execute` ficam registrados no log do Paper ou nos dados do mundo. Em painéis que guardam histórico do console, prefira editar `secrets.properties` (veja abaixo).
 
 ## Comandos
 
-Todos exigem `openradplugin.admin` (OP por padrão). Nomes com espaço vão entre aspas.
+Todos exigem `openradplugin.admin` (OP por padrão). Nomes com espaço vão entre aspas; dentro das aspas, `\"` e `\` são escapes e qualquer outra barra invertida (por exemplo em `"pa ss\word"`) é mantida.
 
 | Comando | O que faz |
 | --- | --- |
@@ -45,10 +45,10 @@ Todos exigem `openradplugin.admin` (OP por padrão). Nomes com espaço vão entr
 | `/orb minecraft [seletor] [pagina]` | Catálogo público Minecraft; `/orb minecraft options` lista os seletores. |
 | `/orb peers [pagina]` | Peers elegíveis, IPs e caminho de transporte. |
 | `/orb reload` | Relê `config.yml`/`secrets.properties`, valida e aplica (desconecta jogadores da VPN). |
-| `/orb reconnect` | Reinicia a sessão VPN com a configuração atual. |
+| `/orb reconnect` | Reinicia a sessão VPN com a configuração atual (com a VPN desativada, avisa que nada foi reiniciado). |
 | `/orb diagnose` | Probes de loopback e de saída configurados. Não comprova o túnel. |
 
-Configuração inválida nunca derruba a sessão atual: o comando responde com o motivo (por exemplo `a senha da rede deve ter de 6 a 256 caracteres`) e nada é alterado.
+Configuração inválida nunca derruba a sessão atual: o comando responde com o motivo (por exemplo `a senha da rede deve ter de 6 a 256 caracteres`) e nada é alterado. Isso vale também para `join`, `leave`, `public`, `enable`, `disable` e `force-relay`: se a edição ou a aplicação for rejeitada (por exemplo, rede pública com `online-mode=false`), `config.yml` e `secrets.properties` voltam exatamente ao que eram; se nem isso for possível, a resposta avisa para conferir os arquivos. `/orb disable` e `/orb reload` com `bridge.enabled: false` não dependem de `secrets.properties` e sempre encerram a VPN em execução.
 
 ## Configuração manual (opcional)
 
