@@ -71,7 +71,11 @@ public final class NetworkSecrets implements AutoCloseable {
                 Arrays.fill(bytes, (byte) 0);
             }
             for (String key : properties.stringPropertyNames()) {
-                secrets.values.put(key, properties.getProperty(key).toCharArray());
+                String value = properties.getProperty(key);
+                if (value.length() < 6 || value.length() > 256)
+                    throw new IOException(
+                            "secrets.properties: password for '" + key + "' must have 6..256 characters");
+                secrets.values.put(key, value.toCharArray());
             }
             return secrets;
         } catch (IOException | RuntimeException e) {

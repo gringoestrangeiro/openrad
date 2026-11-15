@@ -221,7 +221,7 @@ public final class ClientVpnRuntime implements AutoCloseable {
                      Attachment connection = Attachment.connect(
                         identity, coordinator.port(), identity.nodeName(), this::own, coordinator.modulus())) {
                     own(connection.session());
-                    PeerConnector.attachmentStarted();
+
                     attachedAt = System.nanoTime();
                     update("JOINING_NETWORKS", connection.vip().getHostAddress(),
                             connection.membership(), "");

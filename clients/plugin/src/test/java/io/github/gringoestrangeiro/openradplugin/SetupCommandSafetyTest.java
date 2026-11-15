@@ -98,13 +98,13 @@ final class SetupCommandSafetyTest {
 
     @Test
     void onlyConsoleAndRconMayCarryAPassword() {
-        assertTrue(OpenRadPlugin.mayReceivePassword(fake(ConsoleCommandSender.class)));
-        assertTrue(OpenRadPlugin.mayReceivePassword(fake(RemoteConsoleCommandSender.class)));
-        assertFalse(OpenRadPlugin.mayReceivePassword(fake(Player.class)));
-        assertFalse(OpenRadPlugin.mayReceivePassword(fake(BlockCommandSender.class)));
-        assertFalse(OpenRadPlugin.mayReceivePassword(fake(CommandMinecart.class)));
-        assertFalse(OpenRadPlugin.mayReceivePassword(fake(ProxiedCommandSender.class)));
-        assertFalse(OpenRadPlugin.mayReceivePassword(fake(CommandSender.class)));
+        assertTrue(OpenRadPlugin.acceptsNetworkPassword(fake(ConsoleCommandSender.class)));
+        assertTrue(OpenRadPlugin.acceptsNetworkPassword(fake(RemoteConsoleCommandSender.class)));
+        assertFalse(OpenRadPlugin.acceptsNetworkPassword(fake(Player.class)));
+        assertFalse(OpenRadPlugin.acceptsNetworkPassword(fake(BlockCommandSender.class)));
+        assertFalse(OpenRadPlugin.acceptsNetworkPassword(fake(CommandMinecart.class)));
+        assertFalse(OpenRadPlugin.acceptsNetworkPassword(fake(ProxiedCommandSender.class)));
+        assertFalse(OpenRadPlugin.acceptsNetworkPassword(fake(CommandSender.class)));
     }
 
     @Test

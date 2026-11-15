@@ -225,7 +225,7 @@ public final class VpnRuntime implements AutoCloseable {
                                                 this::own,
                                                 coordinator.modulus())) {
                             own(attached.session());
-                            PeerConnector.attachmentStarted();
+
                             attachedAt = System.nanoTime();
                             runAttached(identity, attached);
                             failures = 0;

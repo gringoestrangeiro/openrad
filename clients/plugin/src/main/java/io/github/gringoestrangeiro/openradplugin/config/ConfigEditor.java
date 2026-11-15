@@ -244,8 +244,13 @@ public final class ConfigEditor {
         if (settings.bridge().enabled()) {
             CoordinatorEndpoint.load(directory, settings.bootstrap(), settings.controlPort());
         }
-        try (NetworkSecrets secrets = NetworkSecrets.readExisting(directory)) {
-            secrets.validate(settings, stagedSecret);
+        boolean requiresStoredSecrets = settings.bridge().enabled()
+                && settings.networks().stream().anyMatch(
+                        n -> !n.secret().isEmpty() && !n.secret().equals(stagedSecret));
+        if (requiresStoredSecrets) {
+            try (NetworkSecrets secrets = NetworkSecrets.readExisting(directory)) {
+                secrets.validate(settings, stagedSecret);
+            }
         }
         validator.check(settings, yaml);
         return settings;

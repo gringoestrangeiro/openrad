@@ -2,6 +2,17 @@
 
 ## Unreleased (2.4.0-dev)
 
+- Minecraft Paper/Fabric: audited and fixed 37 confirmed transport, security,
+  lifecycle, configuration and UI issues. Added regression coverage and the full
+  [technical audit report](AUDITORIA_PAPER_FABRIC.md).
+- Minecraft networking: fixed a pre-existing virtual TCP stall under saturated
+  bidirectional traffic using bounded frame queues, drop observability, quicker
+  retransmission after partial ACKs and improved send/timer behavior.
+- Minecraft verification: two successful local Paper/Fabric engine E2E runs;
+  real Paper 1.21.1 and Fabric 1.21.1 smoke test covered login, chat, chunks,
+  reconnect and shutdown. Official Radmin interoperability and the full
+  post-audit build matrix were not independently exercised.
+
 - Linux CLI: `openrad start` and `openrad retry-interface` run from a terminal
   now ask for sudo directly on that terminal instead of depending on a Polkit
   agent (absent in SSH/TTY sessions). The CLI creates the TAP with interactive
