@@ -16,7 +16,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
 
 /**
  * Bounded candidate negotiation. Coordinator records alone authorize endpoints and shared secrets.
@@ -50,44 +49,6 @@ public final class PeerConnector {
 
     private static final long SECOND = 1_000_000_000L;
     private static final System.Logger LOG = System.getLogger(PeerConnector.class.getName());
-    private static final AtomicBoolean ACCEPTOR_RELAY_ALLOWED = new AtomicBoolean(true);
-    private static final AtomicLong LAST_ACCEPTOR_RELAY_REQUEST = new AtomicLong();
-    private static volatile LongSupplier clock = System::nanoTime;
-
-    /**
-     * Disable acceptor-initiated relay requests until the next {@link #attachmentStarted()} if the
-     * attachment objects within five seconds of one.
-     */
-    public static boolean serverObjected() {
-        long requested = LAST_ACCEPTOR_RELAY_REQUEST.get();
-        if (requested != 0 && clock.getAsLong() - requested < 5 * SECOND) {
-            ACCEPTOR_RELAY_ALLOWED.set(false);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Re-enable acceptor-initiated relay requests. The guard protects one control attachment, so
-     * every new attachment must call this before it can accept peers; an objection by an earlier
-     * attachment says nothing about the new one.
-     */
-    public static void attachmentStarted() {
-        LAST_ACCEPTOR_RELAY_REQUEST.set(0);
-        ACCEPTOR_RELAY_ALLOWED.set(true);
-    }
-
-    static boolean acceptorRelayAllowed() {
-        return ACCEPTOR_RELAY_ALLOWED.get();
-    }
-
-    static void acceptorRelayRequested() {
-        LAST_ACCEPTOR_RELAY_REQUEST.set(clock.getAsLong());
-    }
-
-    static void useClock(LongSupplier replacement) {
-        clock = replacement;
-    }
 
     private static void dropped(String record, IllegalArgumentException reason) {
         LOG.log(

@@ -164,48 +164,6 @@ class PeerConnectorTest {
     }
 
     @Test
-    void acceptorRelayGuardIsReenabledByEachAttachment() {
-        long[] now = {1_000_000_000L};
-        PeerConnector.useClock(() -> now[0]);
-        try {
-            PeerConnector.attachmentStarted();
-            assertTrue(PeerConnector.acceptorRelayAllowed());
-            assertFalse(PeerConnector.serverObjected(), "no request has been made");
-            PeerConnector.acceptorRelayRequested();
-            now[0] += 2_000_000_000L;
-            assertTrue(PeerConnector.serverObjected());
-            assertFalse(PeerConnector.acceptorRelayAllowed());
-            PeerConnector.attachmentStarted();
-            assertTrue(PeerConnector.acceptorRelayAllowed());
-            assertFalse(PeerConnector.serverObjected(), "the new attachment has no request yet");
-            assertTrue(PeerConnector.acceptorRelayAllowed());
-        } finally {
-            PeerConnector.useClock(System::nanoTime);
-            PeerConnector.attachmentStarted();
-        }
-    }
-
-    @Test
-    void objectionLongAfterTheLastAcceptorRelayRequestDoesNotDisableRequests() {
-        long[] now = {1_000_000_000L};
-        PeerConnector.useClock(() -> now[0]);
-        try {
-            PeerConnector.attachmentStarted();
-            PeerConnector.acceptorRelayRequested();
-            now[0] += 5_000_000_000L;
-            assertFalse(PeerConnector.serverObjected());
-            assertTrue(PeerConnector.acceptorRelayAllowed());
-            PeerConnector.acceptorRelayRequested();
-            now[0] += 4_999_999_999L;
-            assertTrue(PeerConnector.serverObjected());
-            assertFalse(PeerConnector.acceptorRelayAllowed());
-        } finally {
-            PeerConnector.useClock(System::nanoTime);
-            PeerConnector.attachmentStarted();
-        }
-    }
-
-    @Test
     void candidateAddressesMatchCanonicalRustPolicy() throws Exception {
         InetAddress publicRoute = ip("148.113.190.78");
         for (String allowed : List.of("10.0.0.1", "10.3.4.5", "169.254.1.2",
