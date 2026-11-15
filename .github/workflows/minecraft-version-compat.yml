@@ -2,7 +2,7 @@ name: OpenRad Minecraft version compatibility (development)
 
 on:
   pull_request:
-    branches: [main, '2.2.0-dev', '2.3.0-dev', '2.3.1-dev', '2.3.2-dev']
+    branches: [main, '2.2.0-dev', '2.3.0-dev', '2.3.1-dev', '2.3.2-dev', '2.4.0-dev']
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
@@ -18,7 +18,7 @@ on:
       - 'tools/minecraft_release_jars.py'
       - 'tests/test_minecraft_release_jars.py'
       - '.github/workflows/minecraft-version-compat.yml'
-  # Release candidates are validated by pull_request. 2.3.x-dev branches
+  # Release candidates are validated by pull_request. 2.3.x-dev and 2.4.0-dev branches
   # are also validated on push as a standalone branch; while it has an open PR, the PR
   # run additionally tests the merge result. That overlap is intentional: a
   # concurrency group would cancel one of the two different validations.
@@ -28,6 +28,7 @@ on:
       - '2.3.0-dev'
       - '2.3.1-dev'
       - '2.3.2-dev'
+      - '2.4.0-dev'
     paths:
       - 'clients/mod/**'
       - 'clients/plugin/**'
