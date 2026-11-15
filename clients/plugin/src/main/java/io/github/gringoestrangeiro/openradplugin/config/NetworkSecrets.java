@@ -70,13 +70,10 @@ public final class NetworkSecrets implements AutoCloseable {
             } finally {
                 Arrays.fill(bytes, (byte) 0);
             }
-            for (String key : properties.stringPropertyNames()) {
-                String value = properties.getProperty(key);
-                if (value.length() < 6 || value.length() > 256)
-                    throw new IOException(
-                            "secrets.properties: password for '" + key + "' must have 6..256 characters");
-                secrets.values.put(key, value.toCharArray());
-            }
+            // Only passwords that an enabled network references are validated (requiredPassword),
+            // so a stale or malformed entry never blocks removing or disabling its network.
+            for (String key : properties.stringPropertyNames())
+                secrets.values.put(key, properties.getProperty(key).toCharArray());
             return secrets;
         } catch (IOException | RuntimeException e) {
             secrets.close();

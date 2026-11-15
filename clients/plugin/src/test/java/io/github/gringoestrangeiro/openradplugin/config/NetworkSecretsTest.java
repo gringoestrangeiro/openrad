@@ -6,7 +6,6 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.*;
 
 final class NetworkSecretsTest {
@@ -45,7 +44,17 @@ final class NetworkSecretsTest {
     void enabledReplacementStillRequiresValidSecrets() throws Exception {
         VpnSettings enabled = settings(true);
         Files.writeString(directory.resolve("secrets.properties"), "short-key=abc\n");
-        assertThrows(IOException.class, () -> NetworkSecrets.loadFor(directory, enabled));
+        try (NetworkSecrets secrets = NetworkSecrets.loadFor(directory, enabled)) {
+            var invalid = assertThrows(IllegalArgumentException.class, () -> secrets.validate(enabled));
+            assertTrue(invalid.getMessage().contains("missing-key") || invalid.getMessage().contains("6..256"),
+                    invalid.getMessage());
+        }
+        Files.writeString(directory.resolve("secrets.properties"),
+                "short-key=abc\nmissing-key=password-two\n");
+        try (NetworkSecrets secrets = NetworkSecrets.loadFor(directory, enabled)) {
+            var tooShort = assertThrows(IllegalArgumentException.class, () -> secrets.validate(enabled));
+            assertTrue(tooShort.getMessage().contains("6..256"), tooShort.getMessage());
+        }
         Files.writeString(directory.resolve("secrets.properties"), "short-key=password-one\n");
         try (NetworkSecrets secrets = NetworkSecrets.loadFor(directory, enabled)) {
             assertThrows(IllegalArgumentException.class, () -> secrets.validate(enabled));
