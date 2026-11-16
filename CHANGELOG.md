@@ -20,6 +20,13 @@
   guard in `PeerConnector` was removed from the plugin and the mod copy.
 - CI: the Minecraft version-compatibility workflow now also runs for pull
   requests into and pushes to `2.4.0-dev`.
+- Fabric mod: **New virtual IP** button in the OpenRad menu (two clicks within
+  5 s). It stops the VPN, registers a new device identity with the current
+  coordinator (official or `coordinator.properties`) and reconnects if the VPN
+  was active, giving a new `26.x` address. Like the desktop identity reset, the
+  saved identity is replaced only after the new one was issued; a failure keeps
+  the previous identity, and an issued but not yet installed replacement is
+  reused instead of registering another device. Networks must be joined again.
 
 - Linux CLI: `openrad start` and `openrad retry-interface` run from a terminal
   now ask for sudo directly on that terminal instead of depending on a Polkit

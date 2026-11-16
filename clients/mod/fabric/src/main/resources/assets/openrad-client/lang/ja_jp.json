@@ -71,5 +71,9 @@
   "openrad.menu.disconnect_timeout": "切断に時間がかかっています。しばらくしてからもう一度お試しください。",
   "openrad.menu.handover_timeout": "設定は保存されましたが、以前の接続がまだ終了していません。しばらくしてからもう一度お試しください。",
   "openrad.menu.not_started": "接続を開始できませんでした。しばらくしてからもう一度お試しください。",
-  "openrad.menu.config_invalid": "保存されている設定が無効です。OpenRadメニューを開いて保存し、置き換えてください。"
+  "openrad.menu.config_invalid": "保存されている設定が無効です。OpenRadメニューを開いて保存し、置き換えてください。",
+  "openrad.menu.new_ip": "新しい仮想IP",
+  "openrad.menu.new_ip_confirm": "もう一度クリック: 新しいデバイスとIP（ネットワークに再参加）",
+  "openrad.menu.new_ip_done": "新しい仮想IPを発行しました。",
+  "openrad.menu.new_ip_failed": "新しいIPを発行できませんでした。以前のIPを維持しています。"
 }

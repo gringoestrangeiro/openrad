@@ -278,6 +278,96 @@ class OpenRadControllerTest {
         assertFalse(OpenRadMenuDraft.opening(finished::get, () -> defaults).pending());
     }
 
+    private OpenRadController renewing(List<FakeEngine> engines, OpenRadController.IdentityRenewer renewer) {
+        return new OpenRadController(directory, Logger.getAnonymousLogger(), (config, state, log) -> {
+            var engine = new FakeEngine(config);
+            engines.add(engine);
+            return engine;
+        }, Duration.ofMillis(50), renewer);
+    }
+
+    @Test void newIdentityIsIssuedOnlyAfterTheVpnStoppedAndTheVpnReconnects() throws Exception {
+        new ClientConfig(false, List.of("net-a")).save(directory);
+        var engines = new ArrayList<FakeEngine>();
+        var renewals = new java.util.concurrent.atomic.AtomicInteger();
+        try (var controller = renewing(engines, state -> {
+            assertTrue(engines.get(0).closed, "the old runtime released the identity first");
+            assertEquals(directory.resolve("state"), state);
+            renewals.incrementAndGet();
+            return (Inet4Address) java.net.InetAddress.getByName("26.0.0.9");
+        })) {
+            controller.initialize();
+            idle(controller);
+            assertTrue(controller.connect(controller.config()));
+            idle(controller);
+            assertTrue(controller.active());
+
+            assertTrue(controller.renewIdentity());
+            idle(controller);
+
+            assertEquals(1, renewals.get());
+            assertEquals(2, engines.size(), "a fresh runtime loads the new identity");
+            assertEquals(1, engines.get(1).connectCalls, "an active VPN reconnects with the new IP");
+            assertEquals("openrad.menu.new_ip_done", controller.messageKey());
+        }
+    }
+
+    @Test void failedRenewalKeepsThePreviousIdentityAndAnInactiveVpnStaysOff() throws Exception {
+        new ClientConfig(false, List.of("net-a")).save(directory);
+        var engines = new ArrayList<FakeEngine>();
+        try (var controller = renewing(engines, state -> { throw new IOException("coordinator unreachable"); })) {
+            controller.initialize();
+            idle(controller);
+            assertFalse(controller.active());
+
+            assertTrue(controller.renewIdentity());
+            idle(controller);
+
+            assertEquals("openrad.menu.new_ip_failed", controller.messageKey());
+            assertEquals(2, engines.size(), "the runtime is usable again with the previous identity");
+            assertEquals(0, engines.get(1).connectCalls, "an inactive VPN is not started by the renewal");
+        }
+    }
+
+    @Test void renewalNeverTouchesTheIdentityWhileTheOldRuntimeStillRuns() throws Exception {
+        new ClientConfig(false, List.of("net-a")).save(directory);
+        var engines = new ArrayList<FakeEngine>();
+        var renewals = new java.util.concurrent.atomic.AtomicInteger();
+        try (var controller = renewing(engines, state -> {
+            renewals.incrementAndGet();
+            return (Inet4Address) java.net.InetAddress.getByName("26.0.0.9");
+        })) {
+            controller.initialize();
+            idle(controller);
+            engines.get(0).stopped = false;
+
+            assertTrue(controller.renewIdentity());
+            idle(controller);
+            assertEquals("openrad.menu.handover_timeout", controller.messageKey());
+            assertEquals(0, renewals.get());
+            assertEquals(1, engines.size());
+
+            engines.get(0).stopped = true;
+            assertTrue(controller.renewIdentity());
+            idle(controller);
+            assertEquals(1, renewals.get());
+            assertEquals("openrad.menu.new_ip_done", controller.messageKey());
+        }
+    }
+
+    @Test void aSecondPressWithinTheWindowConfirmsAndALatePressArmsAgain() {
+        var window = new ConfirmWindow(Duration.ofSeconds(5));
+        long now = 1_000_000_000L;
+        assertFalse(window.armed(now));
+        assertFalse(window.press(now), "the first press only arms");
+        assertTrue(window.armed(now + 1));
+        assertTrue(window.press(now + Duration.ofSeconds(4).toNanos()));
+        assertFalse(window.armed(now + Duration.ofSeconds(4).toNanos()), "a confirmed action disarms");
+        assertFalse(window.press(now + Duration.ofSeconds(10).toNanos()));
+        assertFalse(window.press(now + Duration.ofSeconds(16).toNanos()), "after the window it only arms again");
+        assertTrue(window.press(now + Duration.ofSeconds(17).toNanos()));
+    }
+
     private static void idle(OpenRadController controller) throws InterruptedException {
         long until = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
         while (controller.busy() && System.nanoTime() < until) Thread.sleep(10);

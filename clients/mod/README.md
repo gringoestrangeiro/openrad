@@ -103,6 +103,12 @@ O menu abre na tela inicial, no Multiplayer, na pausa ou via `/openrad menu`.
 - **Conectar automaticamente**: desligado por padrão, requer rede selecionada.
 - **Avançado**: máximo de peers, conexões de jogo, timeout, limites de
   redes, nomes exatos e filtros técnicos.
+- **Novo IP virtual**: dois cliques em até 5 s criam uma nova identidade de
+  dispositivo no coordenador em uso (oficial ou `coordinator.properties`) e,
+  com ela, um novo IP `26.x`. A VPN para antes da troca e volta a conectar se
+  estava ativa. Como no "Redefinir identidade" do desktop, a identidade salva
+  só é substituída depois que a nova foi emitida; se falhar, a anterior continua
+  valendo. As redes pertencem à identidade antiga: entre nelas de novo.
 - **Salvar**: grava alterações sem expor credenciais; alterações de rede
   durante uma conexão existente podem exigir reconexão.
 
