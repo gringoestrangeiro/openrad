@@ -71,9 +71,5 @@
   "openrad.menu.disconnect_timeout": "Disconnecting is taking too long. Try again in a moment.",
   "openrad.menu.handover_timeout": "Settings saved, but the previous connection is still stopping. Try again in a moment.",
   "openrad.menu.not_started": "The connection did not start. Try again in a moment.",
-  "openrad.menu.config_invalid": "The saved configuration is invalid. Open the OpenRad menu and save to replace it.",
-  "openrad.menu.new_ip": "New virtual IP",
-  "openrad.menu.new_ip_confirm": "Click again: new device and IP, rejoin networks",
-  "openrad.menu.new_ip_done": "New virtual IP issued.",
-  "openrad.menu.new_ip_failed": "Could not issue a new IP; the previous one was kept."
+  "openrad.menu.config_invalid": "The saved configuration is invalid. Open the OpenRad menu and save to replace it."
 }

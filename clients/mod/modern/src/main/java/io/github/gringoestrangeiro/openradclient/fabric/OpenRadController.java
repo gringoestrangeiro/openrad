@@ -2,7 +2,6 @@ package io.github.gringoestrangeiro.openradclient.fabric;
 
 import io.github.gringoestrangeiro.openradclient.ClientConfig;
 import io.github.gringoestrangeiro.openradclient.ClientVpnRuntime;
-import io.github.gringoestrangeiro.openradclient.IdentityReplacement;
 import io.github.gringoestrangeiro.openradclient.virtual.OutboundTcpStack;
 
 import io.netty.channel.ChannelFuture;
@@ -40,11 +39,6 @@ public final class OpenRadController implements AutoCloseable {
         Engine create(ClientConfig config, Path stateDirectory, Logger logger);
     }
 
-    /** Issues a new device identity (and 26.x address); called only while no runtime owns it. */
-    @FunctionalInterface interface IdentityRenewer {
-        Inet4Address renew(Path stateDirectory) throws IOException;
-    }
-
     private static final class RuntimeEngine implements Engine {
         private final ClientVpnRuntime runtime;
         RuntimeEngine(ClientConfig config, Path stateDirectory, Logger logger) {
@@ -75,7 +69,6 @@ public final class OpenRadController implements AutoCloseable {
     private final Logger logger;
     private final EngineFactory engines;
     private final Duration stopTimeout;
-    private final IdentityRenewer identities;
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             // One admitted UI action plus a reserved shutdown task. close() can race
             // a queued action before the worker has dequeued it.
@@ -96,15 +89,10 @@ public final class OpenRadController implements AutoCloseable {
         this(directory, logger, RuntimeEngine::new, Duration.ofSeconds(15));
     }
     OpenRadController(Path directory, Logger logger, EngineFactory engines, Duration stopTimeout) {
-        this(directory, logger, engines, stopTimeout, IdentityReplacement::replace);
-    }
-    OpenRadController(Path directory, Logger logger, EngineFactory engines, Duration stopTimeout,
-                      IdentityRenewer identities) {
         this.directory = directory;
         this.logger = logger;
         this.engines = engines;
         this.stopTimeout = stopTimeout;
-        this.identities = identities;
     }
 
     public void initialize() {
@@ -202,42 +190,6 @@ public final class OpenRadController implements AutoCloseable {
                     throw new StopTimeoutException("openrad.menu.disconnect_timeout", "runtime stop timed out");
             }
             message = "openrad.command.disconnected";
-        });
-    }
-    /**
-     * A new device identity and 26.x address from the current coordinator, like the desktop's
-     * identity reset: the VPN stops first and, if the new identity cannot be issued, the previous
-     * one keeps working. Networks joined by the old identity have to be joined again.
-     */
-    public boolean renewIdentity() {
-        return submit(() -> {
-            boolean reconnect = active();
-            bridge.closeActive();
-            Engine old = runtime;
-            if (old != null) {
-                old.close();
-                runtime = null;
-                stopping = old;
-            }
-            if (stopping != null) {
-                if (!stopping.awaitStopped(stopTimeout))
-                    throw new StopTimeoutException("openrad.menu.handover_timeout", "old runtime still owns identity");
-                stopping = null;
-            }
-            if (closed.get()) return;
-            String outcome = "openrad.menu.new_ip_done";
-            try {
-                Inet4Address address = identities.renew(directory.resolve("state"));
-                logger.info("OpenRad issued a new device identity with virtual IP " + address.getHostAddress());
-            } catch (IOException failure) {
-                outcome = "openrad.menu.new_ip_failed";
-                logger.warning("OpenRad kept the previous identity; a new one could not be issued ("
-                        + failure.getClass().getSimpleName() + ": " + failure.getMessage() + ")");
-            }
-            replaceBridge(config);
-            runtime = engines.create(config, directory.resolve("state"), logger);
-            if (reconnect) runtime.connect();
-            message = outcome;
         });
     }
     public boolean save(ClientConfig draft) {

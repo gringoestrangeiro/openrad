@@ -14,8 +14,7 @@ public final class OpenRadMenuScreen extends Screen {
     private final OpenRadController controller;
     private OpenRadMenuDraft draft;
     private boolean initialDraftPending;
-    private Button connect, save, networks, automatic, advanced, newIp;
-    private final ConfirmWindow newIpConfirmation = new ConfirmWindow(java.time.Duration.ofSeconds(5));
+    private Button connect, save, networks, automatic, advanced;
 
     public OpenRadMenuScreen(Screen parent, OpenRadController controller) {
         this(parent, controller, OpenRadMenuDraft.opening(controller::initialized, controller::config));
@@ -48,10 +47,6 @@ public final class OpenRadMenuScreen extends Screen {
         advanced = addRenderableWidget(Button.builder(OpenRadI18n.tr("openrad.menu.advanced"), button ->
                 minecraft.setScreenAndShow(new OpenRadAdvancedScreen(this, draft)))
                 .bounds(left, top + 72, width, 20).build());
-        newIp = addRenderableWidget(Button.builder(Component.empty(), button -> {
-            if (newIpConfirmation.press(System.nanoTime())) controller.renewIdentity();
-            updateButtons();
-        }).bounds(left, top + 96, width, 20).build());
         save = addRenderableWidget(Button.builder(Component.empty(), button -> {
             try { controller.save(draft.config()); }
             catch (IllegalArgumentException invalid) { }
@@ -72,9 +67,6 @@ public final class OpenRadMenuScreen extends Screen {
         connect.active = !initialDraftPending && !controller.busy() && (active || valid && (!draft.selectors.isEmpty() || !draft.networks.isEmpty()));
         save.active = !initialDraftPending && !controller.busy() && valid;
         networks.active = automatic.active = advanced.active = !initialDraftPending && !controller.busy();
-        newIp.active = controller.initialized() && !controller.busy();
-        newIp.setMessage(OpenRadI18n.tr(newIpConfirmation.armed(System.nanoTime())
-                ? "openrad.menu.new_ip_confirm" : "openrad.menu.new_ip"));
         connect.setMessage(Component.translatable(active ? "openrad.menu.disconnect" : "openrad.menu.connect"));
         save.setMessage(Component.translatable(active ? "openrad.menu.save_reconnect" : "openrad.menu.save"));
         save.setTooltip(active ? Tooltip.create(OpenRadI18n.tr("openrad.menu.reconnect_note")) : null);

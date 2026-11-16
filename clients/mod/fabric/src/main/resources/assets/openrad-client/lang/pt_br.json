@@ -71,9 +71,5 @@
   "openrad.menu.disconnect_timeout": "A desconexão está demorando demais. Tente novamente em instantes.",
   "openrad.menu.handover_timeout": "Configurações salvas, mas a conexão anterior ainda está encerrando. Tente novamente em instantes.",
   "openrad.menu.not_started": "A conexão não foi iniciada. Tente novamente em instantes.",
-  "openrad.menu.config_invalid": "A configuração salva é inválida. Abra o menu OpenRad e salve para substituí-la.",
-  "openrad.menu.new_ip": "Novo IP virtual",
-  "openrad.menu.new_ip_confirm": "Clique de novo: novo dispositivo e IP, reentre nas redes",
-  "openrad.menu.new_ip_done": "Novo IP virtual emitido.",
-  "openrad.menu.new_ip_failed": "Não foi possível obter um novo IP; o anterior foi mantido."
+  "openrad.menu.config_invalid": "A configuração salva é inválida. Abra o menu OpenRad e salve para substituí-la."
 }
