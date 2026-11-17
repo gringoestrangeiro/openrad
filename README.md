@@ -15,17 +15,16 @@ development has not started.
 ## Clients
 
 This repository is a monorepo with five clients and a coordination server
-sharing one wire format. The table below describes the **upcoming 2.4.0 release
-candidate**, not the latest published release (currently 2.3.3):
+sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.4.0 |
-| Android | [`clients/android/`](clients/android/README.md) | stable | 2.4.0 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.4.0 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | **beta** | **2.4.0** |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | **beta** | **2.4.0** |
-| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | beta | 2.4.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
+| Android | [`clients/android/`](clients/android/README.md) | stable | 2.3.3 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.3.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.2 |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.2 |
+| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | beta | 2.3.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -89,10 +88,7 @@ The current release is **[2.3.3](docs/releases/2.3.3.md)**; see the
 [changelog](CHANGELOG.md) for earlier versions. It updates only the Android APK;
 the Minecraft plugin and mod are the 2.3.2 files and the other packages are the
 2.3.0 files, and all keep their names.
-Windows is experimental. The Minecraft 2.3.2 builds in the **currently published**
-release are alpha. **Starting with OpenRad 2.4.0, both the Paper plugin and the
-Fabric mod are classified as beta**, with further real-world validation still
-recommended. The 2.4.0 release is not yet published.
+Windows is experimental and the Minecraft builds alpha.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
@@ -184,8 +180,7 @@ and eligibility details.
 Radmin VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad)
 join the server at the plugin's `26.x.x.x` address; the host needs no VPN
 client, TAP/TUN driver, root access or native libraries, so it also works on
-shared hosting. The plugin is **beta starting with 2.4.0**; the already
-published 2.3.2 build remains classified as alpha.
+shared hosting. The plugin is **alpha**.
 
 1. Copy the JAR for your Paper version into the server's `plugins/` folder and
    start the server.
