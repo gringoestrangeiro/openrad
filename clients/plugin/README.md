@@ -1,4 +1,11 @@
-# OpenRad Plugin 2.3.2 (alpha)
+# OpenRad Plugin
+
+**OpenRad Plugin 2.4.0: beta (release candidate).** Starting with 2.4.0, the
+Paper plugin is classified as **beta** instead of alpha. The automated
+compatibility tests and hardening in this version do not replace live gameplay
+testing. The 2.4.0 release has not yet been published.
+
+## Published version 2.3.2 (alpha)
 
 > **Download:** [release 2.3.2](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.2), um JAR por versão principal do Paper,
 > dividida só onde os patches precisam de builds diferentes. O nome traz apenas a versão do Minecraft:
@@ -10,7 +17,7 @@
 
 Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
-**Estado: alpha.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).
+**Estado da versão publicada 2.3.2: alpha.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).
 
 ## Início rápido (3 passos)
 

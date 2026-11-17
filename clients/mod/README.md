@@ -1,4 +1,9 @@
-> **Download (2.3.2, alpha):** [release 2.3.2](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.2),
+> **OpenRad Client Mod 2.4.0 (beta, release candidate):** a partir da 2.4.0,
+> o mod Fabric passa de **alpha** para **beta**. Os testes automatizados de
+> compatibilidade passaram, mas ainda sao recomendados testes reais de gameplay.
+> A 2.4.0 ainda nao foi publicada.
+>
+> **Download da versão publicada (2.3.2, alpha):** [release 2.3.2](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.2),
 > arquivos `OpenRadClientMod-2.3.2-fabric-<versões>.jar` para Minecraft 1.17–1.21.11 e 26.1–26.3. O nome traz
 > só a versão do Minecraft: um JAR por versão principal, dividido onde os patches precisam de builds diferentes
 > (por exemplo `-1.18-1.18.2`, `-1.21-1.21.5`, `-1.21.6-1.21.10`, `-1.21.11`, `-26.1-26.3`). Cada patch é compilado e
