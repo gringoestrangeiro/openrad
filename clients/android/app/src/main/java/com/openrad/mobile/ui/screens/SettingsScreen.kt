@@ -72,6 +72,7 @@ fun SettingsScreen(vm: OpenRadViewModel) {
         "pt" -> stringResource(R.string.lang_pt)
         "ru" -> stringResource(R.string.lang_ru)
         "vi" -> stringResource(R.string.lang_vi)
+        "zh" -> stringResource(R.string.lang_zh)
         else -> stringResource(R.string.lang_system)
     }
 

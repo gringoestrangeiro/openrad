@@ -74,11 +74,16 @@ object Protocol {
 
     fun requestTcpCandidates(cid: Long): ByteArray = concat(Tlv.u32(CLIENT_OP, 2), Tlv.u64(0x020001c1L, cid))
 
-    fun advertiseTcp(cid: Long, host: String, port: Int): ByteArray = concat(
-        Tlv.u32(CLIENT_OP, 2),
-        Tlv.u64(0x020001c1L, cid),
-        Tlv.tlv(0x1230L, Tlv.tlv(0x127dL, concat(Tlv.text(0x030001c2L, host), Tlv.u32(0x010001c3L, port.toLong())))),
-    )
+    fun advertiseTcp(cid: Long, host: String, port: Int): ByteArray = advertiseTcp(cid, listOf(host to port))
+
+    fun advertiseTcp(cid: Long, endpoints: List<Pair<String, Int>>): ByteArray {
+        ensure(endpoints.isNotEmpty() && endpoints.size <= 8) { "TCP advertisement bounds" }
+        val records = endpoints.map { (host, port) ->
+            ensure(tcpLiteralAddress(host) != null && port in 1..65535) { "invalid TCP endpoint" }
+            Tlv.tlv(0x127dL, concat(Tlv.text(0x030001c2L, host), Tlv.u32(0x010001c3L, port.toLong())))
+        }
+        return concat(Tlv.u32(CLIENT_OP, 2), Tlv.u64(0x020001c1L, cid), Tlv.tlv(0x1230L, concat(*records.toTypedArray())))
+    }
 
     class PublicListing(val networks: List<Pair<String, Long>>, val cursor: Long)
 
@@ -205,13 +210,14 @@ object Protocol {
         ensure(Tlv.unique(outer, 0x020001c1L).u64() == cid) { "direct connection ID mismatch" }
         val out = ArrayList<Pair<String, Int>>()
         for (rec in Tlv.parse(Tlv.unique(outer, 0x1236L).value)) {
-            if (rec.tag != 0x127dL || out.size >= 4) continue
+            if (rec.tag != 0x127dL || out.size >= 8) continue
             val f = Tlv.parse(rec.value)
             val host = Tlv.decodeText(Tlv.unique(f, 0x030001c2L))
             val port = Tlv.unique(f, 0x010001c3L).u32()
-            // Only IPv4 literals are dialed; IPv6 candidates are skipped on mobile.
-            val ip = runCatching { Ip.parse(host) }.getOrNull() ?: continue
-            if (ip == 0 || ip == -1 || Ip.isMulticast(ip) || port !in 1..65535) continue
+            val address = tcpLiteralAddress(host) ?: continue
+            if (port !in 1..65535 || address.isAnyLocalAddress || address.isLoopbackAddress ||
+                address.isLinkLocalAddress || address.isMulticastAddress) continue
+            if (address is java.net.Inet4Address && Ip.isMulticast(Ip.parse(host))) continue
             out.add(host to port.toInt())
         }
         return out

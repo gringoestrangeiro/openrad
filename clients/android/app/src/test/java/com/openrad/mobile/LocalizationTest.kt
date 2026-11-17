@@ -23,7 +23,7 @@ class LocalizationTest {
     @Test
     fun everyLocaleHasEveryKeyAndTheSamePlaceholders() {
         val english = load("values")
-        for (dir in listOf("values-pt", "values-ru", "values-vi")) {
+        for (dir in listOf("values-pt", "values-ru", "values-vi", "values-zh-rCN")) {
             val other = load(dir)
             assertEquals("keys differ in $dir", english.keys, other.keys)
             for ((key, value) in english) {

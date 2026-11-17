@@ -167,7 +167,7 @@ data class AppSettings(
     )
 
     companion object {
-        val LANGUAGES = listOf("system", "en", "pt", "ru", "vi")
+        val LANGUAGES = listOf("system", "en", "pt", "ru", "vi", "zh")
     }
 }
 

@@ -4,6 +4,8 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -35,6 +37,16 @@ internal fun SocketProtector?.protectBestEffort(socket: Socket) {
 
 internal fun SocketProtector?.protectBestEffort(socket: DatagramSocket) {
     if (this != null && !protect(socket)) onProtectFailed("UDP")
+}
+
+/** Parse a numeric IPv4/IPv6 literal without allowing DNS or scoped addresses. */
+internal fun tcpLiteralAddress(host: String): InetAddress? {
+    if (host.contains(':')) {
+        if (host.length > 45 || host.any { it !in "0123456789abcdefABCDEF:." }) return null
+        return runCatching { InetAddress.getByName(host) }.getOrNull() as? Inet6Address
+    }
+    val ip = runCatching { Ip.parse(host) }.getOrNull() ?: return null
+    return InetAddress.getByAddress(Ip.bytes(ip)) as Inet4Address
 }
 
 /**
@@ -259,13 +271,17 @@ class Framed(val socket: Socket, @Volatile override var stop: AtomicBoolean? = n
         private const val WRITE_BUFFER_LIMIT = 65536 + 128
 
         fun connect(host: String, port: Int, timeoutMs: Int, protector: SocketProtector?, stop: AtomicBoolean?): Framed {
-            Ip.parse(host) // Service replies supply IP literals; never resolve DNS here.
+            val address = tcpLiteralAddress(host) ?: fail("TCP endpoint must be a numeric IP literal")
             ensure(port in 1..65535) { "invalid TCP port" }
             if (stop?.get() == true) throw CancelledException()
             val socket = Socket()
             try {
+                // Bind first, then protect BEFORE the SYN. Protecting only after
+                // connect lets the Android IPv6 default route swallow the SYN.
+                val wildcard = if (address is Inet6Address) "::" else "0.0.0.0"
+                socket.bind(InetSocketAddress(InetAddress.getByName(wildcard), 0))
                 protector.protectBestEffort(socket)
-                socket.connect(InetSocketAddress(InetAddress.getByName(host), port), timeoutMs)
+                socket.connect(InetSocketAddress(address, port), timeoutMs)
                 return Framed(socket, stop)
             } catch (e: Exception) {
                 runCatching { socket.close() }

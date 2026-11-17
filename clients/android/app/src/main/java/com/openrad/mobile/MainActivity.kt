@@ -134,7 +134,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Applies the in-app language (en/pt/ru/vi or system) and interface scale 0.8–1.5 without recreating the activity. */
+/** Applies the in-app language (en/pt/ru/vi/zh or system) and interface scale 0.8–1.5 without recreating the activity. */
 @Composable
 private fun Localized(language: String, scale: Float, content: @Composable () -> Unit) {
     val base = LocalContext.current
@@ -143,7 +143,9 @@ private fun Localized(language: String, scale: Float, content: @Composable () ->
         if (language == "system") {
             base
         } else {
-            val localizedConfig = Configuration(configuration).apply { setLocale(Locale(language)) }
+            val localizedConfig = Configuration(configuration).apply {
+                setLocale(if (language == "zh") Locale.SIMPLIFIED_CHINESE else Locale(language))
+            }
             val resources = base.createConfigurationContext(localizedConfig).resources
             object : ContextWrapper(base) {
                 override fun getResources(): Resources = resources

@@ -30,6 +30,31 @@ class SocketProtectionTest {
         assertEquals(listOf("TCP"), protector.failures)
     }
 
+    @Test fun tcpSocketIsBoundBeforeProtection() {
+        var boundWhenProtected = false
+        val protector = object : SocketProtector {
+            override fun protect(socket: Socket): Boolean {
+                boundWhenProtected = socket.isBound && !socket.isConnected
+                return true
+            }
+            override fun protect(socket: DatagramSocket) = true
+        }
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            Framed.connect("127.0.0.1", server.localPort, 1000, protector, null).close()
+        }
+        assertTrue("protect must run after bind but before connect", boundWhenProtected)
+    }
+
+    @Test fun tcpCanConnectToIpv6LoopbackWhenAvailable() {
+        val server = try {
+            ServerSocket(0, 1, InetAddress.getByName("::1"))
+        } catch (_: java.io.IOException) { return }
+        server.use {
+            val stream = Framed.connect("::1", it.localPort, 1000, null, null)
+            try { assertTrue(stream.socket.isConnected) } finally { stream.close() }
+        }
+    }
+
     @Test fun refusedUdpProtectionStillBindsAndIsReported() {
         val protector = RefusingProtector()
         val socket = UdpSocket.bind(protector)

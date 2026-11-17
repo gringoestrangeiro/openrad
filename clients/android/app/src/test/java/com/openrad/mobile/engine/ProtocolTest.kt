@@ -247,6 +247,34 @@ class ProtocolTest {
     }
 
     @Test
+    fun tcpCandidatesAcceptGlobalIpv6AndRejectUnsafeAddresses() {
+        val cid = 123L
+        fun record(host: String, port: Int = 4400) =
+            Tlv.tlv(0x127dL, Tlv.text(0x030001c2L, host) + Tlv.u32(0x010001c3L, port.toLong()))
+        val packet = Tlv.u32(Protocol.SERVER_OP, 6) + Tlv.u64(0x020001c1L, cid) +
+            Tlv.tlv(0x1236L, concat(
+                record("2001:db8::1"), record("::1"), record("fe80::1"),
+                record("ff02::1"), record("example.com"),
+                record("2001:db8::1%wlan0"), record("2001:db8::2", 0),
+            ))
+        assertEquals(listOf("2001:db8::1" to 4400), Protocol.tcpCandidates(packet, cid))
+        assertNull(tcpLiteralAddress("example.com"))
+        assertNull(tcpLiteralAddress("fe80::1%wlan0"))
+        assertEquals("2001:db8:0:0:0:0:0:1", tcpLiteralAddress("2001:db8::1")?.hostAddress)
+    }
+
+    @Test
+    fun tcpAdvertisementContainsAllListenersInOneRecord() {
+        val packet = Protocol.advertiseTcp(31, listOf("192.168.0.10" to 5100, "2001:db8::5" to 5100))
+        val outer = Tlv.parse(packet)
+        assertEquals(2L, Tlv.unique(outer, Protocol.CLIENT_OP).u32())
+        val records = Tlv.parse(Tlv.unique(outer, 0x1230L).value)
+        assertEquals(2, records.count { it.tag == 0x127dL })
+        assertThrows(ProtocolException::class.java) { Protocol.advertiseTcp(31, listOf("host.invalid" to 5100)) }
+        assertThrows(ProtocolException::class.java) { Protocol.advertiseTcp(31, listOf("::1" to 0)) }
+    }
+
+    @Test
     fun tcpCandidatesSkipInvalidAndRelayParses() {
         val cid = 99L
         val cands = Tlv.u32(Protocol.SERVER_OP, 6) + Tlv.u64(0x020001c1, cid) + Tlv.tlv(

@@ -1,7 +1,10 @@
 package com.openrad.mobile.engine
 
 import java.io.IOException
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -959,6 +962,7 @@ class Engine(
             val race = SetupRace<PeerChannel>("out-${peer.rid}") { it.close() }
             val relayPreparation = SetupRace<Framed>("relay-${peer.rid}") { it.close() }
             var mapping: SetupRace<MappedSocket>? = null
+            var tcpListener: ServerSocket? = null
             var offer: Protocol.ConnectionOffer? = null
             var serverId = 0L
             var ues: List<Int> = emptyList()
@@ -1071,7 +1075,18 @@ class Engine(
                             }
                             offer = next
                             if (!relayOnly) {
-                                coord.send(Protocol.requestTcpCandidates(next.cid))
+                                val server = openTcpListener()
+                                val hosts = server?.let { advertisedTcpHosts(route, it) }.orEmpty()
+                                if (server != null && hosts.isNotEmpty()) {
+                                    tcpListener = server
+                                    // op 2 requests peer candidates and advertises our listener
+                                    // in the SAME record, so the remote can also dial us.
+                                    coord.send(Protocol.advertiseTcp(next.cid, hosts.map { it to server.localPort }))
+                                    acceptDirect(race, server, own, next, until, progress, AtomicBoolean(false))
+                                } else {
+                                    runCatching { server?.close() }
+                                    coord.send(Protocol.requestTcpCandidates(next.cid))
+                                }
                                 bindUdp(route)?.let { (socket, endpoints) ->
                                     udpSocket = socket
                                     coord.send(Protocol.advertiseUdp(next.cid, endpoints, 0))
@@ -1133,10 +1148,53 @@ class Engine(
                 relayStream?.close()
                 udpSocket?.close()
                 mappedSocket?.close()
+                runCatching { tcpListener?.close() }
                 // The winner copied the password at construction; loser lanes are
                 // cancelled above and fail closed if they read it after the wipe.
                 offer?.wipe()
             }
+        }
+
+        /** Prefer a dual-stack IPv6 listener, with an IPv4 fallback for older devices. */
+        private fun openTcpListener(): ServerSocket? {
+            for (wildcard in listOf("::", "0.0.0.0")) {
+                val server = ServerSocket()
+                try {
+                    server.bind(InetSocketAddress(InetAddress.getByName(wildcard), 0), 8)
+                    server.soTimeout = 200
+                    return server
+                } catch (_: IOException) {
+                    runCatching { server.close() }
+                }
+            }
+            return null
+        }
+
+        /** Only advertise numeric addresses that belong to an active network interface. */
+        private fun advertisedTcpHosts(route: Int?, server: ServerSocket): List<String> {
+            val hosts = LinkedHashSet<String>()
+            if (route != null && route != 0 && route != -1 && !Udp.isLoopback(route)) {
+                hosts.add(Ip.format(route))
+            }
+            if (server.inetAddress is Inet6Address) {
+                val interfaces = runCatching { NetworkInterface.getNetworkInterfaces() }.getOrNull()
+                while (interfaces?.hasMoreElements() == true && hosts.size < 8) {
+                    val nic = interfaces.nextElement()
+                    if (runCatching { !nic.isUp || nic.isLoopback || nic.isVirtual }.getOrDefault(true)) continue
+                    val addresses = nic.inetAddresses
+                    while (addresses.hasMoreElements() && hosts.size < 8) {
+                        val address = addresses.nextElement()
+                        if (address !is Inet6Address) continue
+                        val bytes = address.address
+                        // Global-unicast 2000::/3. Never advertise Android's VPN,
+                        // ULA, link-local, multicast or interface-scoped addresses.
+                        if (bytes.isEmpty() || (bytes[0].toInt() and 0xe0) != 0x20) continue
+                        val host = address.hostAddress?.substringBefore('%') ?: continue
+                        if (tcpLiteralAddress(host) is Inet6Address) hosts.add(host)
+                    }
+                }
+            }
+            return hosts.toList()
         }
 
         /** Local UDP socket and its candidates on the coordinator route; null when none is usable. */
@@ -1275,13 +1333,16 @@ class Engine(
                 }
             }
             try {
-                if (!relayOnly && route != null) {
-                    val server = ServerSocket()
-                    server.bind(InetSocketAddress(0), 8)
-                    server.soTimeout = 200
-                    listener = server
-                    wire.offer(Protocol.advertiseTcp(offer.cid, Ip.format(route), server.localPort))
-                    acceptDirect(race, server, own, offer, until, progress, tcpSeen)
+                if (!relayOnly) {
+                    val server = openTcpListener()
+                    val hosts = server?.let { advertisedTcpHosts(route, it) }.orEmpty()
+                    if (server != null && hosts.isNotEmpty() &&
+                        wire.offer(Protocol.advertiseTcp(offer.cid, hosts.map { it to server.localPort }))) {
+                        listener = server
+                        acceptDirect(race, server, own, offer, until, progress, tcpSeen)
+                    } else {
+                        runCatching { server?.close() }
+                    }
                     bindUdp(route)?.let { (socket, endpoints) ->
                         directSocket = socket
                         wire.offer(Protocol.advertiseUdp(offer.cid, endpoints, nonce))
@@ -1403,7 +1464,14 @@ class Engine(
             }
             val validating = Semaphore(PeerScheduling.DIRECT_TCP_LANES)
             fun validate(sock: Socket) {
-                val direct = Framed(sock, race.cancel)
+                val direct = try {
+                    // Protect accepted sockets before the checksum reply/first write.
+                    protector.protectBestEffort(sock)
+                    Framed(sock, race.cancel)
+                } catch (_: Exception) {
+                    runCatching { sock.close() }
+                    return
+                }
                 try {
                     val data = direct.readExact(24, minOf(until, now() + 3000))
                     val ok = data.copyOfRange(0, 4).contentEquals(byteArrayOf(0, 0x14, 0, 1)) &&
