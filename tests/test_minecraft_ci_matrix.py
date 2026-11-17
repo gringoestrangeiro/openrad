@@ -26,6 +26,8 @@ class MinecraftCIMatrixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
+        build = (ROOT / "clients/plugin/build.gradle.kts").read_text(encoding="utf-8")
+        cls.version = re.search(r'^version = "([^"]+)"', build, re.M).group(1)
         m = re.search(r"^\s{8}minecraft: (\[.*\])\s*$", cls.text, re.M)
         if m is None:
             raise AssertionError("Fabric CI matrix is missing or not explicit")
@@ -100,7 +102,7 @@ class MinecraftCIMatrixTests(unittest.TestCase):
 
     def test_release_jar_names_carry_no_java_version(self):
         self.assertNotRegex(self.text, r"-java\$|java\$\{\{")
-        self.assertIn('OpenRadPlugin-2.3.2-paper-$MC.jar', self.text)
+        self.assertIn(f'OpenRadPlugin-{self.version}-paper-$MC.jar', self.text)
 
     def test_release_jars_merge_only_after_the_full_matrix(self):
         job = self.text.split("\n  release-jars:", 1)[1]
@@ -112,8 +114,8 @@ class MinecraftCIMatrixTests(unittest.TestCase):
         self.assertIn("test_minecraft_release_jars.py", inventory)
 
     def test_versioned_artifacts_and_checksum_uploaded(self):
-        self.assertIn("openrad-2.3.2-fabric-${{ matrix.minecraft }}-verified", self.text)
-        self.assertIn("openrad-2.3.2-paper-${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn(f"openrad-{self.version}-fabric-" + "${{ matrix.minecraft }}-verified", self.text)
+        self.assertIn(f"openrad-{self.version}-paper-" + "${{ matrix.minecraft }}-verified", self.text)
         self.assertIn("sha256sum", self.text)
         self.assertIn("if-no-files-found: error", self.text)
 

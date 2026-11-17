@@ -2,6 +2,17 @@
 
 ## Unreleased (2.4.0-dev)
 
+- Android TCP rendezvous (issue #25): outgoing peers now advertise a bounded
+  listener as well as dialing candidates; numeric IPv6 TCP candidates and
+  bind-before-protect-before-connect support improve direct peer paths while
+  retaining relay and UDP fallbacks. Real Android/Radmin interoperability
+  remains a required manual release qualification.
+- Android localization (PR #26): add Simplified Chinese and allow selecting it
+  in the app. Preserve the contributor's string catalog and verify placeholders.
+- Android reliability: preserve the 2.3.3 fix for devices refusing
+  VpnService.protect(), including unit tests.
+- Release preparation: update local build metadata and packaging workflows for
+  2.4.0 without merging or publishing a release.
 - Minecraft Paper/Fabric: audited and fixed 37 confirmed transport, security,
   lifecycle, configuration and UI issues. Added regression coverage and the full
   [technical audit report](AUDITORIA_PAPER_FABRIC.md).
@@ -40,6 +51,7 @@ arquivos das releases anteriores. Sem alteracoes no wire format nem na identidad
 - **Android:** a recusa do `protect()` deixa de abortar a conexao (TCP e UDP): o motor segue
   adiante e o servico registra um aviso unico no logcat. O TUN so e criado depois que a conexao de
   controle fica ONLINE, entao exigir `protect()` antes disso era um deadlock.
+
 ## 2.3.2 — 2026-11-07
 
 Correcao do plugin Paper e do mod Fabric: a sessao de controle caia poucos segundos depois de
