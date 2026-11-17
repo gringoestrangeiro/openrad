@@ -1098,7 +1098,7 @@ class Engine(
                         6L -> {
                             if (!relayOnly && o != null && candidates == null) {
                                 candidates = try {
-                                    Protocol.tcpCandidates(data, o.cid).also { tcpReceived = true }
+                                    Protocol.tcpCandidates(data, o.cid, allowLoopback = route?.let(Udp::isLoopback) == true).also { tcpReceived = true }
                                 } catch (e: ProtocolException) {
                                     lastError = "direct-tcp: ${describe(e)}"
                                     null
@@ -1173,7 +1173,9 @@ class Engine(
         /** Only advertise numeric addresses that belong to an active network interface. */
         private fun advertisedTcpHosts(route: Int?, server: ServerSocket): List<String> {
             val hosts = LinkedHashSet<String>()
-            if (route != null && route != 0 && route != -1 && !Udp.isLoopback(route)) {
+            // A loopback control route is possible only with an explicitly local
+            // coordinator. Keep that route for local direct-peer interoperability.
+            if (route != null && route != 0 && route != -1) {
                 hosts.add(Ip.format(route))
             }
             if (server.inetAddress is Inet6Address) {

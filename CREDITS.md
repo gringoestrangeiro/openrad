@@ -8,4 +8,8 @@ The repository's [MIT license](LICENSE) also lists asimplestray as a copyright h
 
 The desktop embeds **Noto Sans Regular**, Copyright 2022 The Noto Project Authors, to display Portuguese, Cyrillic, and Vietnamese text consistently. The font is distributed under the [SIL Open Font License 1.1](desktop/assets/OFL-NotoSans.txt); its upstream project is [notofonts/latin-greek-cyrillic](https://github.com/notofonts/latin-greek-cyrillic).
 
+**Guizin** contributed work to the OpenRad 2.4.0 development branch, including Linux terminal/TTY privilege handling. The original development history remains preserved in the 2.4.0 integration.
+
+**@qjjer** contributed the Simplified Chinese Android translation in [PR #26](https://github.com/gringoestrangeiro/openrad/pull/26) and reported and investigated the Android direct TCP/IPv6 interoperability problem in [issue #25](https://github.com/gringoestrangeiro/openrad/issues/25).
+
 [Baptiste Rajaut (@baptisterajaut)](https://github.com/baptisterajaut) contributed a robustness audit and fixes for reliable UDP flow control, full-size Ethernet frames, display-name decoding, identity provisioning, reconnection, and TAP helper cleanup in [PR #1](https://github.com/gringoestrangeiro/openrad/pull/1).

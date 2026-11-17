@@ -205,7 +205,7 @@ object Protocol {
         return RelayOffer(host, port.toInt(), ticket)
     }
 
-    fun tcpCandidates(data: ByteArray, cid: Long): List<Pair<String, Int>> {
+    fun tcpCandidates(data: ByteArray, cid: Long, allowLoopback: Boolean = false): List<Pair<String, Int>> {
         val outer = Tlv.parse(data)
         ensure(Tlv.unique(outer, 0x020001c1L).u64() == cid) { "direct connection ID mismatch" }
         val out = ArrayList<Pair<String, Int>>()
@@ -215,7 +215,8 @@ object Protocol {
             val host = Tlv.decodeText(Tlv.unique(f, 0x030001c2L))
             val port = Tlv.unique(f, 0x010001c3L).u32()
             val address = tcpLiteralAddress(host) ?: continue
-            if (port !in 1..65535 || address.isAnyLocalAddress || address.isLoopbackAddress ||
+            if (port !in 1..65535 || address.isAnyLocalAddress ||
+                (address.isLoopbackAddress && !allowLoopback) ||
                 address.isLinkLocalAddress || address.isMulticastAddress) continue
             if (address is java.net.Inet4Address && Ip.isMulticast(Ip.parse(host))) continue
             out.add(host to port.toInt())

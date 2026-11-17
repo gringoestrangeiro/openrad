@@ -247,6 +247,18 @@ class ProtocolTest {
     }
 
     @Test
+    fun tcpCandidatesPermitLoopbackOnlyWithLocalCoordinator() {
+        val cid = 111L
+        fun record(host: String) = Tlv.tlv(0x127dL,
+            Tlv.text(0x030001c2L, host) + Tlv.u32(0x010001c3L, 4411))
+        val data = Tlv.u32(Protocol.SERVER_OP, 6) + Tlv.u64(0x020001c1L, cid) +
+            Tlv.tlv(0x1236L, record("127.0.0.1") + record("::1") + record("192.0.2.1"))
+        assertEquals(listOf("192.0.2.1" to 4411), Protocol.tcpCandidates(data, cid))
+        assertEquals(listOf("127.0.0.1" to 4411, "::1" to 4411, "192.0.2.1" to 4411),
+            Protocol.tcpCandidates(data, cid, allowLoopback = true))
+    }
+
+    @Test
     fun tcpCandidatesAcceptGlobalIpv6AndRejectUnsafeAddresses() {
         val cid = 123L
         fun record(host: String, port: Int = 4400) =
