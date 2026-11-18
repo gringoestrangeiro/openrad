@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2.4.0-dev)
+## 2.4.0
 
 - Android TCP rendezvous (issue #25): outgoing peers now advertise a bounded
   listener as well as dialing candidates; numeric IPv6 TCP candidates and
@@ -11,8 +11,9 @@
   in the app. Preserve the contributor's string catalog and verify placeholders.
 - Android reliability: preserve the 2.3.3 fix for devices refusing
   VpnService.protect(), including unit tests.
-- Release preparation: update local build metadata and packaging workflows for
-  2.4.0 without merging or publishing a release.
+- Release packaging: version 2.4.0 across clients and server. Paper/Fabric move
+  from alpha to beta. Android uses a new signing certificate because the original
+  key was lost; a clean installation is required.
 - Minecraft Paper/Fabric: audited and fixed 37 confirmed transport, security,
   lifecycle, configuration and UI issues. Added regression coverage and the full
   [technical audit report](AUDITORIA_PAPER_FABRIC.md).

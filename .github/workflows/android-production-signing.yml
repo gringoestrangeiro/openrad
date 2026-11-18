@@ -19,7 +19,7 @@ jobs:
       - name: Install Android SDK
         working-directory: clients/android
         run: ./scripts/setup-android-sdk.sh
-      - name: Build and verify official upgrade-compatible APK
+      - name: Build and verify APK with pinned replacement certificate
         working-directory: clients/android
         shell: bash
         env:
@@ -36,7 +36,7 @@ jobs:
           test -n "$RELEASE_KEY_PASSWORD" || { echo 'Missing secure signing key password.'; exit 2; }
           keyfile="$RUNNER_TEMP/openrad-release.jks"
           props="$RUNNER_TEMP/openrad-signing.properties"
-          official="$RUNNER_TEMP/openrad-2.0.1-official.apk"
+          official="$RUNNER_TEMP/openrad-2.3.3-official.apk"
           trap 'rm -f "$keyfile" "$props" "$official"' EXIT
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keyfile"
           chmod 600 "$keyfile"
@@ -49,7 +49,7 @@ jobs:
           ./gradlew :app:testDebugUnitTest :app:assembleRelease "-Popenrad.signingProperties=$props" --no-daemon
           apk='app/build/outputs/apk/release/app-release.apk'
           test -s "$apk"
-          curl -fsSL --retry 3 'https://github.com/gringoestrangeiro/openrad/releases/download/v2.0.1/openrad-2.0.1-android.apk' -o "$official"
+          curl -fsSL --retry 3 'https://github.com/gringoestrangeiro/openrad/releases/download/v2.3.3/openrad-2.3.3-android.apk' -o "$official"
           export NEW_APK="$apk" OLD_APK="$official" VERSION_NAME="$version_name" VERSION_CODE="$version_code"
           python3 - <<'VERIFY'
           import os, re, subprocess
@@ -66,12 +66,14 @@ jobs:
               return match.group(1).lower(),package,raw
           old_cert,old_package,old_raw=info(os.environ['OLD_APK'])
           new_cert,new_package,new_raw=info(os.environ['NEW_APK'])
-          assert old_cert == new_cert, 'PRODUCTION RELEASE BLOCKED: signing certificate differs from official v2.0.1'
-          assert "name='com.openrad.mobile'" in old_package and "versionCode='3'" in old_package, 'Official reference APK mismatch'
+          assert old_cert == '60d1baa1d9b7e24240100d8a8622aba65703d8d78121b91dffbc897619c0d529', 'Legacy reference certificate mismatch'
+          assert new_cert == 'd640c7714a7998077b102736d0598d367457e6babbc9774b0051f12294848221', 'PRODUCTION RELEASE BLOCKED: replacement certificate mismatch'
+          assert old_cert != new_cert, 'Expected the 2.4.0 replacement signing key'
+          assert "name='com.openrad.mobile'" in old_package and "versionCode='9'" in old_package, 'Official reference APK mismatch'
           code, name = os.environ['VERSION_CODE'], os.environ['VERSION_NAME']
           assert "name='com.openrad.mobile'" in new_package and f"versionCode='{code}'" in new_package and f"versionName='{name}'" in new_package, 'APK package/version mismatch'
           assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in new_raw or 'Verified using v3 scheme (APK Signature Scheme v3): true' in new_raw, 'Missing modern compatible Android signing scheme'
-          print('PASS: signing certificate identical to official v2.0.1')
+          print('PASS: pinned 2.4.0 replacement signing certificate; clean installation required')
           print(f'PASS: package com.openrad.mobile, versionCode {code}, versionName {name}')
           VERIFY
           mkdir -p ../../dist/android-release-signed

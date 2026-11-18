@@ -19,12 +19,12 @@ sharing one wire format:
 
 | Client | Path | Status | Version |
 | --- | --- | --- | --- |
-| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.3.0 |
-| Android | [`clients/android/`](clients/android/README.md) | stable | 2.3.3 |
-| Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.3.0 |
-| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | alpha | 2.3.2 |
-| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | alpha | 2.3.2 |
-| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | beta | 2.3.0 |
+| Rust (desktop + CLI) | `src/`, `desktop/` | stable, canonical | 2.4.0 |
+| Android | [`clients/android/`](clients/android/README.md) | stable | 2.4.0 |
+| Python (research) | [`clients/python/`](clients/python/README.md) | beta | 2.4.0 |
+| Paper plugin (Minecraft servers) | [`clients/plugin/`](clients/plugin/README.md) | beta | 2.4.0 |
+| Fabric mod (Minecraft clients) | [`clients/mod/`](clients/mod/README.md) | beta | 2.4.0 |
+| Coordination server (Go, self-hosted) | [`server/`](server/README.md) | beta | 2.4.0 |
 
 The Rust client is the source of truth for the wire format, the
 `tests/fixtures/` vectors, and `locales/messages.json`. The Android and
@@ -84,29 +84,31 @@ for protocol and transport details.
 
 Download the latest packages and SHA-256 checksums from the
 [GitHub releases page](https://github.com/gringoestrangeiro/openrad/releases).
-The current release is **[2.3.3](docs/releases/2.3.3.md)**; see the
-[changelog](CHANGELOG.md) for earlier versions. It updates only the Android APK;
-the Minecraft plugin and mod are the 2.3.2 files and the other packages are the
-2.3.0 files, and all keep their names.
-Windows is experimental and the Minecraft builds alpha.
+The current release is **[2.4.0](docs/releases/2.4.0.md)**; see the
+[changelog](CHANGELOG.md) for earlier versions. Windows remains experimental.
+The Paper plugin and Fabric mod are now beta.
+
+**Android signing change:** the previous private signing key was lost. Android
+2.4.0 uses a new certificate and cannot update an older installation in place.
+Preserve any important data before uninstalling the old version and installing 2.4.0.
 
 - **Linux:** Extract the archive, keep `openrad` and `openrad-desktop` together,
   then follow the [Linux setup guide](docs/linux.md).
-- **Windows:** Run `OpenRad-Setup-2.3.0.exe` from the release package. It installs the
+- **Windows:** Run `OpenRad-Setup-2.4.0.exe` from the release package. It installs the
   application and its TAP-Windows6 driver. See the [Windows guide](docs/windows.md)
   for installation, diagnostics, and current limitations.
-- **Android:** Install `openrad-2.3.3-android.apk` (Android 8.0 or newer).
+- **Android:** Install `openrad-2.4.0-android.apk` (Android 8.0 or newer).
   See the [Android client guide](clients/android/README.md).
-- **Minecraft server (Paper 1.17–1.21.x or 26.x, alpha):** Put the
-  `OpenRadPlugin-2.3.2-paper-<versions>.jar` whose name includes your Paper version (for
+- **Minecraft server (Paper 1.17–1.21.x or 26.x, beta):** Put the
+  `OpenRadPlugin-2.4.0-paper-<versions>.jar` whose name includes your Paper version (for
   example `-1.21` or `-26.1.1-26.3`) in the server's `plugins/` folder; see
   [Minecraft server plugin](#minecraft-server-plugin-paper).
-- **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, alpha):** Put exactly one
-  `OpenRadClientMod-2.3.2-fabric-<versions>.jar`, the one whose range includes your game
+- **Minecraft client (Fabric 1.17–1.21.11 or 26.1–26.3, beta):** Put exactly one
+  `OpenRadClientMod-2.4.0-fabric-<versions>.jar`, the one whose range includes your game
   version (for example `-1.21-1.21.5` for 1.21.4), in the Fabric profile's `mods/` folder
   with the Fabric API; see the [mod guide](clients/mod/README.md).
-- **Self-hosted server (beta):** Extract `openrad-server-v2.3.0-linux-x86_64.tar.gz`
-  (or the experimental `openrad-server-v2.3.0-windows-x86_64.zip`, not yet validated on
+- **Self-hosted server (beta):** Extract `openrad-server-v2.4.0-linux-x86_64.tar.gz`
+  (or the experimental `openrad-server-v2.4.0-windows-x86_64.zip`, not yet validated on
   native Windows) and run `openrad-server serve`. Point the desktop (**Settings → Server**)
   or CLI (`openrad server set`) at it with its `modulus.bin`; see the [server guide](server/README.md).
 
@@ -180,7 +182,7 @@ and eligibility details.
 Radmin VPN/OpenRad network. Players using the official Radmin VPN (or OpenRad)
 join the server at the plugin's `26.x.x.x` address; the host needs no VPN
 client, TAP/TUN driver, root access or native libraries, so it also works on
-shared hosting. The plugin is **alpha**.
+shared hosting. The plugin is **beta**.
 
 1. Copy the JAR for your Paper version into the server's `plugins/` folder and
    start the server.

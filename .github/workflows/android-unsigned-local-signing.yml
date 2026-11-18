@@ -58,7 +58,7 @@ jobs:
           printf '%s\n' \
             'UNSIGNED ANDROID APK -- NOT INSTALLABLE, NOT A PRODUCTION RELEASE.' \
             'This is only the unsigned com.openrad.mobile 2.4.0 binary.' \
-            'Only the original Android signing keystore can make an update-compatible APK.' \
+            'Use the pinned 2.4.0 replacement signing key; installations through 2.3.3 require uninstall first.' \
             'Sign privately on the maintainer Windows PC with scripts/sign-android-local.ps1.' \
             "Source commit: $GITHUB_SHA" > dist/android-local-signing/README-FIRST.txt
       - uses: actions/upload-artifact@v4

@@ -1,6 +1,6 @@
 # Sign the OpenRad Android production APK on a trusted Windows PC.
 # NEVER copy the original keystore/passwords into GitHub or commit them to git.
-# Requires the original keystore, Android SDK Build Tools 34, and Java 17+.
+# Requires the new 2.4.0 release keystore, Android SDK Build Tools 34, and Java 17+.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Keystore,
@@ -40,7 +40,7 @@ if ($ExpectedCommit) {
     Write-Warning 'No -ExpectedCommit given: the APK is not verified against a release commit.'
 }
 if (-not (Test-Path -LiteralPath $Keystore -PathType Leaf)) {
-    throw 'Original signing keystore not found. Do not generate a new key: upgrades would be incompatible.'
+    throw 'Release signing keystore not found. Use the existing 2.4.0 key.'
 }
 # Both generated outputs can replace files. Refuse every input (including the
 # keystore) before requesting passwords or invoking any signing tools.
@@ -142,25 +142,25 @@ try {
         $referenceTempDir = Join-Path ([IO.Path]::GetTempPath()) ('openrad-cert-' + [guid]::NewGuid().ToString('N'))
         $null = New-Item -Path $referenceTempDir -ItemType Directory -Force
         $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
-        if (-not $gh) { throw 'GitHub CLI (gh) not found. Provide -ReferenceApk with the original official 2.0.1 APK.' }
-        & $gh.Source release download v2.0.1 -R gringoestrangeiro/openrad -p 'openrad-2.0.1-android.apk' -D $referenceTempDir
+        if (-not $gh) { throw 'GitHub CLI (gh) not found. Provide -ReferenceApk with the original official 2.3.3 APK.' }
+        & $gh.Source release download v2.3.3 -R gringoestrangeiro/openrad -p 'openrad-2.3.3-android.apk' -D $referenceTempDir
         if ($LASTEXITCODE -ne 0) { throw 'Unable to retrieve the official APK used as the certificate reference.' }
-        $ReferenceApk = Join-Path $referenceTempDir 'openrad-2.0.1-android.apk'
+        $ReferenceApk = Join-Path $referenceTempDir 'openrad-2.3.3-android.apk'
     }
     if (-not (Test-Path -LiteralPath $ReferenceApk -PathType Leaf)) {
         throw 'Official reference APK not found.'
     }
     $originalDetails = Read-Package $ReferenceApk
     if ($originalDetails -notmatch "name='com[.]openrad[.]mobile'" -or
-        $originalDetails -notmatch "versionCode='3'") {
-        throw 'The reference APK is not the expected official Android 2.0.1 release.'
+        $originalDetails -notmatch "versionCode='9'") {
+        throw 'The reference APK is not the expected official Android 2.3.3 release.'
     }
     $original = Read-Certificate $ReferenceApk
-    Write-Output 'Reference: verified official v2.0.1 APK signature and package metadata.'
+    Write-Output 'Reference: verified official v2.3.3 APK signature and package metadata.'
     Write-Output 'Candidate: verified unsigned v2.4.0 APK package metadata and optional SHA256.'
 
-    $storeSecret = Read-Host 'Password for the ORIGINAL keystore (not shown)' -AsSecureString
-    $keySecret = Read-Host 'Password for the ORIGINAL key alias (not shown)' -AsSecureString
+    $storeSecret = Read-Host 'Password for the release keystore (not shown)' -AsSecureString
+    $keySecret = Read-Host 'Password for the release key alias (not shown)' -AsSecureString
     $storeText = Use-SecretText $storeSecret
     $keyText = Use-SecretText $keySecret
 
@@ -198,13 +198,16 @@ try {
         $stdErr = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
         if ($process.ExitCode -ne 0) {
-            throw 'Android signing failed. Check the original keystore, alias and passwords locally; no signed release was produced.'
+            throw 'Android signing failed. Check the release keystore, alias and passwords locally; no signed release was produced.'
         }
     } finally { $process.Dispose() }
 
     $actualCert = Read-Certificate $pendingSigned
-    if ($actualCert -ne $original) {
-        throw 'SIGNING BLOCKED: certificate differs from official Android 2.0.1. The APK cannot safely update existing installations.'
+    if ($original -ne '60d1baa1d9b7e24240100d8a8622aba65703d8d78121b91dffbc897619c0d529') {
+        throw 'SIGNING BLOCKED: the legacy APK does not match the pinned certificate.'
+    }
+    if ($actualCert -ne 'd640c7714a7998077b102736d0598d367457e6babbc9774b0051f12294848221' -or $actualCert -eq $original) {
+        throw 'SIGNING BLOCKED: APK does not use the pinned 2.4.0 replacement certificate.'
     }
     $signedDetails = Read-Package $pendingSigned
     if ($signedDetails -notmatch "name='com[.]openrad[.]mobile'" -or
@@ -222,7 +225,7 @@ try {
     Move-Item -LiteralPath $pendingChecksum -Destination $checksumOutput -Force
     $pendingChecksum = $null
     Write-Output "SUCCESS: locally signed OpenRad 2.4.0 APK: $OutputApk"
-    Write-Output 'SUCCESS: certificate SHA-256 matches official Android 2.0.1 release.'
+    Write-Output 'SUCCESS: certificate matches pinned 2.4.0 replacement key; clean installation required.'
     Write-Output "SHA-256: $digest"
 }
 finally {

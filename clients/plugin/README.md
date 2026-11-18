@@ -1,20 +1,22 @@
-# OpenRad Plugin 2.3.2 (alpha)
+# OpenRad Plugin 2.4.0 (beta)
 
-> **Download:** [release 2.3.2](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.2), um JAR por versão principal do Paper,
+> **Download:** [release 2.4.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.4.0), um JAR por versão principal do Paper,
 > dividida só onde os patches precisam de builds diferentes. O nome traz apenas a versão do Minecraft:
-> `OpenRadPlugin-2.3.2-paper-1.21.jar` para Paper 1.21.x (Java 21), `-26.1.1-26.3` para Paper 26.1.1 a 26.3 (Java 25)
+> `OpenRadPlugin-2.4.0-paper-1.21.jar` para Paper 1.21.x (Java 21), `-26.1.1-26.3` para Paper 26.1.1 a 26.3 (Java 25)
 > e alvos experimentais `-1.17-1.17.1`, `-1.18`, `-1.18.1-1.18.2`, `-1.19-1.19.2`, `-1.19.3-1.19.4`, `-1.20.1-1.20.4` e `-1.20.5-1.20.6`.
 > Cada patch continua compilado e testado separadamente no CI; patches só compartilham um JAR quando os builds são idênticos byte a byte.
+
+**Novidades da 2.4.0:** auditoria de estabilidade, transporte e seguranca; veja [as notas](../../docs/releases/2.4.0.md).
 
 **Novidades da 2.3.2:** a sessao nao cai mais poucos segundos depois de conectar em maquinas com IPv6 global: os enderecos anunciados aos peers saem no mesmo formato do Rust, sem a zona da interface (`%eth0`). A 2.3.1 passou a mostrar o motivo e a etapa de cada desconexao e a parar em FALHA quando a mesma identidade conecta de outro lugar (`/orb reconnect` depois de resolver). Compilar um alvo não comprova gameplay nessa versão. Consulte as [notas da 2.3.2](../../docs/releases/2.3.2.md).
 
 Plugin para servidores **Paper 1.17–1.21.x e 26.x** que coloca o próprio servidor Minecraft dentro de uma rede Radmin VPN/OpenRad. Jogadores que usam o Radmin VPN oficial (ou o OpenRad) entram no servidor digitando o IP `26.x.x.x` do plugin — sem instalar VPN, TAP/TUN ou rotas no host. O artefato é somente `OpenRadPlugin.jar`; o plugin não inicia processos nem carrega bibliotecas nativas, então funciona em hospedagens compartilhadas.
 
-**Estado: alpha.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).
+**Estado: beta.** Testes automatizados, interoperabilidade com o cliente Rust canônico e testes no serviço real até o pedido de criptografia do Minecraft passam. Gameplay completo com vários jogadores pelo Radmin VPN oficial ainda não foi medido; veja [o relatório](docs/tests-live.md) e as [notas da 2.1.0](docs/changes-2.1.0.md).
 
 ## Início rápido (3 passos)
 
-1. Baixe o JAR da sua versão do Paper na [release 2.3.2](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.3.2) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
+1. Baixe o JAR da sua versão do Paper na [release 2.4.0](https://github.com/gringoestrangeiro/openrad/releases/tag/v2.4.0) (ou compile com `./gradlew clean check`, veja abaixo), coloque em `plugins/` e inicie o servidor (Paper 1.21.x com Java 21, ou Paper 26.x com Java 25). Confira o arquivo com o `SHA256SUMS` da release.
 2. No **console** do servidor, entre na sua rede Radmin:
 
    ```text
