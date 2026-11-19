@@ -30,7 +30,7 @@ name = "openrad-setup-helper"
 path = "src/setup_main.rs"
 
 [dependencies]
-aes = "0.8.4"
+aes = { version = "0.8.4", features = ["zeroize"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "string"] }
 directories = "6"

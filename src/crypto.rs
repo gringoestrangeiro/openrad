@@ -14,7 +14,7 @@ use rand::{rngs::OsRng, RngCore};
 use sha1::Sha1;
 use std::sync::OnceLock;
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub const PRIME: &str = concat!(
     "e634471e75f2d76a0a3f5e252c5a6efb48edad645d31d9ecbc400416e14f5c6c",
@@ -91,6 +91,13 @@ pub struct Channel {
     enc_iv: [u8; 16],
     dec_iv: [u8; 16],
 }
+impl Drop for Channel {
+    fn drop(&mut self) {
+        self.enc_iv.zeroize();
+        self.dec_iv.zeroize();
+    }
+}
+
 impl Channel {
     pub fn new(key: &[u8]) -> Result<Self> {
         ensure!(key.len() == 32, "channel key must be 32 bytes");
@@ -181,11 +188,11 @@ impl Channel {
         self.cbc_decrypt_in_place(&mut out);
         let n = out.len();
         let pad = out[n - 1] as usize;
-        ensure!((9..25).contains(&pad) && pad < n, "invalid channel padding");
-        ensure!(
-            bool::from(auth8(&out[..n - 9]).ct_eq(&out[n - 9..n - 1])),
-            "channel trailer rejected"
-        );
+        let trailer_ok = bool::from(auth8(&out[..n - 9]).ct_eq(&out[n - 9..n - 1]));
+        if !(trailer_ok & (9..25).contains(&pad) & (pad < n)) {
+            out.zeroize();
+            bail!("invalid encrypted record");
+        }
         out.truncate(n - pad);
         Ok(out)
     }
@@ -486,33 +493,40 @@ pub fn rsa_session(modulus: &[u8], purpose: u32) -> Result<(Vec<u8>, Vec<u8>)> {
     let n = number(modulus);
     let e = BigUint::from(65537u32);
     let width = n.bits().div_ceil(8) as usize;
-    let secret = random(64);
-    let mut message = vec![];
+    let mut secret = Zeroizing::new(vec![0; 64]);
+    OsRng
+        .try_fill_bytes(&mut secret)
+        .map_err(|_| anyhow!("OS randomness unavailable"))?;
+    let mut message = Zeroizing::new(Vec::with_capacity(76));
     for v in [3u32, 0x4b, purpose] {
         message.extend(v.to_le_bytes());
     }
-    message.extend(&secret);
+    message.extend_from_slice(&secret);
     let padding_len = width - message.len() - 3;
     ensure!(padding_len >= 8, "RSA message too long");
-    let mut encoded = vec![0, 2];
+    let mut encoded = Zeroizing::new(Vec::with_capacity(width));
+    encoded.extend([0, 2]);
     for _ in 0..128 {
         if encoded.len() == padding_len + 2 {
             break;
         }
-        encoded.extend(
-            random(padding_len + 2 - encoded.len())
-                .into_iter()
-                .filter(|x| *x != 0),
-        );
+        let mut batch = Zeroizing::new(vec![0; padding_len + 2 - encoded.len()]);
+        OsRng
+            .try_fill_bytes(&mut batch)
+            .map_err(|_| anyhow!("OS randomness unavailable"))?;
+        encoded.extend(batch.iter().copied().filter(|x| *x != 0));
     }
     if encoded.len() != padding_len + 2 {
         bail!("RSA randomness failure");
     }
     encoded.push(0);
-    encoded.extend(message);
+    encoded.extend_from_slice(&message);
     let value = number(&encoded);
     ensure!(value < n, "RSA encoded message exceeds modulus");
-    Ok((padded(&serial(&value.modpow(&e, &n)), width), secret))
+    Ok((
+        padded(&serial(&value.modpow(&e, &n)), width),
+        secret.to_vec(),
+    ))
 }
 
 #[cfg(test)]
@@ -596,6 +610,23 @@ mod tests {
             receiver.decrypt_owned(next).unwrap(),
             b"after the rejected record"
         );
+    }
+
+    #[test]
+    fn malformed_encrypted_records_use_one_validation_error() {
+        let key = [7; 32];
+        for (pad, valid_trailer) in [(9, false), (0, true)] {
+            let mut record = [0; 16];
+            let trailer = auth8(&record[..7]);
+            if valid_trailer {
+                record[7..15].copy_from_slice(&trailer);
+            }
+            record[15] = pad;
+            Aes256::new(GenericArray::from_slice(&key))
+                .encrypt_block(GenericArray::from_mut_slice(&mut record));
+            let error = Channel::new(&key).unwrap().decrypt(&record).unwrap_err();
+            assert_eq!(error.to_string(), "invalid encrypted record");
+        }
     }
 
     #[test]

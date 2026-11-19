@@ -64,6 +64,9 @@ pub struct Operation {
 unsafe impl Send for Operation {}
 impl Operation {
     pub fn new(handle: Arc<OwnedHandle>, capacity: usize) -> io::Result<Self> {
+        if u32::try_from(capacity).is_err() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
         let event = event()?;
         let overlapped = Box::new(OVERLAPPED {
             hEvent: event.as_raw_handle(),
@@ -84,12 +87,20 @@ impl Operation {
     pub fn ready(&self, milliseconds: u32) -> io::Result<bool> {
         wait(&self.event, milliseconds)
     }
-    pub fn data(&self, len: usize) -> &[u8] {
-        assert!(!self.pending);
-        &self.buffer[..len]
+    pub fn data(&self, len: usize) -> io::Result<&[u8]> {
+        self.require_idle()?;
+        self.buffer
+            .get(..len)
+            .ok_or_else(|| io::ErrorKind::InvalidData.into())
+    }
+    fn require_idle(&self) -> io::Result<()> {
+        if self.pending {
+            return Err(io::Error::other("overlapped I/O is pending"));
+        }
+        Ok(())
     }
     fn prepare(&mut self) -> io::Result<()> {
-        assert!(!self.pending, "cannot reuse a pending I/O operation");
+        self.require_idle()?;
         *self.overlapped = OVERLAPPED {
             hEvent: self.event_handle(),
             ..Default::default()
@@ -218,7 +229,7 @@ impl Operation {
     }
     pub fn finish(&mut self, timeout_ms: u32) -> io::Result<usize> {
         if !self.pending {
-            return Ok(self.immediate as usize);
+            return self.completed_length(self.immediate);
         }
         match self.ready(timeout_ms) {
             Ok(true) => {}
@@ -237,7 +248,14 @@ impl Operation {
         if success == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(len as usize)
+        self.completed_length(len)
+    }
+    fn completed_length(&self, len: u32) -> io::Result<usize> {
+        let len = len as usize;
+        if len > self.buffer.len() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok(len)
     }
     pub fn cancel(&mut self) {
         if self.pending {
@@ -296,7 +314,21 @@ mod tests {
             .unwrap();
         assert_eq!(operation.finish(1000).unwrap(), original.len());
         assert_eq!(operation.buffer.as_ptr(), buffer);
-        assert_eq!(operation.data(original.len()), expected);
+        assert_eq!(operation.data(original.len()).unwrap(), expected);
+        assert_eq!(
+            operation
+                .completed_length((crate::tunnel::MAX_FRAME + 1) as u32)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            operation
+                .data(crate::tunnel::MAX_FRAME + 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
         assert_eq!(std::fs::read(&path).unwrap(), expected);
         let error = operation
             .write_transformed(&original, |frame| {

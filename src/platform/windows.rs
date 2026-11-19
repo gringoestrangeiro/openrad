@@ -210,7 +210,7 @@ impl Tap {
             tap.control.finish(1000)? == 12,
             "invalid TAP-Windows6 version response"
         );
-        let version = tap.control.data(12);
+        let version = tap.control.data(12)?;
         let major = u32::from_ne_bytes(version[..4].try_into()?);
         let minor = u32::from_ne_bytes(version[4..8].try_into()?);
         ensure!(
@@ -223,7 +223,7 @@ impl Tap {
             tap.control.finish(1000)? == 6,
             "invalid TAP-Windows6 MAC response"
         );
-        tap.adapter_mac.copy_from_slice(tap.control.data(6));
+        tap.adapter_mac.copy_from_slice(tap.control.data(6)?);
         early_log::tap_mac(tap.adapter_mac);
         ensure!(
             tap.adapter_mac != [0; 6] && tap.adapter_mac[0] & 1 == 0,
@@ -233,7 +233,7 @@ impl Tap {
         tap.control.ioctl(contract::GET_MTU, &[])?;
         ensure!(
             tap.control.finish(1000)? == 4
-                && u32::from_ne_bytes(tap.control.data(4).try_into()?) >= 1500,
+                && u32::from_ne_bytes(tap.control.data(4)?.try_into()?) >= 1500,
             "TAP-Windows6 driver MTU must be at least 1500"
         );
         check_cancelled(stop)?;
@@ -342,7 +342,7 @@ impl Tap {
             )
             .into());
         }
-        let mut frame = self.read.data(len).to_vec();
+        let mut frame = self.read.data(len)?.to_vec();
         self.read.read()?;
         contract::translate_mac(&mut frame, self.adapter_mac, self.wire_mac)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;

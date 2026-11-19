@@ -1819,7 +1819,7 @@ pub fn run(
 ) -> Result<()> {
     let diagnostics = options.diagnostics.new_session();
     diagnostics.event("session_start", json!({"server": identity.server_address}));
-    let port = options.control_port.unwrap_or(crate::DEFAULT_CONTROL_PORT);
+    let port = options.control_port.unwrap_or_else(crate::control_port);
     let attached = Session::attach_at_port(
         &identity,
         &modulus,

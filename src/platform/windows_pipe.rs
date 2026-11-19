@@ -183,7 +183,11 @@ impl Connection {
             if len == 0 {
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
-            bytes[at..at + len].copy_from_slice(read.data(len));
+            let destination = bytes
+                .get_mut(at..)
+                .and_then(|remaining| remaining.get_mut(..len))
+                .ok_or(io::ErrorKind::InvalidData)?;
+            destination.copy_from_slice(read.data(len)?);
             at += len;
         }
         Ok(())

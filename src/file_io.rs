@@ -6,32 +6,37 @@ use zeroize::Zeroizing;
 /// Write a new regular file and atomically publish it beside the old one.
 /// An interrupted write leaves the previously published file untouched.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::{fs, io::Write};
     let temporary = path.with_extension(format!(
         "{}-{}.tmp",
         std::process::id(),
         rand::random::<u64>()
     ));
+    publish(path, &temporary, bytes)
+}
+
+fn publish(path: &Path, temporary: &Path, bytes: &[u8]) -> Result<()> {
+    use std::{fs, io::Write};
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let mut file = options.open(temporary)?;
     let result = (|| -> Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-        }
-        let mut file = options.open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&temporary, path)?;
+        drop(file);
+        fs::rename(temporary, path)?;
         #[cfg(unix)]
         sync_parent(path);
         Ok(())
     })();
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(temporary);
     }
     result
 }
@@ -119,6 +124,15 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), br#"{"guid":"old"}"#);
         atomic_write(&path, br#"{"guid":"new"}"#).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), br#"{"guid":"new"}"#);
+        let collision = directory.join("existing.tmp");
+        std::fs::write(&collision, b"belongs to another writer").unwrap();
+        assert!(publish(&path, &collision, b"must not publish").is_err());
+        assert_eq!(
+            std::fs::read(&collision).unwrap(),
+            b"belongs to another writer"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"guid":"new"}"#);
+        std::fs::remove_file(collision).unwrap();
         // Publishing onto a directory must fail without destroying it or
         // leaving attacker-controlled temporary state in the install folder.
         let invalid = directory.join("unwritable.json");

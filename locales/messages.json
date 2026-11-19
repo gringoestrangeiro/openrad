@@ -4933,5 +4933,15 @@
     "Fechar",
     "Закрыть",
     "Đóng"
+  ],
+  "invalid encrypted record": [
+    "Registro criptografado inválido",
+    "Недействительная зашифрованная запись",
+    "Bản ghi mã hóa không hợp lệ"
+  ],
+  "OS randomness unavailable": [
+    "Fonte de aleatoriedade do sistema indisponível",
+    "Системный источник случайных чисел недоступен",
+    "Nguồn dữ liệu ngẫu nhiên của hệ thống không khả dụng"
   ]
 }

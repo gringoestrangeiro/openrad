@@ -227,10 +227,15 @@ impl DataDir {
             None => ServerEndpoint {
                 host: crate::DEFAULT_BOOTSTRAP_HOST.into(),
                 port: crate::DEFAULT_CONTROL_PORT,
-                modulus: self.load_modulus()?,
+                modulus: self.load_official_modulus()?,
             },
             Some(server) => {
-                let modulus = crate::file_io::read_optional_bounded(&self.modulus(), 4096)?
+                let path = self
+                    .path
+                    .join("servers")
+                    .join(server.slot())
+                    .join("modulus.bin");
+                let modulus = crate::file_io::read_optional_bounded(&path, 4096)?
                     .context("The custom server's modulus file is missing. Choose the server again with its modulus file")?;
                 crate::crypto::validate_modulus(&modulus)?;
                 ServerEndpoint {
@@ -251,7 +256,10 @@ impl DataDir {
         self.validate_server_change(change.as_ref())?;
         let Some((server, modulus)) = change else {
             match fs::remove_file(self.path.join(SERVER_FILE)) {
-                Ok(()) => {}
+                Ok(()) => {
+                    #[cfg(unix)]
+                    crate::file_io::sync_parent(&self.path.join(SERVER_FILE));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -343,7 +351,11 @@ impl DataDir {
     pub fn modulus(&self) -> PathBuf {
         match self.server() {
             None => self.path.join("profile/modulus.bin"),
-            Some(_) => self.identity_root().join("modulus.bin"),
+            Some(server) => self
+                .path
+                .join("servers")
+                .join(server.slot())
+                .join("modulus.bin"),
         }
     }
     fn lock(&self) -> Result<File> {
@@ -396,8 +408,10 @@ impl DataDir {
             )
         })
     }
-    fn load_modulus(&self) -> Result<Vec<u8>> {
-        if let Some(bytes) = crate::file_io::read_optional_bounded(&self.modulus(), 4096)? {
+    fn load_official_modulus(&self) -> Result<Vec<u8>> {
+        if let Some(bytes) =
+            crate::file_io::read_optional_bounded(&self.path.join("profile/modulus.bin"), 4096)?
+        {
             ensure!(!bytes.is_empty(), "public modulus size is invalid");
             Ok(bytes.to_vec())
         } else {
@@ -3090,6 +3104,10 @@ mod tests {
             ("192.0.2.10", 18301)
         );
         assert_eq!(endpoint.modulus, crate::SERVER_MODULUS);
+        let selected_modulus = directory.modulus();
+        fs::remove_file(&selected_modulus).unwrap();
+        assert!(directory.use_server().is_err());
+        fs::write(&selected_modulus, crate::SERVER_MODULUS).unwrap();
         fs::create_dir(directory.identity_root().join("profile")).unwrap();
         directory.save_identity(&identity(2)).unwrap();
 
