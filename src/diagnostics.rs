@@ -11,7 +11,7 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const FILE_BYTES: u64 = 4 * 1024 * 1024;
@@ -34,7 +34,19 @@ impl Drop for Inner {
         // Closing the final producer drains the queue before process shutdown.
         drop(self.sender.take());
         if let Some(writer) = self.writer.take() {
-            let _ = writer.join();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !writer.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            if writer.is_finished() {
+                if writer.join().is_err() {
+                    eprintln!("OpenRad diagnostics writer panicked");
+                }
+            } else {
+                eprintln!(
+                    "OpenRad diagnostics shutdown deadline exceeded; pending events may be lost"
+                );
+            }
         }
     }
 }
@@ -114,6 +126,138 @@ impl Diagnostics {
             inner.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+const SUPPORT_EVENTS: &[&str] = &[
+    "diagnostics_started",
+    "session_start",
+    "session_attached",
+    "session_attach_failed",
+    "session_health",
+    "session_end",
+    "control_health",
+    "control_closed",
+    "control_heartbeat_delayed",
+    "control_operation_timeout",
+    "control_command_queue_full",
+    "server_disconnect",
+    "server_refusal",
+    "membership_updated",
+    "peer_drop_burst",
+    "peer_retry_scheduled",
+    "peer_start_failed",
+    "interface_ready",
+    "interface_failed",
+    "interface_cleanup_failed",
+];
+const SUPPORT_COUNTERS: &[&str] = &[
+    "elapsed_ms",
+    "uptime_ms",
+    "latency_ms",
+    "peers",
+    "networks",
+    "eligible",
+    "connected",
+    "roster",
+    "handshakes",
+    "pending_incoming",
+    "scheduled_retries",
+    "active_retries",
+    "due_retries",
+    "max_loop_gap_ms",
+    "late_ms",
+    "delay_ms",
+    "failures",
+    "reason_code",
+    "record_bytes",
+    "receive_queue_dropped",
+];
+
+/// Export only typed counters and known event categories, never raw log strings.
+pub fn support_bundle(directory: &Path, status: Option<&Value>) -> Result<Value> {
+    fn counters(value: &Value, keys: &[&str]) -> Value {
+        Value::Object(
+            keys.iter()
+                .filter_map(|key| {
+                    value[*key]
+                        .as_u64()
+                        .map(|number| ((*key).to_owned(), json!(number)))
+                })
+                .collect(),
+        )
+    }
+    let mut events = std::collections::VecDeque::with_capacity(200);
+    let mut unreadable_files = 0;
+    let mut discarded_records = 0;
+    for index in (0..FILE_COUNT).rev() {
+        let file = directory.join(if index == 0 {
+            "connection.jsonl".to_owned()
+        } else {
+            format!("connection.{index}.jsonl")
+        });
+        let bytes = match crate::file_io::read_optional_bounded(&file, FILE_BYTES) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(_) => {
+                unreadable_files += 1;
+                continue;
+            }
+        };
+        for line in bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let Ok(record) = serde_json::from_slice::<Value>(line) else {
+                discarded_records += 1;
+                continue;
+            };
+            let Some(event) = record["event"]
+                .as_str()
+                .filter(|event| SUPPORT_EVENTS.contains(event))
+            else {
+                continue;
+            };
+            let mut sanitized = json!({
+                "event": event,
+                "elapsed_ms": record["elapsed_ms"].as_u64(),
+                "dropped_events": record["dropped_events"].as_u64(),
+                "write_failures": record["write_failures"].as_u64(),
+                "details": counters(&record["details"], SUPPORT_COUNTERS),
+            });
+            for key in ["interface_ready", "cancelled"] {
+                if let Some(value) = record["details"][key].as_bool() {
+                    sanitized["details"][key] = json!(value);
+                }
+            }
+            if events.len() == 200 {
+                events.pop_front();
+            }
+            events.push_back(sanitized);
+        }
+    }
+    let current = status.map(|status| {
+        let snapshot = &status["snapshot"];
+        let phase = status["phase"].as_str().filter(|phase| matches!(*phase,
+            "connected" | "connecting" | "reconnecting" | "error" | "stopping" | "stopped"));
+        let peers = snapshot["peers"].as_object();
+        json!({
+            "phase": phase,
+            "interface_ready": snapshot["interface_ready"].as_bool(),
+            "interface_error": snapshot["interface_error"].is_string(),
+            "latency_ms": snapshot["latency_ms"].as_u64(),
+            "elapsed_secs": snapshot["elapsed_secs"].as_u64(),
+            "network_count": snapshot["networks"].as_array().map(Vec::len),
+            "peer_count": peers.map(serde_json::Map::len),
+            "connected_count": peers.map(|peers| peers.values().filter(|peer| peer["status"] == "Connected").count()),
+            "traffic": counters(&snapshot["traffic"], &["sent_bytes","received_bytes","sent_frames","received_frames","dropped"]),
+        })
+    });
+    Ok(json!({
+        "format": "openrad-support-v1", "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+        "current": current, "recent_events": events,
+        "unreadable_files": unreadable_files, "discarded_records": discarded_records,
+    }))
 }
 
 struct RotatingFile {
@@ -201,6 +345,30 @@ mod tests {
         fs::create_dir(&path).unwrap();
         path
     }
+    #[test]
+    fn support_bundle_does_not_export_addresses_names_or_raw_error_messages() {
+        let directory = directory();
+        let log = Diagnostics::open(&directory).unwrap();
+        log.event("session_health", json!({"peers":5, "server":"192.0.2.7", "error":"synthetic secret", "rid":123, "latency_ms":12}));
+        log.event("synthetic secret", json!({"peers":7}));
+        drop(log);
+        let status = json!({"phase":"connected", "rid":123, "node_name":"synthetic secret", "snapshot":{"vip":"26.1.2.3","interface_error":"synthetic secret","peers":{},"networks":[]}});
+        let export = support_bundle(&directory, Some(&status)).unwrap();
+        let serialized = export.to_string();
+        for forbidden in [
+            "synthetic secret",
+            "192.0.2.7",
+            "26.1.2.3",
+            "node_name",
+            "\"rid\"",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+        assert_eq!(export["recent_events"][1]["details"]["peers"], 5);
+        assert_eq!(export["current"]["interface_error"], true);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn full_logger_queue_drops_diagnostics_without_blocking_producers() {
         let (sender, receiver) = mpsc::sync_channel(1);

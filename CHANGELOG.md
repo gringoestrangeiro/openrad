@@ -7,6 +7,10 @@
 - Bind Linux TAP adoption to the authorized session and improve Windows TAP cancellation.
 - Apply desktop preference patches without overwriting unrelated CLI changes.
 - Restore the Windows executable icon on MSVC builds and update Rust dependencies.
+- Bound roster admission and TAP drain work; poll Windows TAP writes asynchronously and report incomplete cleanup.
+- Persist desktop network preferences off the UI thread and correlate public-network searches with their session.
+- Harden elevated startup path checks and isolate control ports per session.
+- Add a privacy-filtered support bundle to the CLI and desktop.
 - See [audit implementation status](docs/audits/openrad-2.4.5-status.md) for remaining qualification and open findings.
 
 ## 2.4.0

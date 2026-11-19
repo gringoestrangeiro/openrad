@@ -18,7 +18,10 @@ use std::{
     },
 };
 use windows_sys::Win32::{
-    Foundation::{ERROR_FILE_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE},
+    Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ,
+        GENERIC_WRITE,
+    },
     NetworkManagement::{
         IpHelper::*,
         Ndis::{NET_IF_ADMIN_STATUS_UP, NET_LUID_LH},
@@ -116,6 +119,7 @@ pub struct Tap {
     read: Operation,
     read_started: bool,
     write: Operation,
+    pending_write: Option<(usize, std::time::Instant)>,
     control: Operation,
     adapter_mac: [u8; 6],
     wire_mac: [u8; 6],
@@ -123,6 +127,7 @@ pub struct Tap {
     routes: Vec<MIB_IPFORWARD_ROW2>,
     restored_routes: Vec<MIB_IPFORWARD_ROW2>,
     original_interface: Option<MIB_IPINTERFACE_ROW>,
+    media_attempted: bool,
 }
 impl Tap {
     fn from_handle(handle: Arc<OwnedHandle>, vip: Ipv4Addr) -> Result<Self> {
@@ -130,6 +135,7 @@ impl Tap {
             read: Operation::new(handle.clone(), 65536)?,
             read_started: false,
             write: Operation::new(handle.clone(), tunnel::MAX_FRAME)?,
+            pending_write: None,
             control: Operation::new(handle, 16)?,
             adapter_mac: [0; 6],
             wire_mac: tunnel::mac(vip),
@@ -137,6 +143,7 @@ impl Tap {
             routes: Vec::new(),
             restored_routes: Vec::new(),
             original_interface: None,
+            media_attempted: false,
         })
     }
     pub fn create(vip: Ipv4Addr, peers: &[Ipv4Addr]) -> Result<Self> {
@@ -231,6 +238,7 @@ impl Tap {
         );
         check_cancelled(stop)?;
         early_log::tap_step(TapStage::SetMediaStatus);
+        tap.media_attempted = true;
         tap.media(true)?;
         let mut interface = MIB_IPINTERFACE_ROW {
             Family: AF_INET,
@@ -341,6 +349,20 @@ impl Tap {
         Ok(frame)
     }
     pub fn send(&mut self, frame: &[u8]) -> Result<()> {
+        self.start_send(frame)?;
+        let length = frame.len();
+        self.pending_write = None;
+        ensure!(
+            self.write.finish(1000)? == length,
+            "short TAP-Windows6 packet write"
+        );
+        Ok(())
+    }
+    pub(crate) fn write_pending(&self) -> bool {
+        self.pending_write.is_some()
+    }
+    pub(crate) fn start_send(&mut self, frame: &[u8]) -> Result<()> {
+        ensure!(self.pending_write.is_none(), "TAP write already pending");
         ensure!(
             (14..=tunnel::MAX_FRAME).contains(&frame.len()),
             "TAP Ethernet frame exceeds configured MTU"
@@ -349,41 +371,133 @@ impl Tap {
         self.write.write_transformed(frame, |buffer| {
             contract::translate_mac(buffer, wire_mac, adapter_mac)
         })?;
+        self.pending_write = Some((frame.len(), std::time::Instant::now()));
+        Ok(())
+    }
+    pub(crate) fn poll_send(&mut self) -> Result<Option<usize>> {
+        let Some((length, started)) = self.pending_write else {
+            return Ok(None);
+        };
+        if !self.write.ready(0)? {
+            ensure!(
+                started.elapsed() < std::time::Duration::from_secs(1),
+                "TAP write timed out"
+            );
+            return Ok(None);
+        }
+        self.pending_write = None;
         ensure!(
-            self.write.finish(1000)? == frame.len(),
+            self.write.finish(0)? == length,
             "short TAP-Windows6 packet write"
+        );
+        Ok(Some(length))
+    }
+}
+fn absent(code: u32) -> bool {
+    matches!(code, ERROR_NOT_FOUND | ERROR_FILE_NOT_FOUND)
+}
+
+fn cleanup_result(errors: &mut Vec<String>, resource: &str, code: u32) {
+    if code != 0 && !absent(code) {
+        errors.push(format!(
+            "{resource}: {}",
+            std::io::Error::from_raw_os_error(code as i32)
+        ));
+    }
+}
+
+impl Tap {
+    pub(crate) fn cleanup(&mut self) -> Result<()> {
+        self.read.cancel();
+        self.write.cancel();
+        self.pending_write = None;
+        let mut errors = Vec::new();
+        for route in self.routes.drain(..).rev() {
+            let mut current = route;
+            let code = unsafe { GetIpForwardEntry2(&mut current) };
+            if code == 0 {
+                if current.Metric == route.Metric && current.Protocol == route.Protocol {
+                    cleanup_result(&mut errors, "Delete route", unsafe {
+                        DeleteIpForwardEntry2(&current)
+                    });
+                } else {
+                    errors.push("TAP route changed outside OpenRad; preserved".into());
+                }
+            } else {
+                cleanup_result(&mut errors, "Inspect route", code);
+            }
+        }
+        for route in self.restored_routes.drain(..).rev() {
+            let mut current = route;
+            let code = unsafe { GetIpForwardEntry2(&mut current) };
+            if code == 0 && current.Metric == 5 {
+                current.Metric = route.Metric;
+                cleanup_result(&mut errors, "Restore route metric", unsafe {
+                    SetIpForwardEntry2(&current)
+                });
+            } else {
+                cleanup_result(&mut errors, "Inspect route metric", code);
+            }
+        }
+        if let Some(address) = self.address.take() {
+            let mut current = address;
+            let code = unsafe { GetUnicastIpAddressEntry(&mut current) };
+            if code == 0 {
+                if current.OnLinkPrefixLength == address.OnLinkPrefixLength
+                    && current.PrefixOrigin == address.PrefixOrigin
+                    && current.SuffixOrigin == address.SuffixOrigin
+                {
+                    cleanup_result(&mut errors, "Delete address", unsafe {
+                        DeleteUnicastIpAddressEntry(&current)
+                    });
+                } else {
+                    errors.push("TAP address changed outside OpenRad; preserved".into());
+                }
+            } else {
+                cleanup_result(&mut errors, "Inspect address", code);
+            }
+        }
+        if let Some(original) = self.original_interface.take() {
+            let mut current = original;
+            let code = unsafe { GetIpInterfaceEntry(&mut current) };
+            if code == 0 {
+                let metric_unchanged = current.Metric == 5 && !current.UseAutomaticMetric;
+                let mtu_unchanged = current.NlMtu == 1500;
+                if metric_unchanged {
+                    current.Metric = original.Metric;
+                    current.UseAutomaticMetric = original.UseAutomaticMetric;
+                }
+                if mtu_unchanged {
+                    current.NlMtu = original.NlMtu;
+                }
+                if metric_unchanged || mtu_unchanged {
+                    current.SitePrefixLength = 0;
+                    cleanup_result(&mut errors, "Restore interface configuration", unsafe {
+                        SetIpInterfaceEntry(&mut current)
+                    });
+                }
+            } else {
+                cleanup_result(&mut errors, "Inspect interface configuration", code);
+            }
+        }
+        if std::mem::take(&mut self.media_attempted) {
+            if let Err(error) = self.media(false) {
+                errors.push(format!("Disconnect TAP media: {error:#}"));
+            }
+        }
+        ensure!(
+            errors.is_empty(),
+            "TAP cleanup incomplete: {}",
+            errors.join("; ")
         );
         Ok(())
     }
 }
 impl Drop for Tap {
     fn drop(&mut self) {
-        self.read.cancel();
-        self.write.cancel();
-        // ActiveStore entries disappear at reboot; clean up exactly the rows
-        // we created on disconnect and on every partial-setup failure.
-        for route in self.routes.iter().rev() {
-            unsafe {
-                DeleteIpForwardEntry2(route);
-            }
+        if let Err(error) = self.cleanup() {
+            early_log::fatal_error(&error);
         }
-        for route in self.restored_routes.iter().rev() {
-            unsafe {
-                SetIpForwardEntry2(route);
-            }
-        }
-        if let Some(address) = &self.address {
-            unsafe {
-                DeleteUnicastIpAddressEntry(address);
-            }
-        }
-        if let Some(mut interface) = self.original_interface.take() {
-            interface.SitePrefixLength = 0;
-            unsafe {
-                SetIpInterfaceEntry(&mut interface);
-            }
-        }
-        let _ = self.media(false);
     }
 }
 pub fn helper(_: Ipv4Addr, _: u32, _: &[Ipv4Addr]) -> Result<()> {

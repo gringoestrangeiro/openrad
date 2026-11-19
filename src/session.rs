@@ -1113,15 +1113,45 @@ impl Session {
         stop: Option<Arc<AtomicBool>>,
         progress: &mut dyn FnMut(ProvisionProgress),
     ) -> Result<Identity> {
+        Self::provision_controlled_at_port(
+            modulus,
+            name,
+            host,
+            crate::control_port(),
+            reports,
+            commit,
+            stop,
+            progress,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn provision_controlled_at_port(
+        modulus: &[u8],
+        name: &str,
+        host: &str,
+        port: u16,
+        reports: &ReportDirectory,
+        commit: &mut dyn FnMut() -> Result<()>,
+        stop: Option<Arc<AtomicBool>>,
+        progress: &mut dyn FnMut(ProvisionProgress),
+    ) -> Result<Identity> {
         let started = Instant::now();
-        let result =
-            Self::provision_inner(modulus, name, host, reports, commit, stop, &mut |update| {
+        let result = Self::provision_inner(
+            modulus,
+            name,
+            host,
+            port,
+            reports,
+            commit,
+            stop,
+            &mut |update| {
                 crate::early_log::event(format_args!(
                     "Identity provisioning; elapsed_ms={}; stage={update:?}",
                     started.elapsed().as_millis()
                 ));
                 progress(update);
-            });
+            },
+        );
         if let Err(error) = &result {
             crate::early_log::event(format_args!(
                 "Identity provisioning failed; elapsed_ms={}; error={error:#}",
@@ -1130,10 +1160,12 @@ impl Session {
         }
         result
     }
+    #[allow(clippy::too_many_arguments)]
     fn provision_inner(
         modulus: &[u8],
         name: &str,
         host: &str,
+        port: u16,
         reports: &ReportDirectory,
         commit: &mut dyn FnMut() -> Result<()>,
         stop: Option<Arc<AtomicBool>>,
@@ -1154,8 +1186,9 @@ impl Session {
                 &stop,
                 progress,
                 |duration| {
-                    Self::authenticate_with_stop(
+                    Self::authenticate_at_port(
                         &bootstrap.server_address,
+                        port,
                         &bootstrap,
                         modulus,
                         3,
@@ -1198,9 +1231,31 @@ impl Session {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
+        Self::authenticate_at_port(
+            host,
+            crate::control_port(),
+            identity,
+            modulus,
+            purpose,
+            _reports,
+            duration,
+            stop,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn authenticate_at_port(
+        host: &str,
+        port: u16,
+        identity: &Identity,
+        modulus: &[u8],
+        purpose: u32,
+        _reports: &ReportDirectory,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> Result<Self> {
+        ensure!(port != 0, "Invalid control port");
         let (rsa, secret) = rsa_session(modulus, purpose)?;
-        let mut stream =
-            Framed::connect_with_stop(host, crate::config::control_port(), duration, stop)?;
+        let mut stream = Framed::connect_with_stop(host, port, duration, stop)?;
         stream.send(&[3, 0, 0, 0])?;
         stream.send(&rsa)?;
         ensure!(stream.receive(4)? == [3, 0, 0, 0], "RSession echo mismatch");
@@ -1257,8 +1312,26 @@ impl Session {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<(Self, Membership, std::net::Ipv4Addr)> {
-        let mut s = Self::authenticate_with_stop(
+        Self::attach_at_port(
+            identity,
+            modulus,
+            crate::control_port(),
+            reports,
+            duration,
+            stop,
+        )
+    }
+    pub fn attach_at_port(
+        identity: &Identity,
+        modulus: &[u8],
+        port: u16,
+        reports: &ReportDirectory,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> Result<(Self, Membership, std::net::Ipv4Addr)> {
+        let mut s = Self::authenticate_at_port(
             &identity.server_address,
+            port,
             identity,
             modulus,
             4,

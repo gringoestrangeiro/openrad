@@ -221,8 +221,7 @@ impl DataDir {
             Some(server) => self.path.join("servers").join(server.slot()),
         }
     }
-    /// Resolve the active server and point this process's control sessions
-    /// at its port. Call before provisioning or starting the service.
+    /// Resolve one immutable endpoint for registration and session startup.
     pub fn use_server(&self) -> Result<ServerEndpoint> {
         let endpoint = match self.server() {
             None => ServerEndpoint {
@@ -241,7 +240,6 @@ impl DataDir {
                 }
             }
         };
-        crate::set_control_port(endpoint.port);
         Ok(endpoint)
     }
     /// Switch to a custom server, or back to the official one with None.
@@ -474,6 +472,15 @@ impl DataDir {
 }
 
 /// Atomic private writes also preserve the previous identity on storage errors.
+/// Support preview deliberately excludes identifiers and credentials.
+pub fn support_bundle(dir: &DataDir) -> Result<Value> {
+    let status = request_with_timeout(dir, &Request::Status, Duration::from_secs(3)).ok();
+    crate::diagnostics::support_bundle(
+        &dir.path.join("diagnostics"),
+        status.as_ref().map(|reply| &reply.data),
+    )
+}
+
 fn atomic_save(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     crate::file_io::atomic_write(path, bytes)
 }
@@ -1443,10 +1450,13 @@ impl Shared {
                 error,
                 catalog,
             } => {
-                let waiter = self.lock_state().pending.remove(&id);
+                let (waiter, generation) = {
+                    let mut state = self.lock_state();
+                    (state.pending.remove(&id), state.session_generation)
+                };
                 if let Some(waiter) = waiter {
                     let data = catalog
-                        .map(|(networks, cursor)| json!({"networks":networks,"cursor":cursor}))
+                        .map(|(networks, cursor)| json!({"networks":networks,"cursor":cursor,"session_generation":generation}))
                         .unwrap_or(Value::Null);
                     let _ = waiter.send(Reply {
                         ok: !error,
@@ -1946,7 +1956,7 @@ impl Shared {
 fn supervisor(
     shared: Arc<Shared>,
     identity: Identity,
-    modulus: Vec<u8>,
+    endpoint: ServerEndpoint,
     dir: DataDir,
     disable_interface: bool,
 ) {
@@ -1968,6 +1978,7 @@ fn supervisor(
             (state.broadcast_policy.clone(), state.block_policy.clone())
         };
         let options = runtime::Options {
+            control_port: Some(endpoint.port),
             helper: std::env::current_exe().ok(),
             interface_name: Some(preferences.interface_name.clone()),
             disable_interface,
@@ -1986,7 +1997,7 @@ fn supervisor(
         let outcome = runtime::contain_panic(|| {
             runtime::run(
                 identity.clone(),
-                modulus.clone(),
+                endpoint.modulus.clone(),
                 options,
                 rx,
                 session_stop,
@@ -1997,6 +2008,9 @@ fn supervisor(
         #[cfg(unix)]
         crate::resource_limits::release_free_memory();
         if shared.shutdown.load(Ordering::Relaxed) {
+            if let Err(error) = &outcome {
+                early_log::fatal_error(error);
+            }
             break;
         }
         let identity_replaced = outcome
@@ -2119,7 +2133,7 @@ pub fn run_with(dir: DataDir, disable_interface: bool, await_interface: bool) ->
     early_log::checkpoint(Stage::ServiceProfileLoading);
     let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
-    let modulus = dir.use_server()?.modulus;
+    let endpoint = dir.use_server()?;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let preferences = dir.preferences()?;
@@ -2146,8 +2160,9 @@ pub fn run_with(dir: DataDir, disable_interface: bool, await_interface: bool) ->
     let on_signal = shared.clone();
     ctrlc::set_handler(move || on_signal.stop())?;
     let worker_shared = shared.clone();
-    let worker =
-        thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
+    let worker = thread::spawn(move || {
+        supervisor(worker_shared, identity, endpoint, dir, disable_interface)
+    });
     let mut control_workers = Vec::new();
     while !shared.shutdown.load(Ordering::Relaxed) {
         // The supervisor only returns after shutdown is requested. If it ended
@@ -2221,7 +2236,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     early_log::checkpoint(Stage::ServiceProfileLoading);
     let profile_lock = dir.profile_lock()?;
     let identity = dir.load_identity()?;
-    let modulus = dir.use_server()?.modulus;
+    let endpoint = dir.use_server()?;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
     let preferences = dir.preferences()?;
@@ -2237,8 +2252,9 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
         .preferences = preferences;
     let shared = Arc::new(shared);
     let worker_shared = shared.clone();
-    let worker =
-        thread::spawn(move || supervisor(worker_shared, identity, modulus, dir, disable_interface));
+    let worker = thread::spawn(move || {
+        supervisor(worker_shared, identity, endpoint, dir, disable_interface)
+    });
     let mut control_workers = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.shutdown.load(Ordering::Relaxed) {
@@ -3070,11 +3086,10 @@ mod tests {
         assert_eq!(Identity::load(&official).unwrap().rid, 1);
         let endpoint = directory.use_server().unwrap();
         assert_eq!(
-            (endpoint.host.as_str(), endpoint.port, crate::control_port()),
-            ("192.0.2.10", 18301, 18301)
+            (endpoint.host.as_str(), endpoint.port),
+            ("192.0.2.10", 18301)
         );
         assert_eq!(endpoint.modulus, crate::SERVER_MODULUS);
-        crate::set_control_port(0);
         fs::create_dir(directory.identity_root().join("profile")).unwrap();
         directory.save_identity(&identity(2)).unwrap();
 
@@ -3088,7 +3103,6 @@ mod tests {
         );
         directory.set_server(Some((server.clone(), None))).unwrap();
         assert_eq!(directory.load_identity().unwrap().rid, 2);
-        crate::set_control_port(0);
 
         // Another frontend's switch is seen when the profile lock is taken.
         let other = DataDir::open(Some(path.clone())).unwrap();

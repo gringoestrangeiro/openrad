@@ -4808,5 +4808,130 @@
     "A interface TAP do OpenRad não possui o endereço IPv4 e o prefixo /8 da sessão ativa",
     "У интерфейса TAP OpenRad отсутствуют IPv4-адрес и префикс /8 активного сеанса",
     "Giao diện TAP OpenRad thiếu địa chỉ IPv4 và tiền tố /8 của phiên đang hoạt động"
+  ],
+  "Network preference writer stopped": [
+    "O gravador de preferências de rede parou",
+    "Запись сетевых настроек остановлена",
+    "Trình ghi tùy chọn mạng đã dừng"
+  ],
+  "Network preferences saved": [
+    "Preferências de rede salvas",
+    "Сетевые настройки сохранены",
+    "Đã lưu tùy chọn mạng"
+  ],
+  "Membership exceeds the supported roster budget": [
+    "A lista de membros excede os limites suportados",
+    "Список участников превышает допустимые пределы",
+    "Danh sách thành viên vượt quá giới hạn hỗ trợ"
+  ],
+  "TAP write already pending": [
+    "Já existe uma escrita pendente no TAP",
+    "Запись в TAP уже ожидает завершения",
+    "Đã có thao tác ghi TAP đang chờ"
+  ],
+  "TAP write timed out": [
+    "Tempo limite de escrita no TAP excedido",
+    "Истекло время ожидания записи в TAP",
+    "Hết thời gian chờ ghi TAP"
+  ],
+  "Delete route": [
+    "Excluir rota",
+    "Удалить маршрут",
+    "Xóa tuyến"
+  ],
+  "TAP route changed outside OpenRad; preserved": [
+    "Rota TAP alterada fora do OpenRad; preservada",
+    "Маршрут TAP изменён вне OpenRad; сохранён",
+    "Tuyến TAP thay đổi bên ngoài OpenRad; đã giữ lại"
+  ],
+  "Inspect route": [
+    "Inspecionar rota",
+    "Проверить маршрут",
+    "Kiểm tra tuyến"
+  ],
+  "Restore route metric": [
+    "Restaurar métrica da rota",
+    "Восстановить метрику маршрута",
+    "Khôi phục metric của tuyến"
+  ],
+  "Inspect route metric": [
+    "Inspecionar métrica da rota",
+    "Проверить метрику маршрута",
+    "Kiểm tra metric của tuyến"
+  ],
+  "Delete address": [
+    "Excluir endereço",
+    "Удалить адрес",
+    "Xóa địa chỉ"
+  ],
+  "TAP address changed outside OpenRad; preserved": [
+    "Endereço TAP alterado fora do OpenRad; preservado",
+    "Адрес TAP изменён вне OpenRad; сохранён",
+    "Địa chỉ TAP thay đổi bên ngoài OpenRad; đã giữ lại"
+  ],
+  "Inspect address": [
+    "Inspecionar endereço",
+    "Проверить адрес",
+    "Kiểm tra địa chỉ"
+  ],
+  "Restore interface configuration": [
+    "Restaurar configuração da interface",
+    "Восстановить конфигурацию интерфейса",
+    "Khôi phục cấu hình giao diện"
+  ],
+  "Inspect interface configuration": [
+    "Inspecionar configuração da interface",
+    "Проверить конфигурацию интерфейса",
+    "Kiểm tra cấu hình giao diện"
+  ],
+  "Disconnect TAP media: {error}": [
+    "Desconectar mídia TAP: {error}",
+    "Отключение TAP: {error}",
+    "Ngắt kết nối TAP: {error}"
+  ],
+  "TAP cleanup incomplete: {0}": [
+    "Limpeza do TAP incompleta: {0}",
+    "Очистка TAP не завершена: {0}",
+    "Dọn dẹp TAP chưa hoàn tất: {0}"
+  ],
+  "OpenRad diagnostics writer panicked": [
+    "Falha interna no gravador de diagnósticos do OpenRad",
+    "Внутренняя ошибка записи диагностики OpenRad",
+    "Lỗi nội bộ trình ghi chẩn đoán OpenRad"
+  ],
+  "OpenRad diagnostics shutdown deadline exceeded; pending events may be lost": [
+    "Tempo limite de encerramento dos diagnósticos do OpenRad excedido; eventos pendentes podem ser perdidos",
+    "Истёк срок завершения диагностики OpenRad; ожидающие события могут быть потеряны",
+    "Hết thời gian đóng chẩn đoán OpenRad; các sự kiện đang chờ có thể bị mất"
+  ],
+  "Invalid control port": [
+    "Porta de controle inválida",
+    "Недопустимый порт управления",
+    "Cổng điều khiển không hợp lệ"
+  ],
+  "Diagnostic bundle ready": [
+    "Pacote de diagnóstico pronto",
+    "Пакет диагностики готов",
+    "Gói chẩn đoán đã sẵn sàng"
+  ],
+  "Preview diagnostic bundle": [
+    "Visualizar pacote de diagnóstico",
+    "Предпросмотр пакета диагностики",
+    "Xem trước gói chẩn đoán"
+  ],
+  "Diagnostic bundle preview": [
+    "Prévia do pacote de diagnóstico",
+    "Предпросмотр пакета диагностики",
+    "Bản xem trước gói chẩn đoán"
+  ],
+  "Only selected counters and event types are included. Review before sharing.": [
+    "Apenas contadores e tipos de eventos selecionados são incluídos. Revise antes de compartilhar.",
+    "Включены только выбранные счётчики и типы событий. Проверьте перед отправкой.",
+    "Chỉ bao gồm các bộ đếm và loại sự kiện đã chọn. Hãy xem lại trước khi chia sẻ."
+  ],
+  "Close": [
+    "Fechar",
+    "Закрыть",
+    "Đóng"
   ]
 }

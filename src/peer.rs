@@ -307,9 +307,32 @@ impl PeerChannel {
         duration: Duration,
         stop: Option<Arc<AtomicBool>>,
     ) -> Result<Self> {
+        Self::connect_at_port(
+            identity,
+            modulus,
+            crate::control_port(),
+            own_ip,
+            peer,
+            reports,
+            duration,
+            stop,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn connect_at_port(
+        identity: &Identity,
+        modulus: &[u8],
+        port: u16,
+        own_ip: Ipv4Addr,
+        peer: Peer,
+        reports: &ReportDirectory,
+        duration: Duration,
+        stop: Option<Arc<AtomicBool>>,
+    ) -> Result<Self> {
         Self::connect_observed(
             identity,
             modulus,
+            port,
             own_ip,
             peer,
             reports,
@@ -323,6 +346,7 @@ impl PeerChannel {
     pub(crate) fn connect_observed(
         identity: &Identity,
         modulus: &[u8],
+        port: u16,
         own_ip: Ipv4Addr,
         peer: Peer,
         reports: &ReportDirectory,
@@ -335,6 +359,7 @@ impl PeerChannel {
         let result = Self::connect_inner(
             identity,
             modulus,
+            port,
             own_ip,
             peer,
             reports,
@@ -351,6 +376,7 @@ impl PeerChannel {
     fn connect_inner(
         identity: &Identity,
         modulus: &[u8],
+        port: u16,
         own_ip: Ipv4Addr,
         peer: Peer,
         reports: &ReportDirectory,
@@ -364,8 +390,9 @@ impl PeerChannel {
             .server
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("peer has no authenticated server"))?;
-        let mut coord = Session::authenticate_with_stop(
+        let mut coord = Session::authenticate_at_port(
             host,
+            port,
             identity,
             modulus,
             5,

@@ -4,13 +4,56 @@
 //! Task Scheduler's interactive, highest-available token; no password is stored.
 use crate::storage::{Paths, Settings};
 use anyhow::{bail, ensure, Context, Result};
-use std::{
-    ffi::OsString,
-    os::windows::{ffi::OsStringExt, process::CommandExt},
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{os::windows::process::CommandExt, path::Path, process::Command};
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+const VERIFY_INSTALL: &str = r#"
+function Test-ProtectedOpenRadPath([string] $path, [bool] $volumeRoot) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'Automatic elevated startup cannot use a redirected installation path.'
+    }
+    $acl = Get-Acl -LiteralPath $item.FullName -ErrorAction Stop
+    $trustedSids = @(
+        'S-1-5-18',
+        'S-1-5-32-544',
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    )
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -notin $trustedSids) {
+        throw 'Automatic elevated startup requires an administrator-owned installation.'
+    }
+    # The volume root commonly permits creating unrelated directories. Its
+    # child-deletion and ACL rights still must not let a user replace Program Files.
+    $dangerous = if ($volumeRoot) { 0x10040 } else { 0x10156 }
+    $dangerous = $dangerous -bor 0xC0000 -bor 0x50000000
+    $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
+    foreach ($rule in $rules) {
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+        if ($rule.IdentityReference.Value -notin $trustedSids -and
+            ([int64]$rule.FileSystemRights -band $dangerous) -ne 0) {
+            throw 'Automatic elevated startup requires an installation that is not writable by ordinary users.'
+        }
+    }
+}
+function Assert-ProtectedOpenRadInstall([string] $exe) {
+    $full = [IO.Path]::GetFullPath($exe)
+    $root = [IO.Path]::GetPathRoot($full)
+    $directory = [IO.Path]::GetDirectoryName($full)
+    $current = $directory
+    while ($current -and $current.TrimEnd('\') -ne $root.TrimEnd('\')) {
+        Test-ProtectedOpenRadPath $current $false
+        $current = [IO.Path]::GetDirectoryName($current)
+    }
+    Test-ProtectedOpenRadPath $root $true
+    Test-ProtectedOpenRadPath $full $false
+    Test-ProtectedOpenRadPath (Join-Path $directory 'openrad.exe') $false
+    foreach ($dll in @(Get-ChildItem -LiteralPath $directory -File -Filter '*.dll' -Force)) {
+        Test-ProtectedOpenRadPath $dll.FullName $false
+    }
+}
+"#;
 
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -64,6 +107,7 @@ if (-not $trusted) {
 if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $exe -Parent) 'openrad.exe') -PathType Leaf)) {
     throw 'The OpenRad CLI is missing next to the desktop executable.'
 }
+Assert-ProtectedOpenRadInstall $exe
 $arguments = '--background --data-dir "' + $dataDir + '"'
 $action = New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory ([IO.Path]::GetDirectoryName($exe))
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user.Name
@@ -134,31 +178,9 @@ pub fn install_supported() -> bool {
         })
 }
 
-fn system_powershell() -> Result<PathBuf> {
-    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-    let mut buffer = [0u16; 32768];
-    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
-    ensure!(
-        length > 0 && (length as usize) < buffer.len(),
-        "Could not locate the Windows system directory"
-    );
-    let system_dir = PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
-    let powershell = system_dir.join("WindowsPowerShell\\v1.0\\powershell.exe");
-    ensure!(powershell.is_file(), "Windows PowerShell is unavailable");
-    Ok(powershell)
-}
-
 pub(crate) fn powershell_command(script: &str) -> Result<Command> {
-    let mut command = Command::new(system_powershell()?);
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ])
-        .creation_flags(CREATE_NO_WINDOW);
+    let mut command = openrad::windows_security::powershell_command(script)?;
+    command.creation_flags(CREATE_NO_WINDOW);
     Ok(command)
 }
 
@@ -207,7 +229,8 @@ pub fn set_start_with_windows(paths: &Paths, enabled: bool) -> Result<()> {
 
     // No user input is interpolated into the PowerShell source. Inputs are
     // supplied only to this subprocess's environment.
-    let output = powershell_command(SCRIPT)?
+    let script = format!("{VERIFY_INSTALL}\n{SCRIPT}");
+    let output = powershell_command(&script)?
         .env("OPENRAD_STARTUP_TASK", task_name(&paths.directory))
         .env("OPENRAD_STARTUP_EXEC", &exe)
         .env("OPENRAD_STARTUP_DIR", &paths.directory)
@@ -250,6 +273,37 @@ Add-Type -Namespace OpenRadDiagnostics -Name ConsoleWindow -MemberDefinition '[D
             String::from_utf8_lossy(&output.stdout).trim(),
             "0",
             "the helper must not create or inherit a console window"
+        );
+    }
+
+    #[test]
+    fn startup_acl_check_rejects_an_ordinary_user_owned_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "openrad-startup-acl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let script =
+            format!("{VERIFY_INSTALL}\n$acl = Get-Acl -LiteralPath $env:OPENRAD_TEST_PATH; $sid = [Security.Principal.SecurityIdentifier]::new('S-1-1-0'); $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid, 'Write', 'Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $env:OPENRAD_TEST_PATH -AclObject $acl; Test-ProtectedOpenRadPath $env:OPENRAD_TEST_PATH $false");
+        let output = powershell_command(&script)
+            .unwrap()
+            .env("OPENRAD_TEST_PATH", &directory)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(
+            !output.status.success(),
+            "ordinary user-writable paths must not be eligible"
+        );
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("administrator-owned installation")
+                || error.contains("not writable by ordinary users"),
+            "{error}"
         );
     }
 

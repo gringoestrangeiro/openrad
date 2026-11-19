@@ -20,7 +20,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fs::File,
     path::PathBuf,
-    sync::Arc,
+    sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
 
@@ -756,6 +756,26 @@ impl AutoJoinListCache {
     }
 }
 
+struct PreferenceSave {
+    preferences: NetworkPreferences,
+    result: mpsc::Receiver<anyhow::Result<()>>,
+}
+impl PreferenceSave {
+    fn start(paths: Paths, preferences: NetworkPreferences) -> anyhow::Result<Self> {
+        let (sender, result) = mpsc::sync_channel(1);
+        let snapshot = preferences.clone();
+        std::thread::Builder::new()
+            .name("openrad-network-preferences".into())
+            .spawn(move || {
+                let _ = sender.send(paths.save_network_preferences(&snapshot));
+            })?;
+        Ok(Self {
+            preferences,
+            result,
+        })
+    }
+}
+
 pub struct App {
     first_frame: bool,
     welcome_started: Instant,
@@ -801,12 +821,16 @@ pub struct App {
     cursor: u64,
     has_searched: bool,
     busy: bool,
-    search_in_flight: Option<String>,
+    search_in_flight: Option<(u64, String)>,
+    next_search_id: u64,
+    catalog_generation: Option<u64>,
     search_due: Option<Instant>,
     pings: BTreeMap<u64, PingState>,
     next_ping_id: u64,
     release: Option<openrad::releases::Release>,
     release_details_open: bool,
+    diagnostic_preview: Option<String>,
+    diagnostic_loading: bool,
     dismissed_releases: BTreeSet<String>,
     toast: Option<(String, bool, Instant)>,
     activity: VecDeque<Activity>,
@@ -823,6 +847,7 @@ pub struct App {
     rates: (f32, f32),
     focus_search: bool,
     closing: bool,
+    shutdown_requested: bool,
     stopped: bool,
     confirm_reset: bool,
     #[cfg(windows)]
@@ -832,6 +857,8 @@ pub struct App {
     member_confirmation: Option<MemberConfirmation>,
     delete_confirmation: Option<DeleteConfirmation>,
     network_preferences: NetworkPreferences,
+    saved_network_preferences: NetworkPreferences,
+    pending_preference_save: Option<PreferenceSave>,
     network_preferences_error: Option<String>,
     join_draft: Vec<JoinNetwork>,
     join_passwords: BTreeMap<String, zeroize::Zeroizing<String>>,
@@ -922,11 +949,15 @@ impl App {
             has_searched: false,
             busy: false,
             search_in_flight: None,
+            next_search_id: 0,
+            catalog_generation: None,
             search_due: None,
             pings: BTreeMap::new(),
             next_ping_id: 0,
             release: None,
             release_details_open: false,
+            diagnostic_preview: None,
+            diagnostic_loading: false,
             dismissed_releases: BTreeSet::new(),
             toast: None,
             activity: VecDeque::new(),
@@ -949,8 +980,11 @@ impl App {
             rates: (0., 0.),
             focus_search: false,
             closing: false,
+            shutdown_requested: false,
             stopped: false,
+            saved_network_preferences: network_preferences.clone(),
             network_preferences,
+            pending_preference_save: None,
             network_preferences_error,
             join_draft: Vec::new(),
             join_passwords: BTreeMap::new(),
@@ -982,6 +1016,14 @@ impl App {
             self.activity.truncate(40);
         }
     }
+    fn invalidate_catalog(&mut self) {
+        self.catalog.clear();
+        self.catalog_query.clear();
+        self.cursor = 0;
+        self.has_searched = false;
+        self.search_in_flight = None;
+        self.search_due = None;
+    }
     fn consume(&mut self, ctx: &egui::Context) {
         // Notices::try_iter already returns an owned, drained iterator.
         // Avoid allocating another Vec for every UI refresh.
@@ -991,7 +1033,7 @@ impl App {
                     self.busy = false;
                     if phase != Phase::Connected {
                         self.interrupt_join();
-                        self.search_in_flight = None;
+                        self.invalidate_catalog();
                         self.pings.clear();
                     }
                     if phase != Phase::Connected {
@@ -1031,6 +1073,9 @@ impl App {
                     self.identity = None;
                 }
                 Notice::Server(server) => {
+                    if self.server != server {
+                        self.invalidate_catalog();
+                    }
                     if let Some(server) = &server {
                         self.server_host = server.host.to_string();
                         self.server_port = server.port.to_string();
@@ -1101,10 +1146,30 @@ impl App {
                         self.release = Some(release);
                     }
                 }
-                Notice::SearchFailed { query, message } => {
-                    if self.search_in_flight.as_ref() == Some(&query) {
-                        self.search_in_flight = None;
+                Notice::DiagnosticBundle(result) => {
+                    self.diagnostic_loading = false;
+                    match result {
+                        Ok(preview) => self.diagnostic_preview = Some(preview),
+                        Err(error) => self.toast = Some((error, true, Instant::now())),
                     }
+                }
+                Notice::CatalogGeneration(generation) => {
+                    if generation != self.catalog_generation {
+                        self.catalog_generation = generation;
+                        self.invalidate_catalog();
+                    }
+                }
+                Notice::SearchFailed { id, query, message } => {
+                    if !self
+                        .search_in_flight
+                        .as_ref()
+                        .is_some_and(|(expected, pending)| {
+                            Some(*expected) == id && *pending == query
+                        })
+                    {
+                        continue;
+                    }
+                    self.search_in_flight = None;
                     if query == self.query.trim() {
                         self.search_due = None;
                         self.log(message.clone());
@@ -1193,14 +1258,28 @@ impl App {
                     }
                     self.snapshot.replace(state);
                 }
-                Notice::Engine(Update::Catalog {
+                Notice::Engine(Update::Catalog { .. }) => continue,
+                Notice::CatalogResult {
+                    id,
+                    generation,
                     query,
                     networks,
                     cursor,
                     append,
-                }) => {
-                    if self.search_in_flight.as_ref() == Some(&query) {
-                        self.search_in_flight = None;
+                } => {
+                    if !self
+                        .search_in_flight
+                        .as_ref()
+                        .is_some_and(|(expected, pending)| {
+                            Some(*expected) == id && *pending == query
+                        })
+                    {
+                        continue;
+                    }
+                    self.search_in_flight = None;
+                    if generation != self.catalog_generation {
+                        self.invalidate_catalog();
+                        continue;
                     }
                     if query != self.query.trim() {
                         continue;
@@ -1233,6 +1312,7 @@ impl App {
                 Notice::Stopped => self.stopped = true,
                 Notice::CloseBlocked(message) => {
                     self.closing = false;
+                    self.shutdown_requested = false;
                     self.phase = Phase::Error;
                     self.message = message.clone();
                     self.toast = Some((message, true, Instant::now()));
@@ -1327,9 +1407,53 @@ impl App {
         if let Some(error) = &self.network_preferences_error {
             anyhow::bail!("{error}");
         }
-        self.paths.save_network_preferences(&preferences)?;
+        preferences.validate()?;
+        if self.pending_preference_save.is_none() {
+            self.pending_preference_save = Some(PreferenceSave::start(
+                self.paths.clone(),
+                preferences.clone(),
+            )?);
+        }
         self.network_preferences = preferences;
         Ok(())
+    }
+    fn poll_preference_save(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_preference_save.take() else {
+            return;
+        };
+        let result = match pending.result.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => {
+                self.pending_preference_save = Some(pending);
+                ctx.request_repaint_after(Duration::from_millis(30));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(anyhow::anyhow!("Network preference writer stopped"))
+            }
+        };
+        if let Err(error) = result {
+            self.network_preferences = self.saved_network_preferences.clone();
+            self.closing = false;
+            self.notify_error(error);
+            return;
+        }
+        self.saved_network_preferences = pending.preferences;
+        if self.network_preferences != self.saved_network_preferences {
+            match PreferenceSave::start(self.paths.clone(), self.network_preferences.clone()) {
+                Ok(next) => {
+                    self.pending_preference_save = Some(next);
+                    ctx.request_repaint_after(Duration::from_millis(30));
+                }
+                Err(error) => {
+                    self.network_preferences = self.saved_network_preferences.clone();
+                    self.closing = false;
+                    self.notify_error(error);
+                }
+            }
+        } else {
+            self.toast = Some(("Network preferences saved".into(), false, Instant::now()));
+        }
     }
     fn favorite_button(&mut self, ui: &mut egui::Ui, name: &str, private: bool) {
         let favorite = self.network_preferences.favorites.contains(name);
@@ -1436,7 +1560,6 @@ impl App {
         self.persist_network_preferences(next)?;
         self.join_config_to_load = name.clone();
         self.join_config_name = name;
-        self.toast = Some(("Join configuration saved".into(), false, Instant::now()));
         Ok(())
     }
     fn load_join_configuration(&mut self) {
@@ -1570,9 +1693,16 @@ impl App {
             self.busy = true;
         }
         if let Command::Search { query, .. } = &command {
-            self.search_in_flight = Some(query.clone());
+            self.next_search_id = self.next_search_id.wrapping_add(1);
+            let id = self.next_search_id;
+            self.search_in_flight = Some((id, query.clone()));
             self.search_due = None;
             self.has_searched = true;
+            self.backend.send(Action::Engine(Command::Tagged {
+                id,
+                command: Box::new(command),
+            }));
+            return;
         }
         self.backend.send(Action::Engine(command));
     }
@@ -3504,6 +3634,12 @@ impl App {
                 {
                     ui.ctx().copy_text(self.diagnostic_summary());
                 }
+                if ui.add_enabled(!self.diagnostic_loading, egui::Button::new(language.text("Preview diagnostic bundle"))).clicked() {
+                    self.diagnostic_loading = true;
+                    self.backend.send(Action::DiagnosticBundle);
+                }
+                if self.diagnostic_loading { spinner(ui); }
+
             }
         });
         ui.add_space(16.);
@@ -3870,16 +4006,24 @@ impl eframe::App for App {
             crate::startup_log::checkpoint(crate::startup_log::Stage::FirstLogic);
         }
         self.consume(ctx);
+        self.poll_preference_save(ctx);
         if ctx.input(|i| i.viewport().close_requested()) && !self.stopped {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if !self.closing {
                 crate::startup_log::checkpoint(crate::startup_log::Stage::CloseRequested);
                 self.closing = true;
-                self.phase = Phase::Disconnecting;
-                self.backend.send(Action::Shutdown);
             }
         }
-        if self.closing && self.stopped {
+        if self.closing
+            && self.pending_preference_save.is_none()
+            && !self.shutdown_requested
+            && !self.stopped
+        {
+            self.shutdown_requested = true;
+            self.phase = Phase::Disconnecting;
+            self.backend.send(Action::Shutdown);
+        }
+        if self.closing && self.stopped && self.pending_preference_save.is_none() {
             crate::startup_log::checkpoint(crate::startup_log::Stage::BackendStopped);
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -4150,6 +4294,36 @@ impl App {
                 });
             });
         }
+        if let Some(preview) = self.diagnostic_preview.as_ref() {
+            let mut dismiss = false;
+            egui::Modal::new(egui::Id::new("diagnostic-preview")).show(&ctx, |ui| {
+                ui.heading(language.text("Diagnostic bundle preview"));
+                ui.label(language.text(
+                    "Only selected counters and event types are included. Review before sharing.",
+                ));
+                egui::ScrollArea::vertical()
+                    .max_height(320.)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut preview.as_str())
+                                .desired_width(480.)
+                                .font(egui::TextStyle::Monospace)
+                                .interactive(false),
+                        );
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button(language.text("Copy")).clicked() {
+                        ctx.copy_text(preview.clone());
+                    }
+                    if ui.button(language.text("Close")).clicked() {
+                        dismiss = true;
+                    }
+                });
+            });
+            if dismiss {
+                self.diagnostic_preview = None;
+            }
+        }
         if self.closing {
             egui::Modal::new(egui::Id::new("closing")).show(&ctx, |ui| {
                 ui.heading(language.text("Closing OpenRad"));
@@ -4160,7 +4334,11 @@ impl App {
             });
         }
         self.advance_join(&ctx, Instant::now());
-        ctx.request_repaint_after(Duration::from_secs(1));
+        ctx.request_repaint_after(if self.pending_preference_save.is_some() {
+            Duration::from_millis(30)
+        } else {
+            Duration::from_secs(1)
+        });
     }
 }
 
@@ -4736,8 +4914,20 @@ mod tests {
             self.app.as_mut().unwrap()
         }
     }
+    fn settle_preference_saves(app: &mut App) {
+        let ctx = egui::Context::default();
+        let until = Instant::now() + Duration::from_secs(5);
+        while app.pending_preference_save.is_some() {
+            assert!(Instant::now() < until);
+            app.poll_preference_save(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     impl Drop for Fixture {
         fn drop(&mut self) {
+            if let Some(app) = self.app.as_mut() {
+                settle_preference_saves(app);
+            }
             drop(self.app.take());
             std::fs::remove_dir_all(&self.directory).unwrap();
         }
@@ -5362,6 +5552,7 @@ mod tests {
             .favorites
             .insert("Private LAN".into());
         app.save_join_configuration().unwrap();
+        settle_preference_saves(app);
         app.join_passwords.insert(
             "Private LAN".into(),
             zeroize::Zeroizing::new("synthetic password".into()),
@@ -6491,6 +6682,7 @@ mod tests {
             configure(&ctx);
             ctx.enable_accesskit();
             click_button(&ctx, app, language.text("Add favorite"));
+            settle_preference_saves(app);
             assert!(app
                 .paths
                 .network_preferences()
@@ -6498,6 +6690,7 @@ mod tests {
                 .favorites
                 .contains("Synthetic LAN"));
             click_button(&ctx, app, language.text("Remove favorite"));
+            settle_preference_saves(app);
             assert!(app
                 .paths
                 .network_preferences()
@@ -6514,6 +6707,7 @@ mod tests {
             );
             app.join_config_name = "Friends".into();
             click_button(&ctx, app, language.text("Save configuration"));
+            settle_preference_saves(app);
             assert!(app
                 .paths
                 .network_preferences()
@@ -6546,6 +6740,80 @@ mod tests {
     }
 
     #[test]
+    fn catalog_rejects_old_ids_and_session_generations_with_identical_queries() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        let ctx = egui::Context::default();
+        app.phase = Phase::Connected;
+        app.query = "LAN".into();
+        app.backend
+            .notices
+            .send(Notice::CatalogGeneration(Some(10)));
+        app.consume(&ctx);
+        app.command(Command::Search {
+            query: "LAN".into(),
+            cursor: 0,
+        });
+        app.backend
+            .notices
+            .send(Notice::CatalogGeneration(Some(11)));
+        app.consume(&ctx);
+        app.command(Command::Search {
+            query: "LAN".into(),
+            cursor: 0,
+        });
+        let result = |id, generation| Notice::CatalogResult {
+            id: Some(id),
+            generation: Some(generation),
+            query: "LAN".into(),
+            networks: vec![PublicNetwork {
+                name: "LAN".into(),
+                reported_count: 1,
+            }],
+            cursor: 5,
+            append: false,
+        };
+        app.backend.notices.send(result(1, 10));
+        app.consume(&ctx);
+        assert!(app.catalog.is_empty());
+        assert_eq!(app.search_in_flight.as_ref().map(|(id, _)| *id), Some(2));
+        app.backend.notices.send(result(2, 11));
+        app.consume(&ctx);
+        assert_eq!(app.catalog.len(), 1);
+        app.backend
+            .notices
+            .send(Notice::CatalogGeneration(Some(12)));
+        app.consume(&ctx);
+        assert!(app.catalog.is_empty());
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
+    fn preference_writer_serializes_latest_revision_and_reports_failure() {
+        let mut fixture = Fixture::new();
+        let app = fixture.app();
+        for name in ["First LAN", "Second LAN"] {
+            let mut next = app.network_preferences.clone();
+            next.favorites.insert(name.into());
+            app.persist_network_preferences(next).unwrap();
+        }
+        settle_preference_saves(app);
+        assert_eq!(
+            app.paths.network_preferences().unwrap().favorites,
+            app.network_preferences.favorites
+        );
+        let target = app.paths.directory.join("network-preferences.json");
+        std::fs::remove_file(&target).unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let mut next = app.network_preferences.clone();
+        next.favorites.insert("Failed LAN".into());
+        app.persist_network_preferences(next).unwrap();
+        settle_preference_saves(app);
+        assert!(!app.network_preferences.favorites.contains("Failed LAN"));
+        assert!(app.toast.as_ref().is_some_and(|(_, error, _)| *error));
+    }
+
+    #[test]
     fn live_search_debounces_typing_and_discards_stale_results() {
         let mut fixture = Fixture::new();
         let app = fixture.app();
@@ -6575,7 +6843,7 @@ mod tests {
         app.search_due = Some(Instant::now() - Duration::from_millis(1));
         frame(&ctx, app, vec![]);
         assert!(
-            matches!(actions.try_recv().unwrap(), Action::Engine(Command::Search { query, cursor: 0 }) if query == "mine")
+            matches!(actions.try_recv().unwrap(), Action::Engine(Command::Tagged { id: 1, command }) if matches!(&*command, Command::Search { query, cursor: 0 } if query == "mine"))
         );
         frame(&ctx, app, vec![egui::Event::Text("craft".into())]);
         assert_eq!(app.query, "minecraft");
@@ -6583,7 +6851,9 @@ mod tests {
             actions.try_recv().is_err(),
             "the input remains editable during the previous search"
         );
-        app.backend.notices.send(Notice::Engine(Update::Catalog {
+        app.backend.notices.send(Notice::CatalogResult {
+            id: Some(1),
+            generation: None,
             query: "mine".into(),
             networks: vec![PublicNetwork {
                 name: "stale result".into(),
@@ -6591,7 +6861,7 @@ mod tests {
             }],
             cursor: 2,
             append: false,
-        }));
+        });
         app.consume(&ctx);
         assert!(
             app.catalog.is_empty(),
@@ -6600,9 +6870,11 @@ mod tests {
         app.search_due = Some(Instant::now() - Duration::from_millis(1));
         frame(&ctx, app, vec![]);
         assert!(
-            matches!(actions.try_recv().unwrap(), Action::Engine(Command::Search { query, cursor: 0 }) if query == "minecraft")
+            matches!(actions.try_recv().unwrap(), Action::Engine(Command::Tagged { id: 2, command }) if matches!(&*command, Command::Search { query, cursor: 0 } if query == "minecraft"))
         );
-        app.backend.notices.send(Notice::Engine(Update::Catalog {
+        app.backend.notices.send(Notice::CatalogResult {
+            id: Some(2),
+            generation: None,
             query: "minecraft".into(),
             networks: vec![PublicNetwork {
                 name: "Minecraft friends".into(),
@@ -6610,7 +6882,7 @@ mod tests {
             }],
             cursor: 0,
             append: false,
-        }));
+        });
         app.consume(&ctx);
         assert_eq!(app.catalog[0].name, "Minecraft friends");
         assert!(!labels(&frame(&ctx, app, vec![]))
@@ -7827,7 +8099,7 @@ mod tests {
             }),
             ("search", |app| {
                 app.page = Page::Discover;
-                app.search_in_flight = Some(String::new());
+                app.search_in_flight = Some((1, String::new()));
                 app.has_searched = true;
             }),
             ("auto join", |app| {
@@ -7888,7 +8160,7 @@ mod tests {
             configure(&ctx);
             timed_frames(&ctx, app, 30);
             app.search_due = Some(Instant::now() - Duration::from_millis(1));
-            app.search_in_flight = in_flight.then(String::new);
+            app.search_in_flight = in_flight.then(|| (1, String::new()));
             let output = timed_frames(&ctx, app, 30);
             assert!(app.search_due.is_some(), "the search stays due");
             if in_flight {

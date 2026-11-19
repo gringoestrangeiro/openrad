@@ -367,6 +367,7 @@ impl BlockPolicy {
 
 #[derive(Clone, Default)]
 pub struct Options {
+    pub control_port: Option<u16>,
     /// None permits normal application traffic to all authenticated members.
     /// Some is useful for controlled interoperability testing only.
     pub traffic_peers: Option<BTreeSet<u64>>,
@@ -966,6 +967,7 @@ fn control_loop(
                     }
                     PendingKind::Network(network) => {
                         let progress = network.handle(&data, &mut membership)?;
+                        membership.validate_budget()?;
                         if let Some(bytes) = progress.send {
                             session.send(&bytes)?;
                         }
@@ -1431,6 +1433,7 @@ impl PeerEvents {
 fn peer_loop(
     identity: Identity,
     modulus: Arc<Vec<u8>>,
+    port: u16,
     vip: Ipv4Addr,
     peer: Peer,
     stop: Arc<AtomicBool>,
@@ -1471,6 +1474,7 @@ fn peer_loop(
                 PeerChannel::connect_observed(
                     &identity,
                     &modulus,
+                    port,
                     vip,
                     peer,
                     &ReportDirectory::disabled(),
@@ -1788,6 +1792,23 @@ fn refresh_membership(
     Ok(eligible)
 }
 
+fn close_interface(mut tap: Option<Tap>, diagnostics: &Diagnostics) -> Result<()> {
+    #[cfg(windows)]
+    if let Some(device) = tap.as_mut() {
+        if let Err(error) = device.cleanup() {
+            diagnostics.event(
+                "interface_cleanup_failed",
+                json!({"error": format!("{error:#}")}),
+            );
+            return Err(error);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (&mut tap, diagnostics);
+    drop(tap);
+    Ok(())
+}
+
 pub fn run(
     identity: Identity,
     modulus: Vec<u8>,
@@ -1798,9 +1819,11 @@ pub fn run(
 ) -> Result<()> {
     let diagnostics = options.diagnostics.new_session();
     diagnostics.event("session_start", json!({"server": identity.server_address}));
-    let attached = Session::attach_with_stop(
+    let port = options.control_port.unwrap_or(crate::DEFAULT_CONTROL_PORT);
+    let attached = Session::attach_at_port(
         &identity,
         &modulus,
+        port,
         &ReportDirectory::disabled(),
         Duration::from_secs(45),
         Some(stop.clone()),
@@ -1824,7 +1847,7 @@ pub fn run(
         force_relay: options.force_relay,
         ..Default::default()
     };
-    let (tx, rx) = mpsc::sync_channel(512);
+    let (tx, rx) = mpsc::sync_channel(32);
     let wake = Arc::new(Wake::new()?);
     let (packet_tx, packets) = mpsc::sync_channel::<(u64, u64, tunnel::OwnedFrame)>(512);
     let traffic = Arc::new(TrafficCounters::default());
@@ -2184,24 +2207,74 @@ pub fn run(
                     worker.block_in.store(blocked, Ordering::Relaxed);
                 }
             }
-            for (rid, attempt, frame) in packets.try_iter().take(512) {
-                // Bytes were validated by their channel owner. Recheck the live
-                // generation/allowlist before I/O: queued frames from a retired
-                // channel must never acquire a replacement channel's authority.
+            let drain_started = Instant::now();
+            let mut packet_work_remaining = false;
+            let mut write_failure = None;
+            #[cfg(windows)]
+            if let Some(device) = tap.as_mut() {
+                match device.poll_send() {
+                    Ok(Some(length)) => {
+                        snapshot.traffic.received_bytes += length as u64;
+                        snapshot.traffic.received_frames += 1;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        snapshot.traffic.dropped += 1;
+                        write_failure = Some(error);
+                    }
+                }
+            }
+            for index in 0..512 {
+                if stop.load(Ordering::Relaxed) || write_failure.is_some() {
+                    break;
+                }
+                if drain_started.elapsed() >= Duration::from_millis(5) {
+                    packet_work_remaining = true;
+                    break;
+                }
+                #[cfg(windows)]
+                if tap.as_ref().is_some_and(Tap::write_pending) {
+                    break;
+                }
+                let Ok((rid, attempt, frame)) = packets.try_recv() else {
+                    break;
+                };
+                packet_work_remaining = index == 511;
                 let valid = forwarding_table.accepts_packet(rid, attempt);
-                if let Some(tap) = tap.as_mut().filter(|_| valid) {
-                    match tap.send(&frame) {
-                        Ok(()) => {
-                            snapshot.traffic.received_bytes += frame.len() as u64;
+                if let Some(device) = tap.as_mut().filter(|_| valid) {
+                    #[cfg(windows)]
+                    let result = device.start_send(&frame).and_then(|()| device.poll_send());
+                    #[cfg(not(windows))]
+                    let result = device.send(&frame).map(|()| Some(frame.len()));
+                    match result {
+                        Ok(Some(length)) => {
+                            snapshot.traffic.received_bytes += length as u64;
                             snapshot.traffic.received_frames += 1;
                         }
-                        Err(_) => {
+                        Ok(None) => {}
+                        Err(error) => {
                             snapshot.traffic.dropped += 1;
+                            if !error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                                matches!(
+                                    e.kind(),
+                                    std::io::ErrorKind::WouldBlock
+                                        | std::io::ErrorKind::Interrupted
+                                )
+                            }) {
+                                write_failure = Some(error);
+                            }
                         }
                     }
                 } else {
                     snapshot.traffic.dropped += 1;
                 }
+            }
+            if let Some(error) = write_failure {
+                diagnostics.event("interface_failed", json!({"error": format!("{error:#}")}));
+                snapshot.interface_ready = false;
+                snapshot.interface_error = Some(format!("{error:#}"));
+                close_interface(tap.take(), &diagnostics)?;
+                next_report = Instant::now();
             }
             if schedule_dirty || Instant::now() >= next_schedule {
                 schedule_dirty = false;
@@ -2263,6 +2336,9 @@ pub fn run(
                     )
                 });
                 for rid in queued.iter().copied() {
+                    if workers.len() + retired.len() >= MAX_ROSTER_PEERS {
+                        break;
+                    }
                     let is_incoming = pending.contains(&rid);
                     let is_retry = !is_incoming && retries.contains_key(&rid);
                     if is_retry && !retry_pacer.ready(now, retrying, retry_policy) {
@@ -2321,6 +2397,7 @@ pub fn run(
                                 peer_loop(
                                     id,
                                     key,
+                                    port,
                                     vip,
                                     peer,
                                     cancel,
@@ -2389,7 +2466,7 @@ pub fn run(
             if !attempted_interface && !options.disable_interface && interface_worker.is_none() {
                 // Keep the /8 interface stable across membership changes. Dynamic
                 // peer selection below governs forwarding without resetting sockets.
-                drop(tap.take());
+                close_interface(tap.take(), &diagnostics)?;
                 snapshot.interface_ready = false;
                 snapshot.interface_error = None;
                 report(Update::State(snapshot.clone()));
@@ -2506,7 +2583,7 @@ pub fn run(
                     diagnostics.event("interface_failed", json!({"error": format!("{error:#}")}));
                     snapshot.interface_ready = false;
                     snapshot.interface_error = Some(format!("{error:#}"));
-                    drop(tap.take());
+                    close_interface(tap.take(), &diagnostics)?;
                 }
             }
             retired.retain(|handle| !handle.is_finished());
@@ -2554,13 +2631,19 @@ pub fn run(
                 report(Update::State(snapshot.clone()));
                 next_report = Instant::now() + SNAPSHOT_REPORT_INTERVAL;
             }
-            let wait = if command_received {
+            let wait = if command_received || packet_work_remaining {
                 Duration::ZERO
             } else {
                 next_report
                     .min(next_schedule)
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_millis(50))
+            };
+            #[cfg(windows)]
+            let wait = if tap.as_ref().is_some_and(Tap::write_pending) {
+                wait.min(Duration::from_millis(5))
+            } else {
+                wait
             };
             wake.wait(tap.as_ref().and_then(Tap::poll_fd), wait)?;
         }
@@ -2573,11 +2656,11 @@ pub fn run(
         "handshakes": workers.values().filter(|w| w.mac.is_none()).count(),
         "eligible": eligible.len(), "traffic": snapshot.traffic,
     }));
-    drop(tap);
     stop.store(true, Ordering::Relaxed);
     for worker in workers.values() {
         worker.cancel();
     }
+    let cleanup = close_interface(tap, &diagnostics);
     drop(forwarder);
     drop(rx); // Unblock producers before joining, including full event queues.
     drop(control_tx);
@@ -2591,7 +2674,7 @@ pub fn run(
     for worker in retired {
         let _ = worker.join();
     }
-    result
+    result.and(cleanup)
 }
 
 #[cfg(test)]

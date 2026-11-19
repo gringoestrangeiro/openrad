@@ -48,7 +48,7 @@ pub fn system_directory() -> io::Result<PathBuf> {
 
 /// PowerShell cmdlets must also come from protected system modules, not a
 /// caller-supplied PSModulePath or modules in the current user's directory.
-pub(crate) fn powershell_command(script: &str) -> io::Result<Command> {
+pub fn powershell_command(script: &str) -> io::Result<Command> {
     use base64::Engine;
     let directory = system_directory()?;
     let powershell = directory.join("WindowsPowerShell/v1.0");

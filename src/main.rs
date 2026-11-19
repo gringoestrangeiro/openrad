@@ -77,6 +77,8 @@ enum Command {
     },
     /// Show connection, interface, network, and peer summary.
     Status,
+    /// Show a privacy-filtered support bundle as JSON.
+    Diagnostics,
     /// Stop the VPN service and remove its TAP interface.
     Stop,
     /// Show or change the Linux TAP interface name (persisted across restarts).
@@ -215,6 +217,7 @@ impl Command {
             Self::Server { .. } => "server",
             Self::Start { .. } => "start",
             Self::Status => "status",
+            Self::Diagnostics => "diagnostics",
             Self::Stop => "stop",
             #[cfg(target_os = "linux")]
             Self::InterfaceName { .. } => "interface_name",
@@ -332,15 +335,18 @@ fn initialize(
             return Ok(id);
         }
         let endpoint = endpoint.context("Missing registration endpoint")?;
-        Session::provision_with_commit(
+        Session::provision_controlled_at_port(
             modulus.as_deref().unwrap_or(&endpoint.modulus),
             name.as_deref().context("--node-name is required")?,
             host.as_deref().unwrap_or(&endpoint.host),
+            endpoint.port,
             &reports,
             &mut || {
                 committed = true;
                 Ok(())
             },
+            None,
+            &mut |_| {},
         )
     })();
     let identity = match result {
@@ -512,6 +518,11 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 }
             }
         }
+        Command::Diagnostics => daemon::Reply {
+            ok: true,
+            message: "Diagnostic bundle ready".into(),
+            data: daemon::support_bundle(&dir)?,
+        },
         Command::Status => match daemon::request(&dir, &Request::Status) {
             Ok(reply) => reply,
             Err(_) if !dir.endpoint_exists() => daemon::Reply {
@@ -825,6 +836,8 @@ fn print_reply(reply: &daemon::Reply, machine: bool, language: Language) -> Resu
         println!("{}", serde_json::to_string(reply)?);
     } else if !reply.ok {
         eprintln!("openrad: {}", language.message(&reply.message));
+    } else if reply.data["format"] == "openrad-support-v1" {
+        println!("{}", serde_json::to_string_pretty(&reply.data)?);
     } else {
         println!("{}", human_reply(reply, language));
     }

@@ -67,7 +67,18 @@ pub enum Notice {
     CloseBlocked(String),
     ReplacementPending(bool),
     Release(openrad::releases::Release),
+    DiagnosticBundle(Result<String, String>),
+    CatalogGeneration(Option<u64>),
+    CatalogResult {
+        id: Option<u64>,
+        generation: Option<u64>,
+        query: String,
+        networks: Vec<openrad::protocol::PublicNetwork>,
+        cursor: u64,
+        append: bool,
+    },
     SearchFailed {
+        id: Option<u64>,
         query: String,
         message: String,
     },
@@ -93,6 +104,7 @@ pub enum Action {
     StealthBlock(openrad::daemon::BlockChange),
     Import(PathBuf),
     Engine(runtime::Command),
+    DiagnosticBundle,
     Shutdown,
 }
 /// A custom server entered in Settings. The modulus file may be omitted when
@@ -413,6 +425,7 @@ fn manager(
     #[cfg(unix)]
     let mut next_trim = Instant::now() + MEMORY_TRIM_INTERVAL;
     let mut last_phase = None;
+    let mut catalog_generation = None;
     let mut last_identity: Option<(u64, String)> = None;
     let mut reset_failed = false;
     loop {
@@ -452,10 +465,11 @@ fn manager(
                     let vault = paths.entry(&dir)?;
                     let endpoint = dir.use_server()?;
                     identity = Some(storage::provision_once(&vault, |commit| {
-                        Session::provision_controlled(
+                        Session::provision_controlled_at_port(
                             &endpoint.modulus,
                             &settings.node_name,
                             &endpoint.host,
+                            endpoint.port,
                             &ReportDirectory::disabled(),
                             commit,
                             Some(cancel.connection.clone()),
@@ -521,6 +535,11 @@ fn manager(
             match service_status(&dir) {
                 Ok(mut reply) => {
                     service_running = true;
+                    let generation = reply.data["session_generation"].as_u64();
+                    if generation != catalog_generation {
+                        catalog_generation = generation;
+                        report(Notice::CatalogGeneration(generation));
+                    }
                     let name = reply.data["node_name"]
                         .as_str()
                         .unwrap_or_default()
@@ -577,6 +596,8 @@ fn manager(
                 }
                 Err(_) if service_running => {
                     service_running = false;
+                    catalog_generation = None;
+                    report(Notice::CatalogGeneration(None));
                     last_phase = None;
                     report(Notice::Phase(
                         Phase::Disconnected,
@@ -708,10 +729,11 @@ fn manager(
                     let endpoint = dir.use_server()?;
                     replacement.prepare(|| {
                         let mut sent = false;
-                        Session::provision_controlled(
+                        Session::provision_controlled_at_port(
                             &endpoint.modulus,
                             &settings.node_name,
                             &endpoint.host,
+                            endpoint.port,
                             &ReportDirectory::disabled(),
                             &mut || {
                                 // An explicit server redirect may register a second endpoint
@@ -1042,6 +1064,15 @@ fn manager(
                 })();
                 operation(result);
             }
+            Ok(Action::DiagnosticBundle) => {
+                let (dir, publish) = (dir.clone(), report.clone());
+                thread::spawn(move || {
+                    let result = daemon::support_bundle(&dir)
+                        .and_then(|bundle| Ok(serde_json::to_string_pretty(&bundle)?))
+                        .map_err(|error| format!("{error:#}"));
+                    publish(Notice::DiagnosticBundle(result));
+                });
+            }
             Ok(Action::Engine(command)) => {
                 let (client_id, command) = match command {
                     runtime::Command::Tagged { id, command } => (Some(id), *command),
@@ -1082,17 +1113,19 @@ fn manager(
                                     "networks",
                                 ))?,
                                 reply.data["cursor"].as_u64().unwrap_or(0),
+                                reply.data["session_generation"].as_u64(),
                             ))
                         }) {
-                            Ok((networks, next)) => {
-                                publish(Notice::Engine(runtime::Update::Catalog {
-                                    query,
-                                    networks,
-                                    cursor: next,
-                                    append: cursor != 0,
-                                }))
-                            }
+                            Ok((networks, next, generation)) => publish(Notice::CatalogResult {
+                                id: client_id,
+                                generation,
+                                query,
+                                networks,
+                                cursor: next,
+                                append: cursor != 0,
+                            }),
                             Err(error) => publish(Notice::SearchFailed {
+                                id: client_id,
                                 query,
                                 message: error.to_string(),
                             }),
@@ -2346,9 +2379,9 @@ mod tests {
         }))
         .unwrap();
         loop {
-            if let Notice::Engine(runtime::Update::Catalog {
+            if let Notice::CatalogResult {
                 query, networks, ..
-            }) = notices.recv_timeout(Duration::from_secs(3)).unwrap()
+            } = notices.recv_timeout(Duration::from_secs(3)).unwrap()
             {
                 assert_eq!(query, "friends");
                 assert_eq!(networks[0].name, "Friends");

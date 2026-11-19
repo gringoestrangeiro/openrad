@@ -696,7 +696,40 @@ fn event_member(fields: &[Record<'_>]) -> Result<u64> {
     ensure!(ids.next().is_none(), "too many member event identifiers");
     Ok(member)
 }
+pub const MAX_ROSTER_PEERS: usize = 1024;
+pub const MAX_ROSTER_NETWORKS: usize = 256;
+const MAX_ROSTER_LINKS: usize = 16384;
+const MAX_ROSTER_TEXT_BYTES: usize = 1024 * 1024;
+
 impl Membership {
+    pub(crate) fn validate_budget(&self) -> Result<()> {
+        let links = self.roles.values().map(BTreeMap::len).sum::<usize>()
+            + self
+                .peers
+                .values()
+                .map(|peer| peer.network_ids.len())
+                .sum::<usize>();
+        let strings = self
+            .networks
+            .values()
+            .map(|network| network.name.len())
+            .sum::<usize>()
+            + self
+                .peers
+                .values()
+                .map(|peer| peer.name.len() + peer.server.as_ref().map_or(0, String::len))
+                .sum::<usize>();
+        ensure!(
+            self.peers.len() <= MAX_ROSTER_PEERS
+                && self.networks.len() <= MAX_ROSTER_NETWORKS
+                && self.roles.len() <= MAX_ROSTER_NETWORKS
+                && links <= MAX_ROSTER_LINKS
+                && strings <= MAX_ROSTER_TEXT_BYTES,
+            "Membership exceeds the supported roster budget"
+        );
+        Ok(())
+    }
+
     pub fn remove_network(&mut self, id: &str) {
         self.networks.remove(id);
         self.roles.remove(id);
@@ -789,6 +822,13 @@ impl Membership {
         Ok(())
     }
     pub fn snapshot(&mut self, data: &[u8]) -> Result<()> {
+        let mut next = self.clone();
+        next.apply_snapshot(data)?;
+        next.validate_budget()?;
+        *self = next;
+        Ok(())
+    }
+    fn apply_snapshot(&mut self, data: &[u8]) -> Result<()> {
         let r = records(data)?;
         let Some(root) = optional(&r, 0x1316)? else {
             return Ok(());
@@ -812,6 +852,13 @@ impl Membership {
         Ok(())
     }
     pub fn changes(&mut self, data: &[u8]) -> Result<()> {
+        let mut next = self.clone();
+        next.apply_changes(data)?;
+        next.validate_budget()?;
+        *self = next;
+        Ok(())
+    }
+    fn apply_changes(&mut self, data: &[u8]) -> Result<()> {
         let r = records(data)?;
         let Some(root) = optional(&r, 0x131f)? else {
             return Ok(());
@@ -1005,6 +1052,31 @@ mod tests {
     }
     fn snapshot_of(entries: Vec<Vec<u8>>) -> Vec<u8> {
         [u32v(SERVER_OP, 38), tlv(0x1316, &entries.concat())].concat()
+    }
+
+    #[test]
+    fn roster_budget_rejects_accumulated_overflow_without_publishing_partial_state() {
+        let mut membership = Membership::default();
+        membership
+            .snapshot(&snapshot_of(
+                (1..=MAX_ROSTER_PEERS as u64)
+                    .map(|rid| full_peer(rid, "LAN peer", 1, None))
+                    .collect(),
+            ))
+            .unwrap();
+        assert_eq!(membership.peers.len(), MAX_ROSTER_PEERS);
+        assert!(membership
+            .snapshot(&snapshot_of(vec![full_peer(
+                MAX_ROSTER_PEERS as u64 + 1,
+                "Overflow",
+                1,
+                None
+            )]))
+            .is_err());
+        assert_eq!(membership.peers.len(), MAX_ROSTER_PEERS);
+        assert!(!membership
+            .peers
+            .contains_key(&(MAX_ROSTER_PEERS as u64 + 1)));
     }
 
     #[test]

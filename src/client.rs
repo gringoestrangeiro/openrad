@@ -44,6 +44,7 @@ pub struct AttachedClient {
 struct WorkerContext {
     identity: Identity,
     modulus: Vec<u8>,
+    port: u16,
     vip: Ipv4Addr,
     until: Instant,
     stop: Arc<AtomicBool>,
@@ -114,9 +115,10 @@ fn worker(
                 peer_stop.clone(),
             )?
         } else {
-            PeerChannel::connect_with_stop(
+            PeerChannel::connect_at_port(
                 &context.identity,
                 &context.modulus,
+                context.port,
                 context.vip,
                 peer,
                 &reports,
@@ -227,6 +229,7 @@ pub fn run(
     let worker_context = Arc::new(WorkerContext {
         identity: identity.clone(),
         modulus,
+        port: session.stream.socket.peer_addr()?.port(),
         vip,
         until,
         stop: stop.clone(),
