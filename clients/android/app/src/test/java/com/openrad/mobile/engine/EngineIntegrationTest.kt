@@ -33,6 +33,7 @@ class EngineIntegrationTest {
     private val sockets = Collections.synchronizedList(ArrayList<Socket>())
     private var engine: Engine? = null
     @Volatile private var dropRegistrationReply = false
+    @Volatile private var replaceOnSearch = false
 
     @Before
     fun setUp() {
@@ -110,6 +111,10 @@ class EngineIntegrationTest {
             val records = Tlv.parse(cc.decrypt(f.receive(Framed.MAX_WIRE, now() + 60_000)))
             when (Tlv.unique(records, Protocol.CLIENT_OP).u32()) {
                 43L -> {
+                    if (replaceOnSearch) {
+                        send(f, cc, Tlv.u32(Protocol.SERVER_OP, 16) + Tlv.u32(0x010001d2, 1))
+                        return
+                    }
                     val fields = Tlv.parse(Tlv.unique(records, 0x1332).value)
                     val id = Tlv.unique(fields, 0x02000340).u64()
                     val query = Tlv.decodeText(Tlv.unique(fields, 0x03000306))
@@ -237,6 +242,31 @@ class EngineIntegrationTest {
         e.stop()
         assertEquals(EngineState.Phase.STOPPED, e.snapshot().phase)
         assertTrue(events.any { it.startsWith("Online as 26.0.0.9") })
+    }
+
+    @Test
+    fun identityReplacementFailsPendingCommandsAndDoesNotReconnect() {
+        replaceOnSearch = true
+        val store = MemoryIdentityStore()
+        val current = Engine(EngineConfig(host = "127.0.0.1", port = server.localPort,
+            nodeName = "phone", modulus = bnBytes(n), autoReconnect = true,
+            reconnectAttempts = 3, reconnectBaseDelaySeconds = 1), store, object : EngineListener {})
+        engine = current
+        current.start()
+        waitFor { current.snapshot().phase == EngineState.Phase.ONLINE }
+        val session = requireNotNull(current.activeSession)
+        assertEquals(L3Bridge.Result.NO_ROUTE, current.sendIpInSession(session - 1, ByteArray(0), 0))
+        assertEquals(L3Bridge.Result.INVALID, current.sendIpInSession(session, ByteArray(0), 0))
+        val password = "network password".toCharArray()
+        assertTrue(call { current.joinInSession(session - 1, "Secret", password, it) } is CommandResult.Failed)
+        assertTrue(password.all { it == '\u0000' })
+        assertTrue(call { current.searchInSession(session, "Mine", 0, it) } is CommandResult.Failed)
+        waitFor { current.snapshot().phase == EngineState.Phase.ERROR && !current.isRunning }
+        assertEquals(null, current.activeSession)
+        assertTrue(current.snapshot().networks.isEmpty())
+        assertTrue(current.stop())
+        assertEquals(listOf(3, 4), logins.toList())
+        assertEquals(4242L, store.load()!!.rid)
     }
 
     @Test

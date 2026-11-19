@@ -32,6 +32,16 @@ class CodecsTest {
     }
 
     @Test
+    fun identityRejectsOversizedRecordsAndInvalidEndpointOrName() {
+        val identity = Identity(7L, Ip.parse("26.1.2.3"), "phone", ByteArray(16) { 1 }, "synthetic-password".toByteArray(), "192.0.2.1")
+        val valid = Codecs.encodeIdentity(identity)
+        assertThrows(Exception::class.java) { Codecs.decodeIdentity(valid + " ".repeat(65536)) }
+        assertThrows(Exception::class.java) { Codecs.decodeIdentity(valid.replace("192.0.2.1", "invalid-host")) }
+        assertThrows(Exception::class.java) { Codecs.decodeIdentity(valid.replace("phone", "x".repeat(300))) }
+        assertEquals(identity, Codecs.decodeIdentity(valid))
+    }
+
+    @Test
     fun settingsRoundTripAndClampRanges() {
         val s = AppSettings(
             language = "ru", reconnectAttempts = 7, reconnectBaseDelaySeconds = 9, peerSort = PeerSort.ADDRESS,

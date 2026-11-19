@@ -35,8 +35,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.net.DatagramSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
@@ -60,6 +58,7 @@ class OpenRadVpnService : VpnService() {
     private var watcher: Job? = null
     private var tun: ParcelFileDescriptor? = null
     private var tunVip: Int? = null
+    private var tunAttachment: EngineHost.Attachment? = null
     private var reader: Thread? = null
     // One flag per reader generation: re-establishing must never clear the
     // stop request of a reader that is still winding down.
@@ -68,7 +67,8 @@ class OpenRadVpnService : VpnService() {
     // Serializes Disconnect and the rename restart; while a restart is in
     // progress the watcher must not treat its intermediate STOPPED as the end.
     private val lifecycle = Mutex()
-    @Volatile private var restarting = false
+    private val restarting = AtomicBoolean(false)
+    private val disconnecting = AtomicBoolean(false)
     private val protector = object : SocketProtector {
         override fun protect(socket: Socket): Boolean = this@OpenRadVpnService.protect(socket)
         override fun protect(socket: DatagramSocket): Boolean = this@OpenRadVpnService.protect(socket)
@@ -87,8 +87,13 @@ class OpenRadVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_RETRY_INTERFACE -> {
-                synchronized(tunLock) { tunVip = null }
-                EngineHost.state.value.takeIf { it.phase == EngineState.Phase.ONLINE }?.vip?.let { establish(it) }
+                scope.launch {
+                    lifecycle.withLock {
+                        val attachment = EngineHost.attachment(serviceGeneration) ?: return@withLock
+                        val vip = attachment.engine.snapshot().vip ?: return@withLock
+                        if (!disconnecting.get()) establish(vip, attachment, force = true)
+                    }
+                }
                 return START_STICKY
             }
             ACTION_RECONNECT -> {
@@ -105,26 +110,56 @@ class OpenRadVpnService : VpnService() {
     }
 
     private fun connect() {
+        disconnecting.set(false)
         startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
-        EngineHost.start(this, { debugEndpoint(this, engineConfig(PreferencesStore(this).settings())) }, protector)
+        scope.launch {
+            lifecycle.withLock {
+                if (!disconnecting.get()) startSession()
+            }
+        }
+    }
+
+    private fun startSession() {
+        if (!EngineHost.ownsService(serviceGeneration)) return
+        try {
+            EngineHost.start(this, { debugEndpoint(this, engineConfig(PreferencesStore(this).settings())) }, protector, serviceGeneration)
+        } catch (e: Exception) {
+            if (EngineHost.ownsService(serviceGeneration)) {
+                EngineHost.emit(e.message ?: getString(R.string.error_not_connected), true)
+                closeTun()
+                stopSelfCompat()
+            }
+            return
+        }
         if (watcher?.isActive != true) {
             watcher = scope.launch {
                 EngineHost.state
-                    .map { Triple(it.phase, it.vip, it.peers.count { p -> p.link == com.openrad.mobile.engine.LinkState.CONNECTED }) }
+                    .map { state -> TunState(state.phase, state.vip, state.hostGeneration, state.sessionGeneration,
+                        state.peers.count { it.link == com.openrad.mobile.engine.LinkState.CONNECTED }) }
                     .distinctUntilChanged()
-                    .collect { (phase, vip, connected) ->
-                        when (phase) {
+                    .collect { state ->
+                        if (!EngineHost.ownsService(serviceGeneration)) return@collect
+                        val current = EngineHost.state.value
+                        if (current.hostGeneration != state.hostGeneration || current.sessionGeneration != state.sessionGeneration ||
+                            current.phase != state.phase) return@collect
+                        when (state.phase) {
                             EngineState.Phase.ONLINE -> {
-                                if (vip != null && vip != synchronized(tunLock) { tunVip }) establish(vip)
-                                notify(getString(R.string.notification_online, Ip.format(vip ?: 0), connected))
-                            }
-                            EngineState.Phase.STOPPED, EngineState.Phase.ERROR -> {
-                                if (!restarting && EngineHost.engine?.isRunning != true) {
-                                    closeTun()
-                                    stopSelfCompat()
+                                val attachment = EngineHost.attachment(serviceGeneration)
+                                if (attachment != null && !disconnecting.get() && !restarting.get() &&
+                                    attachment.session == state.sessionGeneration && state.vip != null) {
+                                    establish(state.vip, attachment)
+                                    notify(getString(R.string.notification_online, Ip.format(state.vip), state.connected))
                                 }
                             }
-                            else -> notify(getString(R.string.status_connecting))
+                            else -> {
+                                closeTun()
+                                if (state.phase in setOf(EngineState.Phase.STOPPED, EngineState.Phase.ERROR) &&
+                                    !restarting.get() && !disconnecting.get() && EngineHost.engine?.isRunning != true) {
+                                    stopSelfCompat()
+                                } else {
+                                    notify(getString(R.string.status_connecting))
+                                }
+                            }
                         }
                     }
             }
@@ -132,44 +167,55 @@ class OpenRadVpnService : VpnService() {
     }
 
     private fun disconnect() {
+        if (!disconnecting.compareAndSet(false, true)) return
         scope.launch {
             lifecycle.withLock {
-                EngineHost.stop()
                 closeTun()
-                stopSelfCompat()
+                if (!EngineHost.stopForService(serviceGeneration)) {
+                    EngineHost.emit("VPN engine is still shutting down.", true)
+                }
+                if (disconnecting.get() && EngineHost.ownsService(serviceGeneration)) stopSelfCompat()
             }
         }
     }
 
-    /**
-     * Rename: same identity, new engine (like the daemon's Rename). Runs inside
-     * the service so the watcher cannot stop it between the old engine's
-     * STOPPED and the new engine's start.
-     */
     private fun reconnect() {
-        if (EngineHost.engine?.isRunning != true) return
-        restarting = true
+        if (EngineHost.engine?.isRunning != true || !restarting.compareAndSet(false, true)) return
         startForegroundCompat(buildNotification(getString(R.string.status_connecting)))
         scope.launch {
             try {
                 lifecycle.withLock {
-                    EngineHost.stop()
-                    // The new engine starts detached; ONLINE re-establishes the TUN for it.
+                    if (disconnecting.get()) return@withLock
                     closeTun()
-                    connect()
+                    if (!EngineHost.stopForService(serviceGeneration)) {
+                        EngineHost.emit("VPN engine is still shutting down.", true)
+                        stopSelfCompat()
+                        return@withLock
+                    }
+                    if (!disconnecting.get()) startSession()
                 }
             } finally {
-                restarting = false
+                restarting.set(false)
+                if (!disconnecting.get() && EngineHost.ownsService(serviceGeneration)) {
+                    EngineHost.attachment(serviceGeneration)?.let { attachment ->
+                        attachment.engine.snapshot().vip?.let { vip -> establish(vip, attachment) }
+                    }
+                }
             }
         }
     }
 
-    private fun establish(vip: Int) = synchronized(tunLock) {
+    private data class TunState(val phase: EngineState.Phase, val vip: Int?, val hostGeneration: Long,
+                                val sessionGeneration: Long, val connected: Int)
+
+    private fun establish(vip: Int, attachment: EngineHost.Attachment, force: Boolean = false) = synchronized(tunLock) {
+        if (EngineHost.attachment(serviceGeneration) != attachment || disconnecting.get()) return@synchronized
+        if (!force && tunVip == vip && tunAttachment == attachment && tun != null) return@synchronized
+        closeTunLocked()
         if (prepare(this) != null) {
-            EngineHost.setInterface(false, getString(R.string.interface_permission_missing))
+            EngineHost.detachInterface(serviceGeneration, getString(R.string.interface_permission_missing))
             return@synchronized
         }
-        closeTunLocked()
         val pfd = try {
             val lan = PreferencesStore(this).settings().outgoingBroadcasts
             Builder()
@@ -191,33 +237,49 @@ class OpenRadVpnService : VpnService() {
             null
         }
         if (pfd == null) {
-            EngineHost.setInterface(false, getString(R.string.interface_failed))
+            EngineHost.detachInterface(serviceGeneration, getString(R.string.interface_failed))
             return@synchronized
         }
+        val readerFd = try {
+            ParcelFileDescriptor.dup(pfd.fileDescriptor)
+        } catch (e: java.io.IOException) {
+            runCatching { pfd.close() }
+            EngineHost.detachInterface(serviceGeneration, getString(R.string.interface_failed))
+            return@synchronized
+        }
+        val stop = AtomicBoolean(false)
         tun = pfd
         tunVip = vip
-        val output = FileOutputStream(pfd.fileDescriptor)
-        val writeLock = Any()
-        EngineHost.packetSink = { packet ->
-            try {
-                synchronized(writeLock) { output.write(packet) }
-            } catch (_: Exception) {
-                // Interface closing or kernel queue full: drop like a full TAP queue.
+        tunAttachment = attachment
+        readerStop = stop
+        val accepted = EngineHost.attachInterface(serviceGeneration, attachment) { packet ->
+            synchronized(tunLock) write@{
+                if (stop.get() || tun !== pfd || EngineHost.attachment(serviceGeneration) != attachment) return@write
+                try {
+                    Os.write(pfd.fileDescriptor, packet, 0, packet.size)
+                } catch (e: ErrnoException) {
+                    if (e.errno != OsConstants.EAGAIN && e.errno != OsConstants.EINTR) {
+                        closeTunLocked(getString(R.string.interface_failed))
+                    }
+                } catch (_: java.io.IOException) {
+                    closeTunLocked(getString(R.string.interface_failed))
+                }
             }
         }
-        EngineHost.setInterface(true, null)
-        val stop = AtomicBoolean(false)
-        readerStop = stop
-        reader = Thread({ readLoop(pfd, stop) }, "openrad-tun").apply {
+        if (!accepted) {
+            runCatching { readerFd.close() }
+            closeTunLocked()
+            return@synchronized
+        }
+        reader = Thread({ readLoop(pfd, readerFd, attachment, stop) }, "openrad-tun").apply {
             isDaemon = true
             start()
         }
     }
 
-    /** Reads IPv4 packets with poll(2) so closing the interface stops the thread promptly. */
-    private fun readLoop(pfd: ParcelFileDescriptor, stop: AtomicBoolean) {
-        val fd = pfd.fileDescriptor
-        val input = FileInputStream(fd)
+    private fun readLoop(pfd: ParcelFileDescriptor, readerFd: ParcelFileDescriptor,
+                         attachment: EngineHost.Attachment, stop: AtomicBoolean) {
+        val fd = readerFd.fileDescriptor
         val buffer = ByteArray(Tunnel.MTU + 64)
         val poll = StructPollfd().apply {
             this.fd = fd
@@ -237,12 +299,10 @@ class OpenRadVpnService : VpnService() {
                     TunPollAction.WAIT -> continue
                     TunPollAction.READ -> Unit
                 }
-                val n = input.read(buffer)
-                // The TUN is non-blocking: Android's FileInputStream returns 0
-                // for EAGAIN after a spurious wakeup. Only -1 (EOF) is terminal.
-                if (n < 0) break
-                if (n == 0) continue
-                EngineHost.engine?.sendIp(buffer, n)
+                val n = Os.read(fd, buffer, 0, buffer.size)
+                if (n <= 0) break
+                if (stop.get() || EngineHost.attachment(serviceGeneration) != attachment) break
+                attachment.engine.sendIpInSession(attachment.session, buffer, n)
             } catch (e: ErrnoException) {
                 if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR) continue
                 break
@@ -254,16 +314,13 @@ class OpenRadVpnService : VpnService() {
                 break
             }
         }
-        // Release the input wrapper even when shutdown came from an older
-        // reader generation. Its descriptor is owned by this TUN generation.
-        runCatching { input.close() }
+        runCatching { readerFd.close() }
         // A previous generation must never clear a TUN established by a
         // reconnect, rename or manual retry after this reader started.
         synchronized(tunLock) {
             if (!stop.get() && readerStop === stop && tun === pfd) {
                 Log.w(TAG, "TUN reader failed; interface can be retried")
-                closeTunLocked()
-                EngineHost.setInterface(false, getString(R.string.interface_failed))
+                closeTunLocked(getString(R.string.interface_failed))
             }
         }
     }
@@ -275,16 +332,20 @@ class OpenRadVpnService : VpnService() {
         stale?.join(1500)
     }
 
-    private fun closeTunLocked(): Thread? {
+    private fun closeTunLocked(error: String? = null): Thread? {
         readerStop?.set(true)
         readerStop = null
-        EngineHost.packetSink = null
-        EngineHost.setInterface(false, null)
-        runCatching { tun?.close() }
+        EngineHost.detachInterface(serviceGeneration, error)
+        try {
+            tun?.close()
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "TUN close failed: ${e.javaClass.simpleName}")
+        }
         val stale = reader
         reader = null
         tun = null
         tunVip = null
+        tunAttachment = null
         return stale
     }
 
@@ -294,9 +355,9 @@ class OpenRadVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        val stale: Thread? = synchronized(tunLock) { closeTunLocked() }
-        val expected = EngineHost.engine
         val generation = serviceGeneration
+        val expected = EngineHost.retireService(generation)
+        val stale: Thread? = synchronized(tunLock) { closeTunLocked() }
         scope.cancel()
         if (stale != null || expected != null) {
             Thread({

@@ -39,31 +39,51 @@ object EngineHost {
     var engine: Engine? = null
         private set
 
-    /** Writes an inbound IPv4 packet to the TUN; null while no TUN is attached. */
-    @Volatile
-    var packetSink: ((ByteArray) -> Unit)? = null
+    internal data class Attachment(val engine: Engine, val session: Long)
+    private data class Sink(val engineGeneration: Long, val attachment: Attachment, val write: (ByteArray) -> Unit)
 
+    @Volatile private var sink: Sink? = null
+    val packetSink: ((ByteArray) -> Unit)? get() = sink?.write
+
+    private val transitions = Any()
     private var identityStore: IdentityStore? = null
     private var networkPolicy: WifiNetworkPolicy? = null
     private var serviceGeneration = 0L
-    private var stoppingEngine: Engine? = null
+    private var serviceAlive = false
+    private var engineOwner = 0L
     @Volatile private var engineGeneration = 0L
 
     internal fun registerService(): Long = synchronized(this) {
+        clearInterface(null)
+        serviceAlive = true
         ++serviceGeneration
+    }
+
+    internal fun retireService(generation: Long): Engine? = synchronized(this) {
+        if (serviceGeneration != generation) return@synchronized null
+        serviceAlive = false
+        clearInterface(null)
+        engine?.takeIf { engineOwner == generation }
+    }
+
+    internal fun ownsService(generation: Long): Boolean = synchronized(this) {
+        serviceAlive && serviceGeneration == generation
     }
 
     private fun listenerFor(generation: Long) = object : EngineListener {
         override fun onState(state: EngineState) {
-            if (engineGeneration == generation) _state.value = state
+            synchronized(this@EngineHost) {
+                if (engineGeneration == generation) _state.value = state.copy(hostGeneration = generation)
+            }
         }
 
         override fun onEvent(message: String, error: Boolean) {
             if (engineGeneration == generation) _events.tryEmit(Event(message, error))
         }
 
-        override fun onPacket(packet: ByteArray) {
-            if (engineGeneration == generation) packetSink?.invoke(packet)
+        override fun onPacket(packet: ByteArray, session: Long) {
+            val target = sink ?: return
+            if (target.engineGeneration == generation && target.attachment.session == session) target.write(packet)
         }
     }
 
@@ -71,64 +91,70 @@ object EngineHost {
         identityStore ?: EncryptedIdentityStore(context.applicationContext).also { identityStore = it }
     }
 
-    /**
-     * Starts (or reconfigures) the engine. Blocking-free; safe from any thread.
-     * Direct peer paths follow [WifiNetworkPolicy]: network changes are pushed
-     * to the engine, which retires direct channels when Wi-Fi is lost.
-     */
     fun start(context: Context, config: EngineConfig, protector: SocketProtector?): Engine =
         start(context, { config }, protector)
 
-    /**
-     * Reads [readConfig] under the same lock as [updateConfig]: a settings save that
-     * lands between reading preferences and starting the engine is never lost.
-     */
-    fun start(context: Context, readConfig: () -> EngineConfig, protector: SocketProtector?): Engine = synchronized(this) {
-        val config = readConfig()
-        engine?.takeIf { it.isRunning && it !== stoppingEngine }?.let {
-            it.updateConfig(config)
-            return it
+    fun start(context: Context, readConfig: () -> EngineConfig, protector: SocketProtector?,
+              owner: Long = synchronized(this) { serviceGeneration }): Engine = synchronized(transitions) {
+        val existing = synchronized(this) {
+            check(ownsService(owner)) { "VPN service was destroyed" }
+            engine?.takeIf { it.isRunning && engineOwner == owner }?.let {
+                it.updateConfig(readConfig())
+                return it
+            }
+            engine
         }
-        networkPolicy?.stop()
-        val generation = ++engineGeneration
-        val policy = WifiNetworkPolicy(context).also { networkPolicy = it }
-        val e = Engine(config, identityStore(context), listenerFor(generation), protector, policy)
-        engine = e
-        policy.start { if (engineGeneration == generation && engine === e) e.networkChanged() }
-        e.start()
-        e
+        check(existing == null || stopEngine(existing)) { "Previous VPN engine is still shutting down" }
+        synchronized(this) {
+            check(ownsService(owner)) { "VPN service was destroyed" }
+            val config = readConfig()
+            val generation = ++engineGeneration
+            val policy = WifiNetworkPolicy(context).also { networkPolicy = it }
+            val e = Engine(config, identityStore(context), listenerFor(generation), protector, policy)
+            engine = e
+            engineOwner = owner
+            _state.value = EngineState(hostGeneration = generation)
+            policy.start { if (engineGeneration == generation && engine === e) e.networkChanged() }
+            e.start()
+            e
+        }
     }
 
-    /** Stops the engine and waits for its threads; call off the main thread. */
-    fun stop() {
-        val e = synchronized(this) { engine } ?: return
+    fun stop(): Boolean = synchronized(transitions) {
+        val e = synchronized(this) { engine } ?: return@synchronized true
+        stopEngine(e)
+    }
+
+    internal fun stopForService(generation: Long): Boolean = synchronized(transitions) {
+        val e = synchronized(this) { engine.takeIf { ownsService(generation) } } ?: return@synchronized true
         stopEngine(e)
     }
 
     internal fun stopAfterServiceDestroyed(generation: Long, expected: Engine) {
-        synchronized(this) {
-            if (serviceGeneration != generation || engine !== expected) return
-            stoppingEngine = expected
+        synchronized(transitions) {
+            if (synchronized(this) { engine === expected && engineOwner == generation }) stopEngine(expected)
         }
-        stopEngine(expected)
     }
 
-    private fun stopEngine(expected: Engine) {
-        synchronized(this) {
-            if (engine === expected) stoppingEngine = expected
-        }
-        try {
+    private fun stopEngine(expected: Engine): Boolean {
+        synchronized(this) { if (engine === expected) clearInterface(null) }
+        return try {
             expected.stop()
         } finally {
             synchronized(this) {
-                if (stoppingEngine === expected) stoppingEngine = null
                 if (engine === expected) {
                     networkPolicy?.stop()
                     networkPolicy = null
-                    _state.value = expected.snapshot()
+                    _state.value = expected.snapshot().copy(hostGeneration = engineGeneration)
                 }
             }
         }
+    }
+
+    internal fun resetIdentity(context: Context): Boolean = synchronized(transitions) {
+        if (!stop()) return@synchronized false
+        identityStore(context).clear()
+        true
     }
 
     fun updateConfig(config: EngineConfig) = updateConfig { config }
@@ -137,9 +163,37 @@ object EngineHost {
         synchronized(this) { engine?.takeIf { it.isRunning }?.updateConfig(config()) }
     }
 
-    fun setInterface(ready: Boolean, error: String?) {
-        _interface.value = InterfaceStatus(ready, error)
-        engine?.tunAttached = ready
+    internal fun attachment(generation: Long): Attachment? = synchronized(this) {
+        if (!ownsService(generation) || engineOwner != generation) return@synchronized null
+        val e = engine ?: return@synchronized null
+        val session = e.activeSession ?: return@synchronized null
+        Attachment(e, session)
+    }
+
+    internal fun attachInterface(generation: Long, attachment: Attachment, write: (ByteArray) -> Unit): Boolean = synchronized(this) {
+        if (this.attachment(generation) != attachment) return@synchronized false
+        sink = Sink(engineGeneration, attachment, write)
+        attachment.engine.tunAttached = true
+        _interface.value = InterfaceStatus(true)
+        true
+    }
+
+    internal fun detachInterface(generation: Long, error: String? = null) = synchronized(this) {
+        if (serviceGeneration == generation) clearInterface(error)
+    }
+
+    private fun clearInterface(error: String?) {
+        sink = null
+        engine?.tunAttached = false
+        _interface.value = InterfaceStatus(false, error)
+    }
+
+    internal fun setInterface(ready: Boolean, error: String?) = synchronized(this) {
+        if (!ready) clearInterface(error)
+        else {
+            engine?.tunAttached = true
+            _interface.value = InterfaceStatus(true, error)
+        }
     }
 
     fun emit(message: String, error: Boolean = false) {

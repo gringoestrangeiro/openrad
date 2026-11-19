@@ -31,6 +31,7 @@ object Codecs {
         .toString()
 
     fun decodeIdentity(text: String): Identity {
+        require(text.toByteArray(Charsets.UTF_8).size <= 65536) { "identity record too large" }
         val o = JSONObject(text)
         require(o.optString("format", "openrad-identity-v1") == "openrad-identity-v1") { "unsupported identity format" }
         return Identity(

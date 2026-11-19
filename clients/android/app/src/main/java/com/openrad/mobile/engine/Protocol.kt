@@ -103,6 +103,13 @@ object Protocol {
     /** An authenticated server asked the same identity to use another server. */
     class ServerRedirect(val host: String) : Exception("authenticated server redirect")
 
+    class IdentityReplaced : java.io.IOException("The server replaced this connection with another session for the same identity")
+
+    fun checkIdentityReplacement(records: List<Record>) {
+        if (Tlv.unique(records, SERVER_OP).u32() == 16L &&
+            Tlv.optional(records, 0x010001d2L)?.u32() == 1L) throw IdentityReplaced()
+    }
+
     fun checkRedirect(records: List<Record>) {
         if (Tlv.unique(records, SERVER_OP).u32() == 12L) {
             val fields = Tlv.parse(Tlv.unique(records, 0x1238L).value)
@@ -137,6 +144,7 @@ object Protocol {
             ensure(assignment == null) { "assignment already received" }
             val records = Tlv.parse(plain)
             checkRedirect(records)
+            checkIdentityReplacement(records)
             val op = Tlv.unique(records, SERVER_OP).u32()
             if (!loginComplete) {
                 ensure(op == 21L) { "expected LoginComplete, received operation $op" }
@@ -157,6 +165,7 @@ object Protocol {
         fun receive(plain: ByteArray): Identity? {
             val records = Tlv.parse(plain)
             checkRedirect(records)
+            checkIdentityReplacement(records)
             val op = Tlv.unique(records, SERVER_OP).u32()
             if (!loginComplete) {
                 ensure(op == 21L) { "expected LoginComplete, received operation $op" }
@@ -416,7 +425,8 @@ data class Identity(
         ensure(vip != 0 && vip != -1) { "invalid assigned VIP" }
         ensure(address.size == 16 && address.any { it != 0.toByte() }) { "invalid assigned companion address" }
         ensure(credential.size in 6..4096) { "invalid assigned credential length" }
-        ensure(nodeName.isNotEmpty() && serverAddress.isNotEmpty()) { "invalid assigned name or server address" }
+        Protocol.validateNodeName(nodeName)
+        Ip.parse(serverAddress)
     }
 
     override fun toString(): String = "Identity(rid=$rid, vip=${Ip.format(vip)}, nodeName=$nodeName)"
@@ -492,7 +502,7 @@ class Membership(val ownRid: Long) {
             ?: if (networkId != null && server != null) 1L else 0L
         peers[rid] = PeerEntry(
             rid,
-            Tlv.decodeText(Tlv.unique(fields, 0x03000304L)),
+            Tlv.displayText(Tlv.unique(fields, 0x03000304L)),
             Tlv.unique(fields, 0x01000305L).u32().toInt(),
             server,
             state,
@@ -500,15 +510,39 @@ class Membership(val ownRid: Long) {
         )
     }
 
+    private fun transaction(root: Record, apply: Membership.(ByteArray) -> Unit) {
+        val next = copy()
+        next.apply(root.value)
+        next.validateBudget()
+        networks.clear()
+        networks.putAll(next.networks)
+        peers.clear()
+        peers.putAll(next.peers)
+        roles.clear()
+        roles.putAll(next.roles)
+    }
+
+    private fun validateBudget() {
+        val links = roles.values.sumOf { it.size.toLong() } + peers.values.sumOf { it.networkIds.size.toLong() }
+        val text = networks.values.sumOf { it.name.toByteArray(Charsets.UTF_8).size.toLong() } +
+            peers.values.sumOf { it.name.toByteArray(Charsets.UTF_8).size.toLong() + (it.server?.toByteArray(Charsets.UTF_8)?.size ?: 0) }
+        ensure(peers.size <= MAX_PEERS && networks.size <= MAX_NETWORKS && roles.size <= MAX_NETWORKS &&
+            links <= MAX_LINKS && text <= MAX_TEXT_BYTES) { "Membership exceeds the supported roster budget" }
+    }
+
     fun snapshot(data: ByteArray) {
         version++
         val root = Tlv.optional(Tlv.parse(data), 0x1316L) ?: return
-        val entries = Tlv.parse(root.value)
+        transaction(root, Membership::applySnapshot)
+    }
+
+    private fun applySnapshot(data: ByteArray) {
+        val entries = Tlv.parse(data)
         for (rec in entries) {
             if (rec.tag == 0x1315L) {
                 val fields = Tlv.parse(rec.value)
                 val id = Protocol.networkIdHex(Tlv.unique(fields, 0x0d000309L).value)
-                networks[id] = NetworkEntry(Tlv.decodeText(Tlv.unique(fields, 0x03000306L)), id)
+                networks[id] = NetworkEntry(Tlv.displayText(Tlv.unique(fields, 0x03000306L)), id)
                 role(fields, ownRid, id)
             } else if (rec.tag == 0x1317L) {
                 peer(Tlv.parse(rec.value))
@@ -550,7 +584,11 @@ class Membership(val ownRid: Long) {
     fun changes(data: ByteArray) {
         version++
         val root = Tlv.optional(Tlv.parse(data), 0x131fL) ?: return
-        for (rec in Tlv.parse(root.value)) {
+        transaction(root, Membership::applyChanges)
+    }
+
+    private fun applyChanges(data: ByteArray) {
+        for (rec in Tlv.parse(data)) {
             if (rec.tag !in CHANGE_TAGS) continue
             val fields = Tlv.parse(rec.value)
             when (rec.tag) {
@@ -560,7 +598,7 @@ class Membership(val ownRid: Long) {
                     role(fields, rid, id)
                     if (Tlv.optional(fields, 0x01000305L) != null) peer(fields, id)
                 }
-                0x1323L -> snapshot(Tlv.tlv(0x1316L, Tlv.tlv(0x1315L, rec.value)))
+                0x1323L -> applySnapshot(Tlv.tlv(0x1315L, rec.value))
                 0x1318L, 0x131dL -> {
                     val ids = fields.filter { it.tag == 0x020001e1L }.map { it.u64() }
                     ensure(ids.size in 1..2) { "invalid member event identifiers" }
@@ -588,6 +626,10 @@ class Membership(val ownRid: Long) {
     fun eligible(): Map<Long, PeerEntry> = peers.filterKeys { permits(it) }
 
     companion object {
+        const val MAX_PEERS = 1024
+        const val MAX_NETWORKS = 256
+        private const val MAX_LINKS = 16384
+        private const val MAX_TEXT_BYTES = 1024 * 1024
         private val CHANGE_TAGS = setOf(0x131eL, 0x1323L, 0x1318L, 0x131dL, 0x132eL, 0x1366L)
         val ONLINE_STATES = setOf(1L, 5L)
     }

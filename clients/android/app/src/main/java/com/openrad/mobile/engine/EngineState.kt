@@ -3,6 +3,8 @@ package com.openrad.mobile.engine
 /** Immutable engine snapshot published to the UI. Mirrors `runtime.rs::Snapshot`. */
 data class EngineState(
     val phase: Phase = Phase.STOPPED,
+    val sessionGeneration: Long = 0,
+    val hostGeneration: Long = 0,
     val error: String? = null,
     val rid: Long? = null,
     val vip: Int? = null,
@@ -125,6 +127,7 @@ interface EngineListener {
     fun onEvent(message: String, error: Boolean) {}
     /** Validated inbound IPv4 packet for the TUN. */
     fun onPacket(packet: ByteArray) {}
+    fun onPacket(packet: ByteArray, session: Long) = onPacket(packet)
 }
 
 /** Outcome of an asynchronous engine command. */

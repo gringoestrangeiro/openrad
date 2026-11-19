@@ -24,6 +24,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -66,15 +69,19 @@ class EngineRepository(
     private val _batch = MutableStateFlow<BatchProgress?>(null)
     override val batchProgress: StateFlow<BatchProgress?> = _batch.asStateFlow()
 
-    private val catalog = MutableStateFlow<List<Pair<String, Long>>>(emptyList())
-    private val _publicQuery = MutableStateFlow("")
-    override val publicQuery: StateFlow<String> = _publicQuery.asStateFlow()
-    private val _publicBusy = MutableStateFlow(false)
-    override val publicBusy: StateFlow<Boolean> = _publicBusy.asStateFlow()
-    private val _publicHasMore = MutableStateFlow(false)
-    override val publicHasMore: StateFlow<Boolean> = _publicHasMore.asStateFlow()
-    @Volatile private var publicCursor = 0L
-    private val searchGeneration = AtomicLong()
+    private data class SessionStamp(val engine: Engine, val generation: Long)
+
+    private fun session(): SessionStamp? {
+        val engine = EngineHost.engine ?: return null
+        val generation = engine.activeSession ?: return null
+        return SessionStamp(engine, generation).takeIf { EngineHost.engine === engine }
+    }
+
+    private val catalog = PublicCatalog<SessionStamp>()
+    override val publicQuery = catalog.state.map { it.query }.stateIn(scope, SharingStarted.Eagerly, "")
+    override val publicBusy = catalog.state.map { it.busy }.stateIn(scope, SharingStarted.Eagerly, false)
+    override val publicHasMore = catalog.state.map { it.hasMore }.stateIn(scope, SharingStarted.Eagerly, false)
+    private val batchGate = Mutex()
 
     /**
      * The engine cannot cancel a submitted search. The repository keeps the gate until its
@@ -93,14 +100,22 @@ class EngineRepository(
         .map { SnapshotMapper.status(it, EngineHost.engine?.isRunning == true) }
         .stateIn(scope, SharingStarted.Eagerly, ConnectionStatus())
 
-    override val publicResults: StateFlow<List<PublicNetwork>> = combine(catalog, EngineHost.state, _favorites) { list, state, favorites ->
+    override val publicResults: StateFlow<List<PublicNetwork>> = combine(catalog.state, EngineHost.state, _favorites) { catalogState, state, favorites ->
         val joined = state.networks.map { it.name }.toSet()
-        list.map { (name, count) -> PublicNetwork(name, count.toInt(), name in joined, name in favorites) }
+        val visible = catalogState.results.takeIf { catalogState.session == session() } ?: emptyList()
+        visible.map { (name, count) ->
+            PublicNetwork(name, count.coerceIn(0, Int.MAX_VALUE.toLong()).toInt(), name in joined, name in favorites)
+        }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     init {
         scope.launch {
             EngineHost.events.collect { push(it.message, it.error) }
+        }
+        scope.launch {
+            EngineHost.state.map { Triple(it.phase, it.hostGeneration, it.sessionGeneration) }.distinctUntilChanged().collect {
+                catalog.invalidate(session())
+            }
         }
         if (prefs.hasCorruptValues()) push(app.getString(R.string.preferences_repaired), true)
     }
@@ -111,8 +126,11 @@ class EngineRepository(
 
     private fun engine(): Engine? = EngineHost.engine?.takeIf { it.isRunning }
 
-    private suspend fun await(block: (Engine, (CommandResult) -> Unit) -> Unit): CommandResult {
-        val e = engine() ?: return CommandResult.Failed(app.getString(R.string.error_not_connected))
+    private suspend fun await(
+        expected: SessionStamp? = session(),
+        block: (Engine, (CommandResult) -> Unit) -> Unit,
+    ): CommandResult {
+        val e = expected?.takeIf { it == session() }?.engine ?: return CommandResult.Failed(app.getString(R.string.error_not_connected))
         val deferred = CompletableDeferred<CommandResult>()
         block(e) { deferred.complete(it) }
         return deferred.await()
@@ -145,57 +163,29 @@ class EngineRepository(
     }
 
     override suspend fun searchPublic(query: String) {
-        val generation = searchGeneration.incrementAndGet()
-        _publicQuery.value = query
-        if (engine() == null) {
-            catalog.value = emptyList()
-            _publicBusy.value = false
-            _publicHasMore.value = false
-            publicCursor = 0L
-            return
-        }
-        _publicBusy.value = true
-        val result = try {
-            searchGate.await({ generation == searchGeneration.get() }) {
-                await { e, done -> e.search(query.trim(), 0, done) }
-            }
-        } finally {
-            if (generation == searchGeneration.get()) _publicBusy.value = false
-        } ?: return
-        // Responses to stale queries are discarded (300 ms debounce in the ViewModel).
-        if (generation != searchGeneration.get()) return
-        when (result) {
-            is CommandResult.Listing -> {
-                catalog.value = result.networks
-                publicCursor = result.cursor
-                _publicHasMore.value = result.cursor != 0L && result.networks.isNotEmpty()
-            }
-            is CommandResult.Failed -> push(app.getString(R.string.search_failed, result.message), true)
-            else -> Unit
-        }
+        val request = catalog.begin(session(), query) ?: return
+        runSearch(request)
     }
 
     override suspend fun loadMorePublic() {
-        if (_publicBusy.value) return
-        val generation = searchGeneration.get()
-        val cursor = publicCursor
-        if (cursor == 0L) return
-        _publicBusy.value = true
-        val result = try {
-            searchGate.await({ generation == searchGeneration.get() && cursor == publicCursor }) {
-                await { e, done -> e.search(_publicQuery.value.trim(), cursor, done) }
+        val request = catalog.more(session()) ?: return
+        runSearch(request)
+    }
+
+    private suspend fun runSearch(request: PublicCatalog.Request<SessionStamp>) {
+        var result: CommandResult? = null
+        try {
+            result = searchGate.await({ catalog.isCurrent(request, session()) }) {
+                await(request.session) { e, done ->
+                    e.searchInSession(request.session.generation, request.query, request.cursor, done)
+                }
             }
         } finally {
-            if (generation == searchGeneration.get()) _publicBusy.value = false
-        } ?: return
-        if (generation != searchGeneration.get()) return
-        if (result is CommandResult.Listing) {
-            val seen = catalog.value.map { it.first }.toSet()
-            catalog.value = catalog.value + result.networks.filter { it.first !in seen }
-            _publicHasMore.value = result.cursor != 0L && result.cursor != cursor && result.networks.isNotEmpty()
-            publicCursor = result.cursor
-        } else if (result is CommandResult.Failed) {
-            push(app.getString(R.string.search_failed, result.message), true)
+            val current = session()
+            val accepted = catalog.complete(request, current, result)
+            if (accepted && result is CommandResult.Failed) {
+                push(app.getString(R.string.search_failed, result.message), true)
+            }
         }
     }
 
@@ -337,50 +327,66 @@ class EngineRepository(
     }
 
     override suspend fun runBatchJoin(networks: List<JoinNetwork>, passwords: Map<String, CharArray>) {
+        if (!batchGate.tryLock()) {
+            passwords.values.forEach { it.fill('\u0000') }
+            return
+        }
+        var started = false
         try {
-            if (engine() == null) {
-                push(app.getString(R.string.error_not_connected), true)
-                return
-            }
+            val session = session() ?: return push(app.getString(R.string.error_not_connected), true)
             val unique = networks.distinctBy { it.name }.take(JoinConfiguration.MAX_NETWORKS)
-            val joined = EngineHost.state.value.networks.map { it.name }.toSet()
-            val progress = MutableStateFlow(BatchProgress(total = unique.size))
-            _batch.value = progress.value
-            val jobs = unique.mapIndexed { index, net ->
-                // Requests overlap with at least 50 ms between them; one refusal never cancels the others.
-                if (index > 0) delay(BATCH_SPACING_MS)
-                if (net.name in joined) {
-                    progress.update { it.copy(skipped = it.skipped + 1) }
-                    _batch.value = progress.value
-                    return@mapIndexed null
-                }
-                val password = if (net.private) passwords[net.name]?.copyOf() else null
-                scope.async {
-                    val result = await { e, done -> e.join(net.name, password, done) }
-                    val outcome = reportJoin(net.name, result)
-                    progress.update {
-                        when (outcome) {
-                            JoinOutcome.JOINED -> it.copy(joined = it.joined + 1)
-                            JoinOutcome.PENDING -> it.copy(pendingApproval = it.pendingApproval + 1)
-                            JoinOutcome.FAILED -> it.copy(failed = it.failed + 1)
+            val joined = session.engine.snapshot().networks.map { it.name }.toSet()
+            _batch.value = BatchProgress(total = unique.size)
+            started = true
+            coroutineScope {
+                val jobs = unique.mapIndexed { index, net ->
+                    if (index > 0) delay(BATCH_SPACING_MS)
+                    if (net.name in joined) {
+                        _batch.update { it?.copy(skipped = it.skipped + 1) }
+                        return@mapIndexed null
+                    }
+                    async {
+                        val result = if (net.private && passwords[net.name] == null) {
+                            CommandResult.Failed(app.getString(R.string.password_invalid))
+                        } else {
+                            await(session) { e, done ->
+                                val password = if (net.private) passwords.getValue(net.name).copyOf() else null
+                                e.joinInSession(session.generation, net.name, password, done)
+                            }
+                        }
+                        val outcome = reportJoin(net.name, result)
+                        _batch.update { progress ->
+                            progress?.let {
+                                when (outcome) {
+                                    JoinOutcome.JOINED -> it.copy(joined = it.joined + 1)
+                                    JoinOutcome.PENDING -> it.copy(pendingApproval = it.pendingApproval + 1)
+                                    JoinOutcome.FAILED -> it.copy(failed = it.failed + 1)
+                                }
+                            }
                         }
                     }
-                    _batch.value = progress.value
                 }
+                jobs.filterNotNull().awaitAll()
             }
-            jobs.filterNotNull().awaitAll()
-            _batch.value = progress.value.copy(running = false)
-            push(app.getString(R.string.batch_summary, progress.value.joined, progress.value.skipped, progress.value.pendingApproval, progress.value.failed))
+            _batch.value?.let { progress ->
+                push(app.getString(R.string.batch_summary, progress.joined, progress.skipped, progress.pendingApproval, progress.failed))
+            }
         } finally {
+            if (started) _batch.update { it?.copy(running = false) }
             passwords.values.forEach { it.fill('\u0000') }
+            batchGate.unlock()
         }
     }
 
     override suspend fun resetIdentity() {
-        withContext(Dispatchers.IO) {
-            EngineHost.stop()
-            EngineHost.identityStore(app).clear()
+        val cleared = try {
+            withContext(Dispatchers.IO) { EngineHost.resetIdentity(app) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
         }
+        if (!cleared) return push(app.getString(R.string.preferences_save_failed), true)
         OpenRadVpnService.send(app, OpenRadVpnService.ACTION_DISCONNECT)
         rtt.value = emptyMap()
         push(app.getString(R.string.identity_reset_done))

@@ -42,6 +42,10 @@ class Engine(
     private var controlThread: Thread? = null
 
     @Volatile private var phase = EngineState.Phase.STOPPED
+    @Volatile private var sessionGeneration = 0L
+    val activeSession: Long? get() = synchronized(lock) {
+        sessionGeneration.takeIf { running.get() && phase == EngineState.Phase.ONLINE }
+    }
     @Volatile private var error: String? = null
     @Volatile private var identity: Identity? = null
     @Volatile private var latencyMs = 0L
@@ -119,8 +123,9 @@ class Engine(
 
     // ------------------------------------------------------------------ lifecycle
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
+    @Synchronized fun start() {
+        if (controlThread?.isAlive == true || synchronized(lock) { workers.values.any { it.thread.isAlive } } ||
+            !running.compareAndSet(false, true)) return
         stopping.set(false)
         controlThread = Thread({ runControl() }, "openrad-control").apply {
             isDaemon = true
@@ -128,24 +133,33 @@ class Engine(
         }
     }
 
-    fun stop() {
+    @Synchronized fun stop(): Boolean {
         stopping.set(true)
-        if (!running.getAndSet(false)) return
+        val wasRunning = running.getAndSet(false)
         synchronized(lock) { workers.values.forEach { it.cancel() } }
-        controlThread?.interrupt()
-        controlThread?.join(8000)
+        val control = controlThread
+        if (control === Thread.currentThread()) return false
+        control?.interrupt()
+        control?.join(8000)
+        if (control?.isAlive == true) {
+            event("Control thread did not finish shutting down.", true)
+            return false
+        }
         val all = synchronized(lock) { workers.values.toList() }
         val deadline = now() + 7000
-        for (w in all) w.thread.join((deadline - now()).coerceAtLeast(1))
+        for (w in all) if (w.thread !== Thread.currentThread()) w.thread.join((deadline - now()).coerceAtLeast(1))
         synchronized(lock) {
-            workers.clear()
+            workers.entries.removeAll { !it.value.thread.isAlive }
             workersVersion++
             pending.values.forEach { it.wipe() }
             pending.clear()
         }
         drainCommands("engine stopped")
-        phase = EngineState.Phase.STOPPED
+        val stopped = all.none { it.thread.isAlive }
+        if (!stopped) event("Peer workers did not finish shutting down.", true)
+        if (wasRunning) phase = EngineState.Phase.STOPPED
         publish(force = true)
+        return stopped
     }
 
     val isRunning: Boolean get() = running.get()
@@ -196,12 +210,19 @@ class Engine(
 
     fun delete(networkId: String, done: (CommandResult) -> Unit) = submit(Command.Remove(networkId, true, done))
 
-    private fun submit(command: Command) {
+    internal fun searchInSession(session: Long, query: String, cursor: Long, done: (CommandResult) -> Unit) =
+        submit(Command.Search(query, cursor, done), session)
+
+    internal fun joinInSession(session: Long, name: String, password: CharArray?, done: (CommandResult) -> Unit) =
+        submit(Command.Join(name, password, done), session)
+
+    private fun submit(command: Command, expectedSession: Long? = null) {
         // Admission and shutdown draining share a gate. A command must never
         // arrive after the final drain while the last published phase is ONLINE.
         val failure = synchronized(lock) {
             when {
                 !running.get() || phase != EngineState.Phase.ONLINE -> "control session is not online"
+                expectedSession != null && expectedSession != sessionGeneration -> "control session changed"
                 !commands.offer(command) -> "control command queue is full"
                 else -> null
             }
@@ -215,12 +236,16 @@ class Engine(
     /** Correlated authenticated keepalive; times out after exactly 3000 ms. */
     fun ping(rid: Long, done: (CommandResult) -> Unit) {
         val worker = synchronized(lock) { workers[rid] }
-        if (worker == null || worker.link != LinkState.CONNECTED) {
+        if (worker == null || worker.stop.get() || worker.link != LinkState.CONNECTED || activeSession == null) {
             done(CommandResult.Failed("Connect to this peer before testing RTT."))
             return
         }
-        if (!worker.probe.compareAndSet(null, Probe(rid, now(), done))) {
+        val probe = Probe(rid, now(), done)
+        if (!worker.probe.compareAndSet(null, probe)) {
             done(CommandResult.Failed("A ping is already running for this peer."))
+        } else if ((worker.stop.get() || activeSession != worker.attachment) &&
+            worker.probe.compareAndSet(probe, null)) {
+            probe.finish(CommandResult.Failed("peer channel closed"))
         }
     }
 
@@ -239,6 +264,14 @@ class Engine(
         }
         dirty.set(true)
         count
+    }
+
+    internal fun sendIpInSession(session: Long, packet: ByteArray, length: Int): L3Bridge.Result = synchronized(lock) {
+        if (!running.get() || phase != EngineState.Phase.ONLINE || sessionGeneration != session) {
+            dropped.incrementAndGet()
+            return@synchronized L3Bridge.Result.NO_ROUTE
+        }
+        sendIp(packet, length)
     }
 
     /** IPv4 packet read from the TUN. */
@@ -260,6 +293,7 @@ class Engine(
         var host: String? = null
         while (running.get()) {
             var control: Control? = null
+            var retryDelay = 0L
             val active = ArrayList<Active>()
             try {
                 var id = issuedIdentity
@@ -316,9 +350,10 @@ class Engine(
                     membership = members
                     retries.clear()
                     retryPacer = RetryPacer(now())
+                    sessionGeneration++
+                    routeIp = session.stream.localAddress
+                    phase = EngineState.Phase.ONLINE
                 }
-                routeIp = session.stream.localAddress
-                phase = EngineState.Phase.ONLINE
                 error = null
                 attempt = 0
                 redirected.clear()
@@ -334,14 +369,19 @@ class Engine(
                 } else {
                     redirected.add(current)
                     host = redirect.host
+                    phase = EngineState.Phase.RECONNECTING
                     event("Server redirected the session to ${redirect.host}.", false)
                 }
+            } catch (e: Protocol.IdentityReplaced) {
+                error = e.message
+                phase = EngineState.Phase.ERROR
+                halt()
+                event(e.message.orEmpty(), true)
             } catch (e: RegistrationPendingException) {
                 error = e.message
                 phase = EngineState.Phase.ERROR
                 event(e.message ?: "registration outcome unknown", true)
                 halt()
-                publish(force = true)
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
@@ -354,31 +394,40 @@ class Engine(
                     phase = EngineState.Phase.ERROR
                     event("Connection failed: $message", true)
                     halt()
-                    // StateFlow may conflate the final equal snapshot. The
-                    // service must see isRunning=false on its first ERROR.
-                    publish(force = true)
                 } else {
                     phase = EngineState.Phase.RECONNECTING
                     event("Connection lost: $message. Retrying…", true)
-                    publish(force = true)
-                    val delay = (config.reconnectBaseDelaySeconds.coerceIn(1, 30) * 1000L shl (attempt - 1).coerceAtMost(5))
+                    retryDelay = (config.reconnectBaseDelaySeconds.coerceIn(1, 30) * 1000L shl (attempt - 1).coerceAtMost(5))
                         .coerceAtMost(60_000)
-                    sleepWhileRunning(delay)
                 }
             } finally {
-                for (a in active) {
-                    a.operation?.wipe()
-                    a.done(CommandResult.Failed("control connection closed"))
-                }
-                active.clear()
-                control?.close()
                 synchronized(lock) {
+                    if (phase == EngineState.Phase.ONLINE) phase = EngineState.Phase.STOPPED
                     workers.values.forEach { it.cancel() }
                     pending.values.forEach { it.wipe() }
                     pending.clear()
+                    membership = Membership(identity?.rid ?: 0)
+                    uesHosts = emptyList()
+                    routeIp = null
+                    wire.clear()
                 }
-                wire.clear()
-                dirty.set(true)
+                control?.close()
+                for (a in active) a.operation?.wipe()
+                for (a in active) runCatching { a.done(CommandResult.Failed("control connection closed")) }
+                active.clear()
+                drainCommands("control connection closed")
+                publish(force = true)
+            }
+            if (retryDelay > 0) {
+                try {
+                    sleepWhileRunning(retryDelay)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!config.autoReconnect || attempt >= config.reconnectAttempts.coerceIn(1, 10)) {
+                    halt()
+                    phase = EngineState.Phase.ERROR
+                }
             }
         }
         drainCommands("engine stopped")
@@ -523,6 +572,7 @@ class Engine(
         val op = Tlv.unique(records, Protocol.SERVER_OP).u32()
         Protocol.checkRedirect(records)
         if (op == 16L) {
+            Protocol.checkIdentityReplacement(records)
             AcceptorRelayGuard.shared.objected(now())
             throw IOException("server disconnected the attachment session")
         }
@@ -642,6 +692,10 @@ class Engine(
     }
 
     private fun spawn(peer: PeerEntry, incoming: Protocol.ConnectionOffer?, records: List<ByteArray>) {
+        if (workers.size >= Membership.MAX_PEERS && peer.rid !in workers) {
+            incoming?.wipe()
+            return
+        }
         val worker = PeerWorker(peer, incoming)
         records.forEach { worker.offers.offer(it) }
         workers[peer.rid] = worker
@@ -651,6 +705,7 @@ class Engine(
             worker.thread.start()
         } catch (e: Throwable) {
             // More parallelism must not turn a temporary OS thread limit into a crash.
+            incoming?.wipe()
             worker.detail = "could not start peer worker"
             worker.link = LinkState.FAILED
             recordFailure(peer.rid, connectedAt = 0L, now())
@@ -691,6 +746,7 @@ class Engine(
     }
 
     private fun connectedPeers(): List<BridgePeer> = synchronized(lock) {
+        if (!running.get() || phase != EngineState.Phase.ONLINE) return@synchronized emptyList()
         refreshPermitted()
         // Outgoing stealth block: the VIP has no route, so neither unicast nor group traffic reaches it.
         permittedWorkers.filter { it.link == LinkState.CONNECTED && !it.stop.get() && !it.blockOut }
@@ -711,7 +767,8 @@ class Engine(
         val ownMac = Protocol.macForIp(id.vip)
         val permitted = synchronized(lock) {
             refreshPermitted()
-            worker.rid in permittedRids
+            running.get() && phase == EngineState.Phase.ONLINE && !worker.stop.get() &&
+                workers[worker.rid] === worker && worker.rid in permittedRids
         }
         if (!permitted || !Tunnel.validFrame(frame, worker.peer.vip, channel.mac, id.vip, ownMac)) {
             dropped.incrementAndGet()
@@ -721,7 +778,7 @@ class Engine(
         receivedBytes.addAndGet(frame.size.toLong())
         when (val r = bridge.inbound(worker, frame)) {
             is L3Bridge.Inbound.Deliver -> {
-                if (tunAttached) listener.onPacket(r.packet) else if (!worker.blockOut) echoReply(worker, r.packet, id)
+                if (tunAttached) listener.onPacket(r.packet, worker.attachment) else if (!worker.blockOut) echoReply(worker, r.packet, id)
             }
             // Locally synthesized ARP replies are outgoing traffic too.
             is L3Bridge.Inbound.Reply -> if (!worker.blockOut) worker.enqueue(r.frame)
@@ -755,11 +812,12 @@ class Engine(
         val finished = AtomicBoolean(false)
 
         fun finish(result: CommandResult) {
-            if (finished.compareAndSet(false, true)) done(result)
+            if (finished.compareAndSet(false, true)) runCatching { done(result) }
         }
     }
 
     private inner class PeerWorker(val peer: PeerEntry, val incoming: Protocol.ConnectionOffer?) : BridgePeer {
+        val attachment = sessionGeneration
         override val rid: Long get() = peer.rid
         override val vip: Int get() = peer.vip
         override val mac: ByteArray get() = channel?.mac ?: ByteArray(6)
@@ -803,6 +861,11 @@ class Engine(
         override fun enqueue(frame: OutFrame): Boolean {
             if (link != LinkState.CONNECTED || stop.get()) return false
             return tx.offer(frame)
+        }
+
+        private fun advertise(data: ByteArray): Boolean = synchronized(lock) {
+            running.get() && phase == EngineState.Phase.ONLINE && attachment == sessionGeneration &&
+                workers[rid] === this && !stop.get() && wire.offer(data)
         }
 
         private fun run() {
@@ -1339,7 +1402,7 @@ class Engine(
                     val server = openTcpListener()
                     val hosts = server?.let { advertisedTcpHosts(route, it) }.orEmpty()
                     if (server != null && hosts.isNotEmpty() &&
-                        wire.offer(Protocol.advertiseTcp(offer.cid, hosts.map { it to server.localPort }))) {
+                        advertise(Protocol.advertiseTcp(offer.cid, hosts.map { it to server.localPort }))) {
                         listener = server
                         acceptDirect(race, server, own, offer, until, progress, tcpSeen)
                     } else {
@@ -1347,7 +1410,7 @@ class Engine(
                     }
                     bindUdp(route)?.let { (socket, endpoints) ->
                         directSocket = socket
-                        wire.offer(Protocol.advertiseUdp(offer.cid, endpoints, nonce))
+                        advertise(Protocol.advertiseUdp(offer.cid, endpoints, nonce))
                     }
                     mapping = startMapping(uesHosts)
                 }
@@ -1375,7 +1438,7 @@ class Engine(
                         mapping = null
                         result.onSuccess { (socket, discovered) ->
                             mappedSocket = socket
-                            wire.offer(Protocol.advertiseMappedUdp(offer.cid, discovered.endpoint, nonce))
+                            advertise(Protocol.advertiseMappedUdp(offer.cid, discovered.endpoint, nonce))
                         }.onFailure { lastError = "mapped-udp: ${describe(it)}" }
                     }
                     // Candidates can arrive before our mapping result; start once both are known.
@@ -1394,7 +1457,7 @@ class Engine(
                     if (!relayOffered && requestAt != null && now() >= requestAt) {
                         relayRequestAt = null
                         // A full advertisement queue only loses this fallback.
-                        if (AcceptorRelayGuard.shared.allowed && wire.offer(Protocol.requestRelay(offer.cid))) {
+                        if (AcceptorRelayGuard.shared.allowed && advertise(Protocol.requestRelay(offer.cid))) {
                             AcceptorRelayGuard.shared.requested(now())
                         }
                     }
@@ -1585,6 +1648,7 @@ class Engine(
         val retryActive = workers.values.count { it.thread.isAlive && it.link == LinkState.CONNECTING && it.rid in retries }
         return EngineState(
             phase = phase,
+            sessionGeneration = sessionGeneration,
             error = error,
             rid = id?.rid,
             vip = id?.vip,

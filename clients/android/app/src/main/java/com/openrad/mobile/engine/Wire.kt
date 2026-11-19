@@ -122,30 +122,36 @@ object Tlv {
 
     /** UTF-16BE text terminated by U+0001; empty text is allowed (search query). */
     fun text(tag: Long, value: String): ByteArray {
-        ensure(value.none { it.code < 32 }) { "name/version must contain no control characters" }
+        ensure(value.none { it.isISOControl() }) { "name/version must contain no control characters" }
         val encoded = value.toByteArray(Charsets.UTF_16BE)
         ensure(encoded.size <= 512) { "name/version exceeds client limit" }
         return tlv(tag, encoded + byteArrayOf(0, 1))
     }
 
-    fun decodeText(record: Record): String {
+    private fun textBytes(record: Record): ByteArray {
         val v = record.value
-        ensure(v.size in 4..8192 && v.size % 2 == 0 && v[v.size - 2] == 0.toByte() && v[v.size - 1] == 1.toByte()) {
+        ensure(v.size in 2..8192 && v.size % 2 == 0 && v[v.size - 2] == 0.toByte() && v[v.size - 1] == 1.toByte()) {
             "invalid text length or terminator"
         }
-        val decoder = Charsets.UTF_16BE.newDecoder()
+        return v
+    }
+
+    fun decodeText(record: Record): String {
+        val v = textBytes(record)
         val text = try {
-            decoder.decode(java.nio.ByteBuffer.wrap(v, 0, v.size - 2)).toString()
+            Charsets.UTF_16BE.newDecoder().decode(java.nio.ByteBuffer.wrap(v, 0, v.size - 2)).toString()
         } catch (_: java.nio.charset.CharacterCodingException) {
             fail("invalid text encoding")
         }
-        ensure('\u0000' !in text) { "embedded NUL in text" }
+        ensure(text.none { it.isISOControl() }) { "control character in text" }
         return text
     }
 
-    /** Public catalog names may contain anything; replace control characters for display. */
-    fun displayText(record: Record): String =
-        decodeText(record).map { if (it.isISOControl()) '�' else it }.joinToString("")
+    fun displayText(record: Record): String {
+        val v = textBytes(record)
+        return String(v, 0, v.size - 2, Charsets.UTF_16BE).map { if (it.isISOControl()) '\uFFFD' else it }.joinToString("")
+    }
+
 }
 
 /** IPv4 helpers kept as Int (network order) to avoid InetAddress DNS paths. */

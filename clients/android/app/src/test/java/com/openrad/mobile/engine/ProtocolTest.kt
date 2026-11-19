@@ -33,6 +33,48 @@ class ProtocolTest {
     }
 
     @Test
+    fun displayTextToleratesMalformedUnicodeWithoutAcceptingControlsAsStrictText() {
+        val empty = Record(1, byteArrayOf(0, 1))
+        assertEquals("", Tlv.decodeText(empty))
+        val control = Record(1, byteArrayOf(0, 27, 0, 1))
+        assertThrows(ProtocolException::class.java) { Tlv.decodeText(control) }
+        assertEquals("\uFFFD", Tlv.displayText(control))
+        val truncatedEmoji = Record(1, byteArrayOf(0xd8.toByte(), 0, 0, 1))
+        assertThrows(ProtocolException::class.java) { Tlv.decodeText(truncatedEmoji) }
+        assertEquals("\uFFFD", Tlv.displayText(truncatedEmoji))
+    }
+
+    @Test
+    fun malformedOrOversizedMembershipUpdatesDoNotPublishTheirValidPrefix() {
+        val membership = Membership(1)
+        val initial = Tlv.tlv(0x1317, peerRecord(7, Ip.parse("26.0.0.7")))
+        membership.snapshot(Tlv.tlv(0x1316, initial))
+        val before = membership.peers.toMap()
+        val valid = Tlv.tlv(0x1317, peerRecord(8, Ip.parse("26.0.0.8")))
+        val malformed = Tlv.tlv(0x1317, Tlv.u64(0x020001e1, 9))
+        assertThrows(ProtocolException::class.java) { membership.snapshot(Tlv.tlv(0x1316, valid + malformed)) }
+        assertEquals(before, membership.peers)
+        val peers = (10L until 10 + Membership.MAX_PEERS).map { Tlv.tlv(0x1317, peerRecord(it, Ip.parse("26.0.0.9"))) }
+        assertThrows(ProtocolException::class.java) { membership.snapshot(Tlv.tlv(0x1316, concat(*peers.toTypedArray()))) }
+        assertEquals(before, membership.peers)
+
+        val offline = Tlv.tlv(0x1366, Tlv.u64(0x020001e1, 7) + Tlv.u32(0x010003a0, 0))
+        val broken = Tlv.tlv(0x1366, Tlv.u64(0x020001e1, 7))
+        assertThrows(ProtocolException::class.java) { membership.changes(Tlv.tlv(0x131f, offline + broken)) }
+        assertEquals(before, membership.peers)
+    }
+
+    @Test
+    fun replacedIdentityIsDistinguishedFromOtherDisconnects() {
+        fun records(reason: Long) = Tlv.parse(Tlv.u32(Protocol.SERVER_OP, 16) + Tlv.u32(0x010001d2, reason))
+        assertThrows(Protocol.IdentityReplaced::class.java) { Protocol.checkIdentityReplacement(records(1)) }
+        Protocol.checkIdentityReplacement(records(2))
+        assertThrows(Protocol.IdentityReplaced::class.java) {
+            Protocol.Registration().receive(Tlv.u32(Protocol.SERVER_OP, 16) + Tlv.u32(0x010001d2, 1))
+        }
+    }
+
+    @Test
     fun ethernetMultipleFramesAndOffloadRejection() {
         val f = p.hex("ethernet")
         val two = f + f.copyOfRange(2, f.size)
