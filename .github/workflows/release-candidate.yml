@@ -188,7 +188,7 @@ jobs:
         working-directory: clients/android
         run: |
           ./scripts/setup-android-sdk.sh
-          ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleRelease :app:assembleDebugAndroidTest
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:lintRelease :app:assembleRelease :app:assembleDebugAndroidTest
       - name: Validate unsigned production variant and stage for local signing
         shell: bash
         run: |
@@ -198,19 +198,19 @@ jobs:
           tools="$ANDROID_HOME/build-tools/34.0.0"
           package="$("$tools/aapt" dump badging "$unsigned" | sed -n '1p')"
           [[ "$package" == *"name='com.openrad.mobile'"* ]]
-          [[ "$package" == *"versionCode='11'"* ]]
-          [[ "$package" == *"versionName='2.4.5-rc.1'"* ]]
+          [[ "$package" == *"versionCode='12'"* ]]
+          [[ "$package" == *"versionName='2.4.5'"* ]]
           if "$tools/apksigner" verify "$unsigned" >/dev/null 2>&1; then
             echo 'Expected an unsigned APK' >&2
             exit 1
           fi
-          mkdir -p dist/android-rc-signing
-          cp "$unsigned" dist/android-rc-signing/openrad-2.4.5-rc.1-android-UNSIGNED.apk
-          (cd dist/android-rc-signing && sha256sum *.apk > SHA256SUMS)
-          printf '%s\n' 'UNSIGNED APK - DO NOT PUBLISH' "Source commit: $GITHUB_SHA" > dist/android-rc-signing/README-FIRST.txt
+          mkdir -p dist/android-245-signing
+          cp "$unsigned" dist/android-245-signing/openrad-2.4.5-android-UNSIGNED.apk
+          (cd dist/android-245-signing && sha256sum *.apk > SHA256SUMS)
+          printf '%s\n' 'UNSIGNED APK - DO NOT PUBLISH' "Source commit: $GITHUB_SHA" > dist/android-245-signing/README-FIRST.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: openrad-2.4.5-rc.1-android-unsigned
-          path: dist/android-rc-signing/
+          name: openrad-2.4.5-android-unsigned
+          path: dist/android-245-signing/
           if-no-files-found: error
           retention-days: 14

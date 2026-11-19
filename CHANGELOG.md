@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.5 (unreleased, Rust and Android)
+## 2.4.5 (Rust and Android)
 
 - Harden local IPC, peer ARP validation, session lifecycle and reconnect handling.
 - Preserve usable profiles and support bounded round trips of large service preferences.
