@@ -9,6 +9,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/rust.yml'
+      - 'server/**'
+      - 'scripts/test-self-hosted.py'
   pull_request:
     paths:
       - 'src/**'
@@ -17,6 +19,11 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/rust.yml'
+      - 'server/**'
+      - 'scripts/test-self-hosted.py'
+
+permissions:
+  contents: read
 
 jobs:
   check:
@@ -30,6 +37,20 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  self-hosted:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: '1.95'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: python3 scripts/test-self-hosted.py
 
   audit:
     runs-on: ubuntu-latest

@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories: ["/", "/fuzz"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      rust-compatible:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gradle
+    directories:
+      - /clients/android
+      - /clients/mod
+      - /clients/mod/modern
+      - /clients/plugin
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      gradle-compatible:
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      go-compatible:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /clients/python
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      python:
+        patterns: ["*"]

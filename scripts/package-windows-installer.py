@@ -15,9 +15,12 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 import urllib.request
 import zipfile
 from pathlib import Path
+
+from release_sbom import embedded_font_component, file_component, write_sbom
 
 from pe_resources import resources
 
@@ -93,6 +96,8 @@ def main():
     parser.add_argument('--validation', type=Path, help='Release validation/provenance document to include')
     args = parser.parse_args()
     metadata = json.loads(command('cargo', 'metadata', '--format-version', '1', '--filter-platform', TARGET, '--locked', '--offline'))
+    with (ROOT / "Cargo.lock").open("rb") as lock:
+        metadata["lock_packages"] = tomllib.load(lock)["package"]
     version = next(p['version'] for p in metadata['packages'] if p['name'] == 'openrad-client')
     dist = ROOT / 'dist'
     dist.mkdir(exist_ok=True)
@@ -114,6 +119,7 @@ def main():
             copy(source, payload / name)
         for source, target in [
             ('LICENSE', 'LICENSE'), ('CREDITS.md', 'CREDITS.md'),
+            ('SECURITY.md', 'SECURITY.md'), ('docs/maintenance.md', 'docs/maintenance.md'),
             ('README.md', 'README.md'), ('CHANGELOG.md', 'CHANGELOG.md'),
             ('docs/windows.md', 'README-WINDOWS.md'),
             ('docs/windows.md', 'docs/windows.md'), ('docs/cli.md', 'docs/cli.md'),
@@ -212,6 +218,25 @@ def main():
             'radmin_conflict_recovery': 'Force-terminate RvControlSvc.exe/RvRvpnGui.exe; verify GUID-bound NetAdapter/CIM/netsh/PnP/PnPUtil disabling and stable stopped state before installation or connection',
         }, indent=2) + '\n')
         # This manifest is also embedded separately for repeat-run readiness checks.
+        tap = {
+            'type': 'device-driver', 'bom-ref': f'tap-windows6:{DRIVER_TAG}',
+            'name': 'TAP-Windows6', 'version': DRIVER_TAG,
+            'licenses': [{'expression': 'GPL-2.0-only'}],
+            'externalReferences': [{'type': 'vcs',
+                                    'url': f'https://github.com/OpenVPN/tap-windows6/tree/{DRIVER_COMMIT}'}],
+            'components': [file_component(payload, f'driver/{name}') for name in sorted(DRIVER_HASHES)] +
+                          [file_component(payload, f'driver-source/{source_archive.name}')],
+        }
+        nsis = {
+            'type': 'application', 'bom-ref': 'installer:nsis', 'name': 'NSIS',
+            'version': command(args.makensis, '-VERSION'),
+            'externalReferences': [{'type': 'website', 'url': 'https://nsis.sourceforge.io/'}],
+            'properties': [{'name': 'openrad:scope', 'value': 'Installer bootstrapper and embedded System plugin'}],
+        }
+        write_sbom(metadata, payload, TARGET, {
+            'openrad.exe': 'openrad-client', 'openrad-desktop.exe': 'openrad-desktop',
+            'openrad-setup-helper.exe': 'openrad-client',
+        }, [tap, nsis, embedded_font_component(ROOT)])
         records = [{'path': path.relative_to(payload).as_posix(), 'sha256': digest(path)} for path in sorted(payload.rglob('*')) if path.is_file()]
         (payload / 'INSTALL-MANIFEST.json').write_text(json.dumps({'format': 'openrad-install-v1', 'version': version, 'files': records}, indent=2) + '\n')
         delete = temp / 'uninstall-files.nsh'
@@ -260,7 +285,7 @@ def main():
         output = temp / f'openrad-{version}-windows-x86_64-setup'
         output.mkdir()
         copy(setup_exe, output / setup_exe.name)
-        for name in ['README.md', 'LICENSE', 'CHANGELOG.md', 'README-WINDOWS.md', 'VALIDATION.md', 'Test-Windows.ps1', 'Debug-OpenRad.cmd', 'Debug-OpenRad.ps1', 'DRIVER-PROVENANCE.json', 'DLL-IMPORTS.json', 'BUILD-INFO.json']:
+        for name in ['README.md', 'LICENSE', 'CHANGELOG.md', 'SECURITY.md', 'README-WINDOWS.md', 'VALIDATION.md', 'Test-Windows.ps1', 'Debug-OpenRad.cmd', 'Debug-OpenRad.ps1', 'DRIVER-PROVENANCE.json', 'DLL-IMPORTS.json', 'BUILD-INFO.json', 'SBOM.cdx.json']:
             copy(payload / name, output / name)
         # Preserve the guide's relative local links for readers outside the EXE.
         shutil.copytree(payload / 'docs', output / 'docs')

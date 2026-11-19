@@ -7,7 +7,10 @@ import re
 import shutil
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
+
+from release_sbom import embedded_font_component, write_sbom
 
 _spec = importlib.util.spec_from_file_location('windows_package_support', Path(__file__).with_name('package-windows.py'))
 _support = importlib.util.module_from_spec(_spec)
@@ -24,6 +27,8 @@ def main():
     parser.add_argument('--build-date', required=True)
     args = parser.parse_args()
     metadata = json.loads(command('cargo', 'metadata', '--format-version', '1', '--filter-platform', TARGET, '--locked', '--offline'))
+    with (ROOT / "Cargo.lock").open("rb") as lock:
+        metadata["lock_packages"] = tomllib.load(lock)["package"]
     version = next(p['version'] for p in metadata['packages'] if p['name'] == 'openrad-client')
     info = json.loads(args.build_info.read_text())
     if info['source_commit'] != command('git', 'rev-parse', 'HEAD'):
@@ -52,7 +57,7 @@ def main():
             audit[binary] = {'version': reported, 'glibc_versions': glibc,
                              'maximum_required_glibc': glibc[-1] if glibc else None,
                              'host_shared_libraries': libraries}
-        for source in ['README.md', 'CHANGELOG.md', 'LICENSE', 'CREDITS.md',
+        for source in ['README.md', 'CHANGELOG.md', 'LICENSE', 'CREDITS.md', 'SECURITY.md', 'docs/maintenance.md',
                        'docs/linux.md', 'docs/windows.md', 'docs/desktop.md', 'docs/cli.md', 'docs/cli-pt-BR.md',
                        'docs/architecture.md', 'docs/performance.md', f'docs/releases/{version}.md',
                        f'docs/releases/{version}-changes.md',
@@ -95,6 +100,9 @@ def main():
                     binaries_stripped=True)
         (output / 'BUILD-INFO.json').write_text(json.dumps(info, indent=2) + '\n')
         (output / 'LIBRARY-REQUIREMENTS.json').write_text(json.dumps(audit, indent=2) + '\n')
+        write_sbom(metadata, output, TARGET, {
+            'openrad': 'openrad-client', 'openrad-desktop': 'openrad-desktop',
+        }, [embedded_font_component(ROOT)])
         files = sorted(p for p in output.rglob('*') if p.is_file())
         (output / 'SHA256SUMS').write_text(''.join(f'{digest(path)}  {path.relative_to(output).as_posix()}\n' for path in files))
         archive = dist / f'{name}.tar.gz'

@@ -27,6 +27,12 @@ class ReleaseHistoryTests(unittest.TestCase):
                 with self.subTest(link=link):
                     self.assertTrue((destination / link).is_file(), f'Packaged CHANGELOG link is missing: {link}')
 
+    def test_previous_release_notes_keep_their_detailed_inventory(self):
+        with tempfile.TemporaryDirectory(prefix='openrad-history-test-') as temporary:
+            destination = Path(temporary)
+            PACKAGE.copy_release_history(destination)
+            self.assertTrue((destination / 'docs/releases/2.4.0-changes.md').is_file())
+
     def test_historical_source_inventory_links_keep_tag_reference(self):
         with tempfile.TemporaryDirectory(prefix='openrad-history-test-') as temporary:
             destination = Path(temporary)

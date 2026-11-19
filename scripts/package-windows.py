@@ -7,8 +7,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import zipfile
 from pathlib import Path
+
+from release_sbom import embedded_font_component, file_component, write_sbom
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = "x86_64-pc-windows-gnu"
@@ -51,7 +54,7 @@ def root_release_document(text, version):
 
 def copy_release_history(destination):
     """Include the historical guides linked by the changelog and platform guides."""
-    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md', '1.3.0.md', '1.3.0-changes.md', '1.4.0.md', '1.4.0-changes.md', '1.5.0.md', '1.5.0-changes.md', '2.0.0.md', '2.0.0-changes.md', '2.0.1.md', '2.0.1-changes.md', '2.0.2.md', '2.0.2-changes.md', '2.1.0.md', '2.1.0-changes.md', '2.1.5.md', '2.1.5-changes.md', '2.1.5-minecraft-integration.md', '2.2.0.md', '2.2.0-changes.md', '2.3.0.md', '2.3.0-changes.md', '2.3.1.md', '2.3.2.md', '2.3.3.md', '2.4.0.md']:
+    for name in ['1.0.0.md', '1.0.0-changes.md', '1.1.0.md', '1.1.0-changes.md', '1.2.0.md', '1.2.0-changes.md', '1.2.0-windows-refresh.md', '1.3.0.md', '1.3.0-changes.md', '1.4.0.md', '1.4.0-changes.md', '1.5.0.md', '1.5.0-changes.md', '2.0.0.md', '2.0.0-changes.md', '2.0.1.md', '2.0.1-changes.md', '2.0.2.md', '2.0.2-changes.md', '2.1.0.md', '2.1.0-changes.md', '2.1.5.md', '2.1.5-changes.md', '2.1.5-minecraft-integration.md', '2.2.0.md', '2.2.0-changes.md', '2.3.0.md', '2.3.0-changes.md', '2.3.1.md', '2.3.2.md', '2.3.3.md', '2.4.0.md', '2.4.0-changes.md']:
         target = destination / 'docs/releases' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         text = (ROOT / 'docs/releases' / name).read_text(encoding='utf-8')
@@ -123,6 +126,8 @@ def main():
         flag = "--objdump PATH to a GNU binutils objdump that reads PE files (pei-x86-64)" if args.native_msvc else "--objdump PATH"
         parser.error(f"{objdump!r} was not found on PATH; supply {flag}")
     metadata = json.loads(command("cargo", "metadata", "--format-version", "1", "--filter-platform", build_target, "--locked", "--offline"))
+    with (ROOT / "Cargo.lock").open("rb") as lock:
+        metadata["lock_packages"] = tomllib.load(lock)["package"]
     version = next(p["version"] for p in metadata["packages"] if p["name"] == "openrad-client")
     name = f"openrad-{version}-windows-x86_64-test"
     dist = ROOT / "dist"
@@ -170,6 +175,7 @@ def main():
         # Explicit allowlist: never package credentials, captures or runtime logs.
         for source, target in [
             ("LICENSE", "LICENSE"), ("CREDITS.md", "CREDITS.md"),
+            ("SECURITY.md", "SECURITY.md"), ("docs/maintenance.md", "docs/maintenance.md"),
             ("docs/windows.md", "README-WINDOWS.md"),
             ("docs/windows.md", "docs/windows.md"),
             ("docs/cli.md", "docs/cli.md"),
@@ -240,6 +246,12 @@ def main():
             "windows_support": "experimental",
             "radmin_recovery": "Administrator worker, SYSTEM fallback and final administrator retry; forced service/GUI termination and verified adapter-disable fallbacks",
         }, indent=2) + "\n", encoding="utf-8")
+        write_sbom(metadata, output, build_target, {
+            "openrad.exe": "openrad-client", "openrad-desktop.exe": "openrad-desktop",
+        }, [embedded_font_component(ROOT)] + [
+            file_component(output, filename, "library") for filename in sorted(manifest)
+            if filename.lower() in provided
+        ])
         files = sorted(p for p in output.rglob("*") if p.is_file())
         (output / "SHA256SUMS.txt").write_text("".join(f"{digest(p)}  {p.relative_to(output).as_posix()}\n" for p in files), encoding="utf-8")
         archive = dist / f"{name}.zip"

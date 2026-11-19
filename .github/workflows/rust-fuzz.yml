@@ -1,0 +1,50 @@
+name: Rust bounded parser fuzzing
+
+on:
+  push:
+    branches: [main, '2.4.5-dev']
+    paths:
+      - 'src/**'
+      - 'Cargo.*'
+      - 'fuzz/**'
+      - 'tests/fixtures/**'
+      - '.github/workflows/rust-fuzz.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'Cargo.*'
+      - 'fuzz/**'
+      - 'tests/fixtures/**'
+      - '.github/workflows/rust-fuzz.yml'
+  schedule:
+    - cron: '34 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-parsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [identity_import, control_records, tunnel_records, handshake_records]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        with:
+          toolchain: nightly-2026-11-19
+      - run: python3 fuzz/check_lock.py
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Exercise local parsers with bounded inputs
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+          SECONDS_LIMIT: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && '30' || '900' }}
+        run: |
+          corpus="$RUNNER_TEMP/openrad-$FUZZ_TARGET"
+          python3 fuzz/prepare_corpus.py "$FUZZ_TARGET" "$corpus"
+          cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+          cargo fuzz run "$FUZZ_TARGET" "$corpus" -- -max_total_time="$SECONDS_LIMIT" -max_len=65537 -timeout=5 -rss_limit_mb=2048
+          git diff --exit-code -- fuzz/Cargo.lock

@@ -1,0 +1,42 @@
+[package]
+name = "openrad-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+openrad-client = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "identity_import"
+path = "fuzz_targets/identity_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_records"
+path = "fuzz_targets/control_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tunnel_records"
+path = "fuzz_targets/tunnel_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "handshake_records"
+path = "fuzz_targets/handshake_records.rs"
+test = false
+doc = false
+bench = false

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 65
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Read release version
         shell: bash
         run: |
@@ -22,10 +22,13 @@ jobs:
           test -n "$version"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: '1.95.0'
           components: rust-docs, rustfmt
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
@@ -60,7 +63,7 @@ jobs:
           cd dist
           sha256sum -c "openrad-v$VERSION-linux-x86_64.tar.gz.sha256"
       - name: Upload Linux candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openrad-${{ env.VERSION }}-linux-candidate
           path: |
@@ -73,7 +76,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 80
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Read release version
         shell: bash
         run: |
@@ -81,11 +84,14 @@ jobs:
           test -n "$version"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           toolchain: '1.95.0'
           components: rust-docs, rustfmt
           targets: x86_64-pc-windows-gnu
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
       - name: Install Windows cross-build tools
         run: |
           sudo apt-get update
@@ -116,7 +122,7 @@ jobs:
           (cd dist && sha256sum -c "openrad-$VERSION-windows-x86_64-setup.zip.sha256")
           (cd dist && sha256sum "OpenRad-Setup-$VERSION.exe" > "OpenRad-Setup-$VERSION.exe.sha256")
       - name: Upload Windows candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openrad-${{ env.VERSION }}-windows-candidate
           path: |
@@ -133,7 +139,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Read release version
         shell: bash
         run: |
@@ -141,7 +147,7 @@ jobs:
           test -n "$version"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(git log -1 --format=%cs)" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
@@ -156,7 +162,7 @@ jobs:
           sha256sum -c "openrad-server-v$VERSION-linux-x86_64.tar.gz.sha256"
           sha256sum -c "openrad-server-v$VERSION-windows-x86_64.zip.sha256"
       - name: Upload server candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openrad-server-${{ env.VERSION }}-candidate
           path: |
