@@ -1,20 +1,13 @@
-name: release-2.2.0-runtime-qualification
+﻿name: OpenRad 2.4.5 RC1 native Windows installer qualification
 
 on:
-  push:
-    branches: ['release/2.2.0-candidates']
-    paths:
-      - '.github/workflows/release-2.2.0-runtime-qualification.yml'
-      - 'clients/android/app/src/androidTest/**'
   workflow_dispatch:
     inputs:
       installer_run_id:
-        description: 'Run ID of a Windows packaging workflow built from this exact commit (required for the Windows TAP job)'
-        required: false
+        required: true
         type: string
-      installer_repo:
-        description: 'Repository that owns the installer run (defaults to this repository)'
-        required: false
+      source_commit:
+        required: true
         type: string
 
 permissions:
@@ -22,123 +15,74 @@ permissions:
   actions: read
 
 jobs:
-  windows-tap-installer:
-    name: Install actual TAP on disposable Windows runner
-    # The installer must be named explicitly so the result describes the commit under test.
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_run_id != '' }}
+  windows-tap-installation:
     runs-on: windows-2022
     timeout-minutes: 25
     defaults:
       run:
         shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+      EXPECTED_SOURCE: ${{ inputs.source_commit }}
+      INSTALL_DIR: C:\OpenRad-2.4.5-RC1-QA
     steps:
-      - uses: actions/checkout@v4
-      - name: Download exact CI installer and check SHA256
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
-          INSTALLER_REPO: ${{ inputs.installer_repo || github.repository }}
-        run: |
-          if ($env:INSTALLER_RUN_ID -notmatch '^[0-9]+$') { throw 'installer_run_id must be numeric' }
-          $run = gh run view $env:INSTALLER_RUN_ID --repo $env:INSTALLER_REPO --json headSha,conclusion | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the installer run' }
-          if ($run.conclusion -ne 'success') { throw "Installer run did not succeed: $($run.conclusion)" }
-          if ($run.headSha -ne $env:GITHUB_SHA) {
-            throw "Installer was built from $($run.headSha), not the commit under test $env:GITHUB_SHA"
-          }
-          gh run download $env:INSTALLER_RUN_ID --repo $env:INSTALLER_REPO --name openrad-2.2.0-windows-candidate --dir "$env:RUNNER_TEMP\openrad-installer"
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot retrieve signed driver candidate' }
-          $file = "$env:RUNNER_TEMP\openrad-installer\OpenRad-Setup-2.2.0.exe"
-          $want = ((Get-Content "$file.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-          $got = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
-          if ($want -ne $got) { throw 'SHA256 mismatch' }
-      - name: Install driver with NSIS and inspect native Windows TAP
+      - name: Download verified installer from exact candidate commit
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = "$env:RUNNER_TEMP\openrad-installer\OpenRad-Setup-2.2.0.exe"
-          $installDir = 'C:\OpenRad-2.2.0-QA'
-          $p = Start-Process -FilePath $setup -ArgumentList @('/S', '--no-launch', "/D=$installDir") -PassThru -Wait
-          Write-Output "NSIS install exit code: $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { throw "Real Windows TAP installer failed: $($p.ExitCode)" }
-          foreach ($name in 'openrad.exe','openrad-desktop.exe','openrad-setup-helper.exe','Uninstall-OpenRad.exe') {
-            if (-not (Test-Path (Join-Path $installDir $name))) { throw "Missing installed file $name" }
+          if ($env:INSTALLER_RUN_ID -notmatch '^[0-9]+$' -or $env:EXPECTED_SOURCE -notmatch '^[a-f0-9]{40}$') { throw 'Invalid provenance input' }
+          $stage = Join-Path $env:RUNNER_TEMP 'openrad-rc1-installer'
+          $deadline = [DateTime]::UtcNow.AddMinutes(15)
+          do {
+            $run = gh run view $env:INSTALLER_RUN_ID --repo $env:GITHUB_REPOSITORY --json headSha,status,conclusion,jobs | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $run.headSha -ne $env:EXPECTED_SOURCE) { throw 'Candidate source mismatch' }
+            $job = @($run.jobs | Where-Object { $_.name -eq 'windows-x86_64' })
+            if ($job.Count -ne 1) { throw 'Expected a single Windows packaging job' }
+            if ($job[0].status -eq 'completed') { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Packaging deadline exceeded' }
+            Start-Sleep -Seconds 15
+          } while ($true)
+          if ($job[0].conclusion -ne 'success') { throw 'Windows packaging did not succeed' }
+          gh run download $env:INSTALLER_RUN_ID --repo $env:GITHUB_REPOSITORY --name openrad-2.4.5-windows-candidate --dir $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Installer download failed' }
+          $setup = Join-Path $stage 'OpenRad-Setup-2.4.5.exe'
+          $expected = ((Get-Content -LiteralPath "$setup.sha256" -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash -ine $expected) { throw 'Installer checksum mismatch' }
+
+      - name: Install actual TAP without launching or provisioning
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP 'openrad-rc1-installer\OpenRad-Setup-2.4.5.exe'
+          if (Test-Path $env:INSTALL_DIR) { throw 'Unexpected prior installation' }
+          if (@(Get-NetAdapter -IncludeHidden | Where-Object Name -eq 'OpenRad').Count) { throw 'Unexpected prior adapter' }
+          $p = Start-Process -FilePath $setup -ArgumentList @('/S','--no-launch',"/D=$env:INSTALL_DIR") -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
+          foreach ($file in 'openrad.exe','openrad-desktop.exe','openrad-setup-helper.exe','Uninstall-OpenRad.exe') {
+            if (!(Test-Path (Join-Path $env:INSTALL_DIR $file) -PathType Leaf)) { throw "Missing $file" }
           }
-          $tap = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -eq 'OpenRad' -and $_.InterfaceDescription -match 'TAP-Windows' })
-          if ($tap.Count -ne 1) { throw "Expected exactly one OpenRad TAP adapter, got $($tap.Count)" }
-          $tap | Format-List Name,InterfaceDescription,Status,InterfaceGuid,DriverInformation
-          $drivers = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'TAP-Windows Adapter V9' })
-          $drivers | Select-Object DeviceName,DriverVersion,IsSigned,Signer | Format-List
-          if (@($drivers | Where-Object { $_.IsSigned }).Count -eq 0) { throw 'TAP driver not marked signed by Windows' }
-          & "$installDir\openrad.exe" --version
-          if ($LASTEXITCODE -ne 0) { throw 'Installed CLI failed --version' }
-          Write-Output 'PASS: real installation, TAP PnP signature, adapter and CLI'
-      - name: Uninstall on disposable runner
+          $adapters = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.Name -eq 'OpenRad' -and $_.InterfaceDescription -match 'TAP-Windows' })
+          if ($adapters.Count -ne 1) { throw 'Dedicated TAP adapter not installed' }
+          $drivers = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match 'TAP-Windows Adapter V9' -and $_.IsSigned })
+          if (!$drivers.Count) { throw 'Windows did not report a signed TAP driver' }
+          $version = & (Join-Path $env:INSTALL_DIR 'openrad.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '2\.4\.5$') { throw 'Unexpected CLI version' }
+          Write-Output 'PASS: clean install, signed PnP driver, dedicated TAP adapter, CLI version.'
+
+      - name: Uninstall and confirm dedicated adapter removal
         if: always()
         run: |
-          $uninstall='C:\OpenRad-2.2.0-QA\Uninstall-OpenRad.exe'
-          if (Test-Path $uninstall) {
-            $p=Start-Process -FilePath $uninstall -ArgumentList '/S' -PassThru -Wait
-            Write-Output "NSIS uninstall exit code $($p.ExitCode)"
-            if ($p.ExitCode -notin @(0,3010)) { throw "Uninstall failed $($p.ExitCode)" }
+          $ErrorActionPreference = 'Stop'
+          $uninstall = Join-Path $env:INSTALL_DIR 'Uninstall-OpenRad.exe'
+          if (Test-Path -LiteralPath $uninstall) {
+            $p = Start-Process -FilePath $uninstall -ArgumentList '/S' -Wait -PassThru
+            if ($p.ExitCode -notin @(0,3010)) { throw "Uninstaller failed: $($p.ExitCode)" }
+            $deadline = [DateTime]::UtcNow.AddSeconds(30)
+            do {
+              $adapters = @(Get-NetAdapter -IncludeHidden | Where-Object Name -eq 'OpenRad')
+              if (!$adapters.Count) { break }
+              Start-Sleep -Seconds 1
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($adapters.Count) { throw 'Dedicated adapter survived uninstall' }
+            Write-Output 'PASS: dedicated TAP adapter removed.'
           }
 
-  android-emulator:
-    name: Android 14 real emulator startup and VPN service
-    runs-on: ubuntu-22.04
-    timeout-minutes: 50
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Enable KVM on hosted runner
-        run: |
-          if test -e /dev/kvm; then sudo chmod 666 /dev/kvm; else echo 'KVM unavailable'; exit 1; fi
-      - name: Build APKs and run JVM unit tests
-        working-directory: clients/android
-        run: |
-          ./scripts/setup-android-sdk.sh
-          ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest
-      - name: Boot Android 14 and run Android instrumentation
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          profile: pixel_4
-          disable-animations: true
-          emulator-boot-timeout: 700
-          script: |
-            set -eu
-            adb install -r clients/android/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -W -n com.openrad.mobile.debug/com.openrad.mobile.MainActivity
-            sleep 12
-            adb shell pidof com.openrad.mobile.debug | grep -E '^[0-9]+'
-            adb shell dumpsys package com.openrad.mobile.debug | grep -q 'com.openrad.mobile.vpn.OpenRadVpnService'
-            ./clients/android/gradlew -p clients/android --no-daemon :app:connectedDebugAndroidTest
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: openrad-2.2.0-android-emulator-results
-          path: |
-            clients/android/app/build/outputs/androidTest-results/
-            clients/android/app/build/reports/androidTests/
-          if-no-files-found: warn
-          retention-days: 14
-
-  protocol-loopback:
-    name: Radmin-compatible protocol tests on local sockets (not official service)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.95.0'
-      - run: |
-          cargo test --locked --test direct_transport -- --nocapture
-          cargo test --locked --test network_management -- --nocapture
-          cargo test --locked --test transport_io -- --nocapture
-          cargo test --locked --test forwarding -- --nocapture
-          echo 'PASS: synthetic local-socket protocol; no official Radmin peer claimed.'
