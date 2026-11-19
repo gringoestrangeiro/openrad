@@ -11,6 +11,10 @@
 - Persist desktop network preferences off the UI thread and correlate public-network searches with their session.
 - Harden elevated startup path checks and isolate control ports per session.
 - Add a privacy-filtered support bundle to the CLI and desktop.
+- Harden encrypted-record validation and temporary-file ownership; enable AES key schedule zeroization and bound Windows I/O completion lengths.
+- Keep each server's modulus scoped to its selected endpoint; test registration, catalog, join and reattach against a disposable local coordinator.
+- Add bounded parser fuzz targets and CI, release SBOM generation and inventory tests, Dependabot configuration and a security/maintenance policy.
+- Update async-executor to 1.14.1 and pin additional release/tooling actions; retain documented Linux D-Bus dependency warnings.
 - See [release notes](docs/releases/2.4.5.md) and [detailed changes](docs/releases/2.4.5-changes.md) for remaining qualification and open findings.
 
 ## 2.4.0

@@ -24,7 +24,7 @@ Development checkpoint based on the 2.4.0 audit at `d4314fa`. Not a release qual
 | S01 | Implemented | Validate source VIP and Ethernet/ARP MAC for gratuitous ARP without removing legitimate fanout; forwarding and engine regressions. |
 | S02 | Partial | Check named-pipe server PID, SID and executable path before sensitive transmission. Same-user compromise of writable installations and elevated trust boundary require additional validation; path alone is not publisher authentication. |
 | S03 | Implemented, qualification pending | Validate administrator-controlled ownership, write ACLs and reparse points for installed executable, sibling CLI, DLLs and ancestors. Ordinary-user writable-path regression passed; real elevated task qualification pending. |
-| S04 | Partial | rustix 1.1.6, tokio 1.53.3, clipboard-win 5.4.3; local advisory snapshot reports zero vulnerabilities and four warnings (three unmaintained zbus-family dependencies, yanked async-executor). Linux and clipboard qualification pending. |
+| S04 | Partial | rustix 1.1.6, tokio 1.53.3, clipboard-win 5.4.3, async-executor 1.14.1. Follow-up advisory snapshot reports zero classified vulnerabilities and three unmaintained zbus-family warnings; Linux and clipboard qualification pending. |
 | S05 | Implemented | Rust workflow actions pinned by verified upstream SHA; dedicated dependency audit job. The first development-branch Rust CI run passed. |
 | N01 | Implemented | Serialize private joins until response correlation is established; public join concurrency retained. Loopback tests. Native legacy interoperability pending. |
 | N02 | Implemented | IPC ACK uses remaining budget and does not turn a known reply into an unknown command outcome. |
@@ -69,3 +69,7 @@ The local Windows checks are not a substitute for Linux or real TAP qualificatio
 ## Tooling follow-up
 
 The initial development-branch Rust CI and sync-check passed (commit `42eb099`). The release tooling workflow failed because its startup fixture loaded only the registration script, without the ACL validator, and the current-version release documents were absent. The fixture now composes both production scripts and tests ACL, ownership, reparse points and missing ACLs without changing OS tasks. Added the two required 2.4.5 development release documents.
+
+## Independent report follow-up
+
+See [the independent-report follow-up](openrad-2.4.5-independent-followup.md) for the subsequent Rust fixes, release inventory, Dependabot, four fuzz targets, maintenance policy and new local-coordinator integration coverage. Earlier release gates remain open unless explicitly qualified there.
