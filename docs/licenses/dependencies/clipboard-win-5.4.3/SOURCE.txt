@@ -1,0 +1,4 @@
+clipboard-win 5.4.3 (BSL-1.0)
+Source: https://github.com/DoumanAsh/clipboard-win/blob/ed27008ae5d1f10cfbb266de039f0fb35fd05a56/LICENSE
+Revision from the published crate .cargo_vcs_info.json.
+SHA-256: c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
