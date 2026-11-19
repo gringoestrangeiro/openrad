@@ -196,12 +196,32 @@ pub struct Traffic {
     pub received_frames: u64,
     pub dropped: u64,
 }
+const PEER_QUALITY_HISTORY_LIMIT: usize = 16;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PeerQualityEvent {
+    Connected { transport: TransportPath },
+    Disconnected,
+    Rtt { milliseconds: f64 },
+    Timeout,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PeerQualitySample {
+    pub elapsed_ms: u64,
+    #[serde(flatten)]
+    pub event: PeerQualityEvent,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub vip: Option<Ipv4Addr>,
     pub networks: Vec<Network>,
     pub roles: BTreeMap<String, BTreeMap<u64, u32>>,
     pub peers: BTreeMap<u64, PeerView>,
+    #[serde(default)]
+    pub peer_quality: BTreeMap<u64, VecDeque<PeerQualitySample>>,
     pub interface_ready: bool,
     pub interface_error: Option<String>,
     pub traffic: Traffic,
@@ -212,6 +232,22 @@ pub struct Snapshot {
     pub retry_active: usize,
     pub force_relay: bool,
 }
+impl Snapshot {
+    fn record_peer_quality(&mut self, rid: u64, elapsed: Duration, event: PeerQualityEvent) {
+        if !self.peers.contains_key(&rid) {
+            return;
+        }
+        let history = self.peer_quality.entry(rid).or_default();
+        while history.len() >= PEER_QUALITY_HISTORY_LIMIT {
+            history.pop_front();
+        }
+        history.push_back(PeerQualitySample {
+            elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
+            event,
+        });
+    }
+}
+
 #[derive(Clone)]
 pub enum Update {
     Ping {
@@ -1789,6 +1825,9 @@ fn refresh_membership(
             );
         }
     }
+    snapshot
+        .peer_quality
+        .retain(|rid, _| snapshot.peers.contains_key(rid));
     Ok(eligible)
 }
 
@@ -2052,6 +2091,13 @@ pub fn run(
                 Err(mpsc::TryRecvError::Empty) => {}
             }
             for update in expire_pings(&mut pings, Instant::now()) {
+                if let Update::Ping { peer, .. } = &update {
+                    snapshot.record_peer_quality(
+                        *peer,
+                        started.elapsed(),
+                        PeerQualityEvent::Timeout,
+                    );
+                }
                 report(update);
             }
             let mut new_channels = BTreeSet::new();
@@ -2064,6 +2110,15 @@ pub fn run(
                             p.token == token && p.started.elapsed() < PING_TIMEOUT
                         }) {
                             let (_, id) = pings.remove(&peer).unwrap();
+                            if rtt_ms.is_finite() && rtt_ms >= 0.0 {
+                                snapshot.record_peer_quality(
+                                    peer,
+                                    started.elapsed(),
+                                    PeerQualityEvent::Rtt {
+                                        milliseconds: rtt_ms,
+                                    },
+                                );
+                            }
                             report(Update::Ping {
                                 peer,
                                 id,
@@ -2115,6 +2170,11 @@ pub fn run(
                                 if is_incoming { "Incoming" } else { "Outgoing" }
                             );
                         }
+                        snapshot.record_peer_quality(
+                            rid,
+                            started.elapsed(),
+                            PeerQualityEvent::Connected { transport: path },
+                        );
                         new_channels.insert(rid);
                     }
                     Message::Closed(rid, error) => {
@@ -2161,6 +2221,21 @@ pub fn run(
                             }
                             p.transport = None;
                             p.endpoint = None;
+                        }
+                        if was_connected {
+                            snapshot.record_peer_quality(
+                                rid,
+                                started.elapsed(),
+                                PeerQualityEvent::Disconnected,
+                            );
+                        }
+                        if let Some((_, id)) = pings.remove(&rid) {
+                            report(Update::Ping {
+                                peer: rid,
+                                id,
+                                rtt_ms: None,
+                                error: Some("Channel closed".into()),
+                            });
                         }
                         if let Some(w) = worker {
                             retired.push(w.join);
@@ -4372,6 +4447,40 @@ mod membership_tests {
         for w in workers.into_values() {
             w.join.join().unwrap();
         }
+    }
+
+    #[test]
+    fn peer_quality_history_is_bounded_and_removed_with_membership() {
+        let mut members = membership();
+        let mut snapshot = Snapshot::default();
+        let log = Diagnostics::default();
+        let workers = BTreeMap::new();
+        refresh_membership(&mut snapshot, &members, 1, &workers, &log).unwrap();
+        for i in 0..32 {
+            snapshot.record_peer_quality(
+                2,
+                Duration::from_millis(i),
+                PeerQualityEvent::Rtt {
+                    milliseconds: i as f64,
+                },
+            );
+        }
+        snapshot.record_peer_quality(999_999, Duration::ZERO, PeerQualityEvent::Timeout);
+        let history = &snapshot.peer_quality[&2];
+        assert_eq!(history.len(), PEER_QUALITY_HISTORY_LIMIT);
+        assert_eq!(history.front().unwrap().elapsed_ms, 16);
+        assert_eq!(history.back().unwrap().elapsed_ms, 31);
+        assert!(!snapshot.peer_quality.contains_key(&999_999));
+        let restored: Snapshot =
+            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+        assert_eq!(restored.peer_quality, snapshot.peer_quality);
+        members.peers.remove(&2);
+        refresh_membership(&mut snapshot, &members, 1, &workers, &log).unwrap();
+        assert!(!snapshot.peer_quality.contains_key(&2));
+        let mut old_json = serde_json::to_value(Snapshot::default()).unwrap();
+        old_json.as_object_mut().unwrap().remove("peer_quality");
+        let old: Snapshot = serde_json::from_value(old_json).unwrap();
+        assert!(old.peer_quality.is_empty());
     }
 
     #[test]
