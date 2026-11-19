@@ -46,7 +46,7 @@ Windows MSVC builds use the SDK resource compiler for the application icon; GNU 
 
 ## Remaining release gates
 
-- Complete release build and executable icon resource verification; run the Rust workflow on a development branch only after authorization.
+- Run the Rust workflow on a development branch only after authorization.
 - Windows/Linux real TAP, official Radmin client and mixed-version interoperability, disconnect/reconnect, route cleanup and concurrent GUI/CLI use, visual/accessibility checks.
 - 24–72 hour controlled soak plus roster scaling, memory, handle and latency measurements.
 - Implement the remaining findings before claiming the audit complete. Peer-quality history, incremental status and engine-path consolidation remain open.
@@ -62,6 +62,6 @@ The support bundle is available through `openrad diagnostics` (also with `--json
 - `cargo fmt --all -- --check` and `git diff --check`: passed.
 - `python scripts/check-sync.py`: passed with 987 Rust catalog keys.
 - `cargo audit --no-fetch` against the local RustSec snapshot: zero classified vulnerabilities, four warnings.
-- MSVC resource compiler generated the icon resource; a release executable icon check is still pending.
+- `cargo build --workspace --release --locked --jobs 1`: passed in 6m 26s. All three Windows executables rebuilt. Windows ExtractIconEx confirmed one embedded icon group in the desktop binary. Release CLI reported 2.4.5 and returned a valid privacy-filtered JSON diagnostic bundle using an isolated temporary profile.
 
 The local Windows checks are not a substitute for Linux or real TAP qualification. The current development commit is not a release candidate approval.
