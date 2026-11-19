@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.5 (unreleased, Rust)
+## 2.4.5 (unreleased, Rust and Android)
 
 - Harden local IPC, peer ARP validation, session lifecycle and reconnect handling.
 - Preserve usable profiles and support bounded round trips of large service preferences.
@@ -15,6 +15,10 @@
 - Keep each server's modulus scoped to its selected endpoint; test registration, catalog, join and reattach against a disposable local coordinator.
 - Add bounded parser fuzz targets and CI, release SBOM generation and inventory tests, Dependabot configuration and a security/maintenance policy.
 - Update async-executor to 1.14.1 and pin additional release/tooling actions; retain documented Linux D-Bus dependency warnings.
+- Add bounded, session-local Rust peer connection and RTT history to status JSON; resolve pending RTT requests when a channel closes.
+- Android: stop on identity replacement, retire stale session commands, validate identity and roster admission, and isolate TUN ownership by service and attachment generation.
+- Android: correlate catalog searches and batch joins with their current session, bound pagination and strengthen password cleanup.
+- Expand the Android workflow to require lint and instrumentation APK compilation; see the [Android and Rust follow-up audit](docs/audits/openrad-2.4.5-android-review.md).
 - See [release notes](docs/releases/2.4.5.md) and [detailed changes](docs/releases/2.4.5-changes.md) for remaining qualification and open findings.
 
 ## 2.4.0

@@ -1,6 +1,6 @@
 # OpenRad 2.4.5 Rust audit implementation
 
-Development checkpoint based on the 2.4.0 audit at `d4314fa`. Not a release qualification. Only the Rust CLI, daemon, desktop, platform code and their tests/workflow are in scope. Other clients and the published 2.4.0 must remain unchanged.
+Development checkpoint based on the 2.4.0 audit at `d4314fa`. Not a release qualification. This checkpoint records the original Rust scope. Subsequent development has expanded to Android; see the combined follow-up audit linked below. The published 2.4.0 remains unchanged.
 
 ## Findings
 
@@ -49,7 +49,7 @@ Windows MSVC builds use the SDK resource compiler for the application icon; GNU 
 - Run Rust and tooling CI after each relevant development-branch change.
 - Windows/Linux real TAP, official Radmin client and mixed-version interoperability, disconnect/reconnect, route cleanup and concurrent GUI/CLI use, visual/accessibility checks.
 - 24–72 hour controlled soak plus roster scaling, memory, handle and latency measurements.
-- Implement the remaining findings before claiming the audit complete. Peer-quality history, incremental status and engine-path consolidation remain open.
+- Implement the remaining findings before claiming the audit complete. Bounded peer-quality history is implemented in status JSON by the follow-up; desktop visualization, incremental status and engine-path consolidation remain open.
 - Local Linux qualification blocked: registered Ubuntu WSL distribution fails to start because its virtual disk is missing (ERROR_FILE_NOT_FOUND). No native TAP or official Radmin interoperability run was performed.
 
 The support bundle is available through `openrad diagnostics` (also with `--json`) and the desktop diagnostic preview. Export is allowlisted: event categories and typed counters only, with bounded input and retention; raw log messages, credentials and identifiers are excluded. A privacy regression passed.
@@ -73,3 +73,7 @@ The initial development-branch Rust CI and sync-check passed (commit `42eb099`).
 ## Independent report follow-up
 
 See [the independent-report follow-up](openrad-2.4.5-independent-followup.md) for the subsequent Rust fixes, release inventory, Dependabot, four fuzz targets, maintenance policy and new local-coordinator integration coverage. Earlier release gates remain open unless explicitly qualified there.
+
+## Rust and Android development follow-up
+
+See [the combined audit](openrad-2.4.5-android-review.md) for Android findings, peer quality history and the updated qualification gates.
