@@ -333,7 +333,7 @@ impl Forwarding {
     }
 }
 
-/// Validate the packet header and, except for gratuitous ARP replies, the source.
+/// Validate the packet header and bind its source to the authenticated endpoint.
 pub fn forwarding(frame: &[u8], source: Ipv4Addr, source_mac: [u8; 6]) -> Option<Forwarding> {
     if !(14..=MAX_FRAME).contains(&frame.len()) {
         return None;
@@ -362,17 +362,14 @@ pub fn forwarding(frame: &[u8], source: Ipv4Addr, source_mac: [u8; 6]) -> Option
         });
     }
     let (src, dst) = arp_endpoints(frame)?;
-    let gratuitous_reply = frame[21] == 2 && src == dst;
     // Check the ARP sender too: the Ethernet source alone is insufficient.
-    if !gratuitous_reply
-        && (src != source || frame[6..12] != source_mac || frame[22..28] != source_mac)
-    {
+    if src != source || frame[6..12] != source_mac || frame[22..28] != source_mac {
         return None;
     }
     Some(Forwarding {
         destination: dst,
         destination_mac,
-        group: gratuitous_reply || dst == source && destination_mac == [255; 6],
+        group: (frame[21] == 2 && src == dst) || (dst == source && destination_mac == [255; 6]),
         arp: true,
     })
 }

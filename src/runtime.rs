@@ -2,7 +2,7 @@
 //! control I/O, peer handshakes and Ethernet forwarding never run on the UI thread.
 use crate::{
     diagnostics::Diagnostics,
-    incoming::{Hub, IncomingRecord, Policy, Setup},
+    incoming::{acceptor_relay, Hub, IncomingRecord, Policy, Setup},
     network::{NetworkOperation, NetworkRequest},
     output::ReportDirectory,
     peer::{PeerChannel, TransportPath},
@@ -10,7 +10,7 @@ use crate::{
     scheduling::{
         peer_priority, peer_retry_delay, HandshakeBudget, RetryPacer, ADVERTISEMENT_QUEUE,
     },
-    session::Session,
+    session::{ServerDisconnect, Session},
     tap::Tap,
     tunnel,
     wake::Wake,
@@ -22,7 +22,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     net::{Ipv4Addr, SocketAddr},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
         mpsc::{self, Receiver, SyncSender},
         Arc, Mutex, PoisonError,
     },
@@ -42,7 +42,12 @@ pub enum Command {
     RetryPeers,
     RetryInterface,
     /// Adopt a TAP descriptor that a frontend authorized (Linux terminal sudo).
-    AttachInterface(InterfaceDescriptor),
+    AttachAuthorizedInterface {
+        descriptor: InterfaceDescriptor,
+        vip: Ipv4Addr,
+        name: String,
+        expires: Instant,
+    },
     Ping {
         peer: u64,
     },
@@ -51,6 +56,73 @@ pub enum Command {
         id: u64,
         command: Box<Command>,
     },
+    /// Local request with a deadline for dispatch to the selected transport.
+    Timed {
+        id: u64,
+        command: Box<Command>,
+        deadline: Arc<CommandDeadline>,
+    },
+}
+
+const WAITING_TO_SEND: u8 = 0;
+const DISPATCH_STARTED: u8 = 1;
+const CANCELLED_BEFORE_SEND: u8 = 2;
+
+#[derive(Debug)]
+pub struct CommandDeadline {
+    until: Instant,
+    state: AtomicU8,
+}
+impl CommandDeadline {
+    pub fn new(until: Instant) -> Self {
+        Self {
+            until,
+            state: AtomicU8::new(WAITING_TO_SEND),
+        }
+    }
+
+    /// True if the caller can guarantee that dispatch will never begin.
+    pub fn cancel_before_send(&self) -> bool {
+        self.state.compare_exchange(
+            WAITING_TO_SEND,
+            CANCELLED_BEFORE_SEND,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) != Err(DISPATCH_STARTED)
+    }
+
+    fn expired(&self) -> bool {
+        Instant::now() >= self.until || self.state.load(Ordering::Acquire) == CANCELLED_BEFORE_SEND
+    }
+
+    fn begin_send(&self) -> bool {
+        if self.expired() {
+            self.cancel_before_send();
+            return false;
+        }
+        self.state
+            .compare_exchange(
+                WAITING_TO_SEND,
+                DISPATCH_STARTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+}
+
+impl Command {
+    fn into_request(self) -> (Option<u64>, Option<Arc<CommandDeadline>>, Self) {
+        match self {
+            Self::Tagged { id, command } => (Some(id), None, *command),
+            Self::Timed {
+                id,
+                command,
+                deadline,
+            } => (Some(id), Some(deadline), *command),
+            command => (None, None, command),
+        }
+    }
 }
 /// Take-once slot for a frontend-authorized interface descriptor. Clones share
 /// the slot, so a duplicated command can never adopt the descriptor twice.
@@ -70,11 +142,11 @@ impl std::fmt::Debug for InterfaceDescriptor {
     }
 }
 #[cfg(target_os = "linux")]
-fn adopt_interface(file: std::fs::File, name: &str) -> Result<Tap> {
-    Tap::from_descriptor_named(file, name)
+fn adopt_interface(file: std::fs::File, name: &str, vip: Ipv4Addr) -> Result<Tap> {
+    Tap::from_descriptor_for_session(file, name, vip)
 }
 #[cfg(not(target_os = "linux"))]
-fn adopt_interface(_: std::fs::File, _: &str) -> Result<Tap> {
+fn adopt_interface(_: std::fs::File, _: &str, _: Ipv4Addr) -> Result<Tap> {
     bail!("frontend interface authorization is only supported on Linux")
 }
 
@@ -321,7 +393,7 @@ impl Options {
 enum Message {
     Membership(Membership),
     Update(Update),
-    ControlFailed(String),
+    ControlFailed(anyhow::Error),
     Connected(u64, [u8; 6], TransportPath, bool, Option<SocketAddr>),
     PeerRecord(IncomingRecord),
     Closed(u64, Option<String>),
@@ -348,6 +420,9 @@ pub const NETWORK_JOIN_DELAY: Duration = Duration::from_millis(50);
 // second when the UI only needs periodic status and traffic counters.
 pub const SNAPSHOT_REPORT_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_CONCURRENT_JOINS: usize = 128;
+const CONTROL_RECEIVE_TIMEOUT: Duration = Duration::from_secs(45);
+const TCP_PEER_RECEIVE_TIMEOUT: Duration = Duration::from_secs(60);
+const QUEUED_COMMAND_TIMEOUT: &str = "The command expired before it was sent";
 
 #[derive(Clone, Copy)]
 struct PingProbe {
@@ -441,13 +516,42 @@ struct Pending {
     id: u64,
     client_id: Option<u64>,
     until: Instant,
+    private_join: bool,
+    correlated_auth: bool,
 }
 fn is_join_command(command: &Command) -> bool {
     match command {
         Command::Join(_) | Command::Network(NetworkRequest::Join { .. }) => true,
-        Command::Tagged { command, .. } => is_join_command(command),
+        Command::Tagged { command, .. } | Command::Timed { command, .. } => {
+            is_join_command(command)
+        }
         _ => false,
     }
+}
+
+fn is_private_join(command: &Command) -> bool {
+    match command {
+        Command::Network(NetworkRequest::Join { password, .. }) => password.is_some(),
+        Command::Tagged { command, .. } | Command::Timed { command, .. } => {
+            is_private_join(command)
+        }
+        _ => false,
+    }
+}
+
+fn queued_command_expired(command: &Command) -> Option<Update> {
+    let Command::Timed { id, deadline, .. } = command else {
+        return None;
+    };
+    deadline.expired().then(|| {
+        deadline.cancel_before_send();
+        Update::CommandResult {
+            id: *id,
+            message: QUEUED_COMMAND_TIMEOUT.into(),
+            error: true,
+            catalog: None,
+        }
+    })
 }
 /// Pace writes using the sender's clock, independent of when a remote reader
 /// gets scheduled to consume records that may already be buffered together.
@@ -473,6 +577,8 @@ struct ControlConfig {
     heartbeat_interval: Duration,
     operation_timeout: Duration,
     wake: Option<Arc<Wake>>,
+    receive_timeout: Duration,
+    relay_guard: Arc<acceptor_relay::Guard>,
 }
 impl Default for ControlConfig {
     fn default() -> Self {
@@ -481,6 +587,8 @@ impl Default for ControlConfig {
             heartbeat_interval: Duration::from_secs(10),
             operation_timeout: Duration::from_secs(20),
             wake: None,
+            receive_timeout: CONTROL_RECEIVE_TIMEOUT,
+            relay_guard: Arc::new(acceptor_relay::Guard::new()),
         }
     }
 }
@@ -488,7 +596,7 @@ fn forward_command(sender: &SyncSender<Command>, command: Command) -> Result<Opt
     match sender.try_send(command) {
         Ok(()) => Ok(None),
         Err(mpsc::TrySendError::Full(command)) => Ok(Some(match command {
-            Command::Tagged { id, .. } => Update::CommandResult {
+            Command::Tagged { id, .. } | Command::Timed { id, .. } => Update::CommandResult {
                 id,
                 message: "Too many network commands are waiting. Try again shortly.".into(),
                 error: true,
@@ -515,6 +623,9 @@ fn control_loop(
     let mut received = 0u64;
     let mut last_operation = None;
     let mut last_receive = Instant::now();
+    // Legacy servers can remain silent for op 4. Turn on the application
+    // deadline only once this attachment demonstrates the op 17 response.
+    let mut heartbeat_replies = false;
     let mut heartbeats = 0u64;
     let mut heartbeat_late_ms = 0u128;
     let mut backpressure_since = None;
@@ -529,10 +640,12 @@ fn control_loop(
         let mut next_id = 100;
         let mut sequence = 0u32;
         let mut pending: Vec<Pending> = Vec::new();
-        let mut deferred = None;
+        let mut deferred = VecDeque::new();
+        let mut correlated_private_joins = false;
         let mut joins = JoinPacer::new(Instant::now());
         let mut heartbeat = Instant::now();
         let mut health = Instant::now() + Duration::from_secs(30);
+        let relay_request_prefix = u32v(CLIENT_OP, 22);
         loop {
             if stop.load(Ordering::Relaxed) {
                 break;
@@ -577,17 +690,36 @@ fn control_loop(
                 );
             }
             for bytes in wire.try_iter().take(32) {
+                let relay_request = bytes.starts_with(&relay_request_prefix);
+                if relay_request && !config.relay_guard.allowed() {
+                    continue;
+                }
                 session
                     .send(&bytes)
                     .context("sending incoming peer advertisement")?;
+                if relay_request {
+                    config.relay_guard.sent_at(Instant::now());
+                }
                 if Instant::now() >= heartbeat {
                     break;
                 }
             }
-            if deferred.is_none() && pending.len() < MAX_CONCURRENT_JOINS {
-                deferred = commands.try_recv().ok();
+            if deferred.len() + pending.len() < MAX_CONCURRENT_JOINS
+                && deferred.back().is_none_or(is_join_command)
+            {
+                if let Ok(command) = commands.try_recv() {
+                    deferred.push_back(command);
+                }
             }
-            if deferred.as_ref().is_some_and(|command| {
+            deferred.retain(|command| {
+                if let Some(expired) = queued_command_expired(command) {
+                    outbox.push(Message::Update(expired));
+                    false
+                } else {
+                    true
+                }
+            });
+            let ready_command = deferred.iter().position(|command| {
                 let join = is_join_command(command);
                 (pending.is_empty()
                     || (join
@@ -595,61 +727,80 @@ fn control_loop(
                             .iter()
                             .all(|p| matches!(&p.kind, PendingKind::Network(n) if n.is_join()))))
                     && (!join || joins.ready(Instant::now()))
-                    && pending.len() < MAX_CONCURRENT_JOINS
-            }) {
-                if let Some(command) = deferred.take() {
-                    let (client_id, command) = match command {
-                        Command::Tagged { id, command } => (Some(id), *command),
-                        command => (None, command),
+                    && (!is_private_join(command)
+                        || correlated_private_joins
+                        || !pending.iter().any(|p| p.private_join))
+            });
+            if let Some(command) = ready_command.and_then(|index| deferred.remove(index)) {
+                let private_join = is_private_join(&command);
+                let (client_id, deadline, command) = command.into_request();
+                next_id += 1;
+                sequence += 1;
+                let prepared = (|| -> Result<_> {
+                    let request = match command {
+                        Command::Search { query, cursor } => {
+                            let bytes = public_list(&query, next_id, cursor)?;
+                            return Ok((PendingKind::Search { query, cursor }, bytes));
+                        }
+                        Command::Join(name) => NetworkRequest::public_join(name),
+                        Command::Leave(network) => NetworkRequest::Leave { network },
+                        Command::Network(request) => request,
+                        _ => anyhow::bail!("unsupported control command"),
                     };
-                    next_id += 1;
-                    sequence += 1;
-                    let prepared = (|| -> Result<_> {
-                        let request = match command {
-                            Command::Search { query, cursor } => {
-                                let bytes = public_list(&query, next_id, cursor)?;
-                                return Ok((PendingKind::Search { query, cursor }, bytes));
-                            }
-                            Command::Join(name) => NetworkRequest::public_join(name),
-                            Command::Leave(network) => NetworkRequest::Leave { network },
-                            Command::Network(request) => request,
-                            _ => anyhow::bail!("unsupported control command"),
-                        };
-                        let (operation, bytes) =
-                            NetworkOperation::start(request, next_id, sequence)?;
-                        Ok((PendingKind::Network(Box::new(operation)), bytes))
-                    })();
-                    match prepared {
-                        Ok((kind, bytes)) => {
+                    let (operation, bytes) = NetworkOperation::start(request, next_id, sequence)?;
+                    Ok((PendingKind::Network(Box::new(operation)), bytes))
+                })();
+                match prepared {
+                    Ok((kind, bytes)) => {
+                        if deadline
+                            .as_ref()
+                            .is_none_or(|deadline| deadline.begin_send())
+                        {
                             session.send(&bytes).context("sending network command")?;
                             if matches!(&kind, PendingKind::Network(n) if n.is_join()) {
                                 joins.started(Instant::now());
                             }
                             diagnostics.event("control_operation_started", json!({
-                                "request_id": next_id,
-                                "kind": if matches!(&kind, PendingKind::Search { .. }) { "search" } else { "network" },
-                            }));
+                                    "request_id": next_id,
+                                    "kind": if matches!(&kind, PendingKind::Search { .. }) { "search" } else { "network" },
+                                }));
                             pending.push(Pending {
                                 kind,
                                 id: next_id,
                                 client_id,
-                                until: Instant::now() + config.operation_timeout,
+                                until: deadline.as_ref().map_or_else(
+                                    || Instant::now() + config.operation_timeout,
+                                    |deadline| {
+                                        deadline
+                                            .until
+                                            .min(Instant::now() + config.operation_timeout)
+                                    },
+                                ),
+                                private_join,
+                                correlated_auth: true,
                             });
-                        }
-                        Err(error) => {
-                            outbox.push(Message::Update(match client_id {
-                                Some(id) => Update::CommandResult {
-                                    id,
-                                    message: error.to_string(),
-                                    error: true,
-                                    catalog: None,
-                                },
-                                None => Update::Operation {
-                                    message: error.to_string(),
-                                    error: true,
-                                },
+                        } else if let Some(id) = client_id {
+                            outbox.push(Message::Update(Update::CommandResult {
+                                id,
+                                message: QUEUED_COMMAND_TIMEOUT.into(),
+                                error: true,
+                                catalog: None,
                             }));
                         }
+                    }
+                    Err(error) => {
+                        outbox.push(Message::Update(match client_id {
+                            Some(id) => Update::CommandResult {
+                                id,
+                                message: error.to_string(),
+                                error: true,
+                                catalog: None,
+                            },
+                            None => Update::Operation {
+                                message: error.to_string(),
+                                error: true,
+                            },
+                        }));
                     }
                 }
             }
@@ -678,10 +829,10 @@ fn control_loop(
                 }
                 // A timed-out mutation has an unknown remote outcome. Reattach before
                 // allowing more commands; never optimistically report a successful leave.
-                bail!("network operation timed out; reconnect to reload server membership");
+                bail!("network operation timed out after dispatch; outcome is unknown, reconnect to reload server membership");
             }
             let poll_ms =
-                if deferred.as_ref().is_some_and(is_join_command) && !joins.ready(Instant::now()) {
+                if deferred.front().is_some_and(is_join_command) && !joins.ready(Instant::now()) {
                     joins.remaining(Instant::now()).as_millis().clamp(1, 20) as i32
                 } else {
                     20
@@ -691,6 +842,10 @@ fn control_loop(
                 .ready(poll_ms)
                 .context("polling attachment connection")?
             {
+                anyhow::ensure!(
+                    !heartbeat_replies || last_receive.elapsed() < config.receive_timeout,
+                    "No authenticated control records received before the heartbeat deadline"
+                );
                 continue;
             }
             let data = session.receive().context("receiving attachment record")?;
@@ -699,6 +854,7 @@ fn control_loop(
             last_receive = Instant::now();
             last_operation = Some(operation);
             match operation {
+                17 => heartbeat_replies = true,
                 38 => {
                     membership
                         .snapshot(&data)
@@ -712,21 +868,23 @@ fn control_loop(
                     outbox.push(Message::Membership(membership.clone()));
                 }
                 16 => {
+                    let disconnect = ServerDisconnect::parse(&data)?;
                     let fields = records(&data)?;
                     diagnostics.event("server_disconnect", json!({
-                        "acceptor_relay_disabled": crate::incoming::acceptor_relay::server_objected(),
-                        "reason_code": optional(&fields, 0x010001d2)?.map(int32).transpose()?,
+                        "acceptor_relay_disabled": !disconnect.identity_replaced()
+                            && config.relay_guard.objected_at(Instant::now()),
+                        "reason_code": disconnect.reason,
                         "record_bytes": data.len(),
                         "fields": fields.iter().map(|field| json!({"tag": format!("0x{:08x}", field.tag), "bytes": field.value.len()})).collect::<Vec<_>>(),
                     }));
-                    bail!("server disconnected the session");
+                    return Err(disconnect.into());
                 }
                 44 => {
                     // A refusal on the shared session. Record its shape, and stop
                     // acceptor relay requests if it answered one of them.
                     let fields = records(&data)?;
                     diagnostics.event("server_refusal", json!({
-                        "acceptor_relay_disabled": crate::incoming::acceptor_relay::server_objected(),
+                        "acceptor_relay_disabled": config.relay_guard.objected_at(Instant::now()),
                         "record_bytes": data.len(),
                         "fields": fields.iter().map(|field| json!({"tag": format!("0x{:08x}", field.tag), "bytes": field.value.len()})).collect::<Vec<_>>(),
                     }));
@@ -750,6 +908,13 @@ fn control_loop(
                 _ => {}
             }
             let auth_target = if operation == 40 {
+                let fields = records(&data)?;
+                let auth = records(field(&fields, 0x131c)?)?;
+                let correlated = optional(&auth, 0x02000340)?.is_some()
+                    || optional(&auth, 0x010003be)?.is_some();
+                if !correlated {
+                    correlated_private_joins = false;
+                }
                 let mut targets = Vec::new();
                 for (index, p) in pending.iter().enumerate() {
                     if let PendingKind::Network(network) = &p.kind {
@@ -762,6 +927,7 @@ fn control_loop(
                 let Some(index) = targets.first().copied() else {
                     continue;
                 };
+                pending[index].correlated_auth &= correlated;
                 Some(index)
             } else {
                 None
@@ -804,6 +970,9 @@ fn control_loop(
                             session.send(&bytes)?;
                         }
                         if let Some(result) = progress.complete {
+                            if p.private_join && !result.error && p.correlated_auth {
+                                correlated_private_joins = true;
+                            }
                             complete = Some((result.message, result.error));
                         }
                     }
@@ -846,8 +1015,7 @@ fn control_loop(
         let _ = events.send(Message::ControlFailed(
             result
                 .err()
-                .map(|e| format!("{e:#}"))
-                .unwrap_or_else(|| "Control connection closed".into()),
+                .unwrap_or_else(|| anyhow::anyhow!("Control connection closed")),
         ));
         if let Some(wake) = &config.wake {
             wake.notify();
@@ -1398,10 +1566,19 @@ fn forward_peer(
     let rid = channel.peer.rid;
     let mut heartbeat = Instant::now();
     let mut sequence = 0u32;
+    activity.last_receive = Some(Instant::now());
     let mut probe: Option<(PingProbe, Option<(u32, Instant)>)> = None;
     let mut send_buffer = Vec::with_capacity((10 + tunnel::MAX_FRAME + 9).div_ceil(16) * 16);
     while !stop.load(Ordering::Relaxed) {
         wake.clear();
+        if channel.transport.path != Some(TransportPath::DirectUdp) {
+            anyhow::ensure!(
+                activity
+                    .last_receive
+                    .is_some_and(|last| last.elapsed() < TCP_PEER_RECEIVE_TIMEOUT),
+                "Authenticated TCP peer stopped responding"
+            );
+        }
         if probe.is_some_and(|(p, _)| p.started.elapsed() >= PING_TIMEOUT) {
             probe = None;
         }
@@ -1730,6 +1907,25 @@ pub fn run(
             }
             let (client_id, command) = match command {
                 Ok(Command::Tagged { id, command }) => (Some(id), Ok(*command)),
+                Ok(Command::Timed {
+                    id,
+                    command,
+                    deadline,
+                }) if matches!(&*command, Command::Ping { .. }) => {
+                    if !deadline.begin_send() {
+                        if let Command::Ping { peer } = *command {
+                            report(Update::Ping {
+                                peer,
+                                id: Some(id),
+                                rtt_ms: None,
+                                error: Some(QUEUED_COMMAND_TIMEOUT.into()),
+                            });
+                        }
+                        (None, Err(mpsc::TryRecvError::Empty))
+                    } else {
+                        (Some(id), Ok(*command))
+                    }
+                }
                 other => (None, other),
             };
             match command {
@@ -1771,11 +1967,25 @@ pub fn run(
                         attempted_interface = false;
                     }
                 }
-                Ok(Command::AttachInterface(descriptor)) => {
+                Ok(Command::AttachAuthorizedInterface {
+                    descriptor,
+                    vip: authorized_vip,
+                    name,
+                    expires,
+                }) => {
                     // Dropping an unused descriptor closes it and removes the
                     // frontend's interface, so a ready TAP is never replaced.
                     if let Some(file) = descriptor.take().filter(|_| {
-                        interface_worker.is_none() && tap.is_none() && !options.disable_interface
+                        interface_worker.is_none()
+                            && tap.is_none()
+                            && !options.disable_interface
+                            && authorized_vip == vip
+                            && Instant::now() < expires
+                            && name
+                                == options
+                                    .interface_name
+                                    .as_deref()
+                                    .unwrap_or(crate::tap::DEFAULT_LINUX_INTERFACE_NAME)
                     }) {
                         attempted_interface = true;
                         snapshot.interface_error = None;
@@ -1784,7 +1994,7 @@ pub fn run(
                             .clone()
                             .unwrap_or_else(|| crate::tap::DEFAULT_LINUX_INTERFACE_NAME.into());
                         interface_worker = Some(thread::spawn(move || {
-                            adopt_interface(file, &interface_name)
+                            adopt_interface(file, &interface_name, vip)
                         }));
                         report(Update::State(snapshot.clone()));
                     }
@@ -2204,7 +2414,11 @@ pub fn run(
                             &interface_name,
                         )
                     }
-                    #[cfg(not(target_os = "linux"))]
+                    #[cfg(windows)]
+                    {
+                        Tap::create_lan_with_helper_cancellable(vip, &helper, &interface_stop)
+                    }
+                    #[cfg(not(any(windows, target_os = "linux")))]
                     {
                         let _ = interface_stop;
                         Tap::create_lan_with_helper(vip, &helper)
@@ -2270,6 +2484,14 @@ pub fn run(
                                 }) =>
                             {
                                 break
+                            }
+                            Err(error)
+                                if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                                    e.kind() == std::io::ErrorKind::InvalidData
+                                }) =>
+                            {
+                                snapshot.traffic.dropped += 1;
+                                continue;
                             }
                             Err(error) => return Err(error),
                         };
@@ -2353,15 +2575,15 @@ pub fn run(
     }));
     drop(tap);
     stop.store(true, Ordering::Relaxed);
-    if let Some(worker) = interface_worker {
-        let _ = worker.join(); // Drops any interface completed during shutdown.
-    }
     for worker in workers.values() {
         worker.cancel();
     }
     drop(forwarder);
     drop(rx); // Unblock producers before joining, including full event queues.
     drop(control_tx);
+    if let Some(worker) = interface_worker {
+        let _ = worker.join();
+    }
     let _ = control.join();
     for worker in workers.into_values() {
         let _ = worker.join.join();
@@ -2510,7 +2732,7 @@ mod control_tests {
                         diagnostics,
                         heartbeat_interval: Duration::from_millis(25),
                         operation_timeout,
-                        wake: None,
+                        ..ControlConfig::default()
                     },
                 )
             });
@@ -2691,19 +2913,6 @@ mod control_tests {
             network::{network_identity, NetworkPassword},
         };
         let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(5));
-        for (id, name) in [(31, "Private one"), (32, "Private two")] {
-            h.commands
-                .send(Command::Tagged {
-                    id,
-                    command: Box::new(Command::Network(NetworkRequest::Join {
-                        name: name.into(),
-                        password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
-                    })),
-                })
-                .unwrap();
-        }
-        let hello_one = h.receive_operation(39);
-        let hello_two = h.receive_operation(39);
         let blob = |data: &[u8]| {
             field(
                 &records(field(&records(data).unwrap(), 0x131c).unwrap()).unwrap(),
@@ -2712,19 +2921,6 @@ mod control_tests {
             .unwrap()
             .to_vec()
         };
-        let mut servers = ["Private one", "Private two"].map(|name| {
-            ShServer::with_private(
-                network_identity(name),
-                b"synthetic password\0",
-                vec![3; 16],
-                num_bigint::BigUint::from(789123u32),
-            )
-            .unwrap()
-        });
-        let parameters = [
-            servers[0].hello(&blob(&hello_one)).unwrap(),
-            servers[1].hello(&blob(&hello_two)).unwrap(),
-        ];
         let auth = |blob: &[u8], sequence: u32| {
             [
                 u32v(SERVER_OP, 40),
@@ -2740,9 +2936,63 @@ mod control_tests {
             ]
             .concat()
         };
-        // Sequence alone is sufficient for legacy servers that omit request IDs.
+        let send_join = |h: &Harness, id, name: &str| {
+            h.commands
+                .send(Command::Tagged {
+                    id,
+                    command: Box::new(Command::Network(NetworkRequest::Join {
+                        name: name.into(),
+                        password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
+                    })),
+                })
+                .unwrap();
+        };
+        let make_server = |name: &str| {
+            ShServer::with_private(
+                network_identity(name),
+                b"synthetic password\0",
+                vec![3; 16],
+                num_bigint::BigUint::from(789123u32),
+            )
+            .unwrap()
+        };
+        send_join(&h, 30, "Probe LAN");
+        let hello = h.receive_operation(39);
+        let mut server = make_server("Probe LAN");
+        let parameters = server.hello(&blob(&hello)).unwrap();
+        h.remote.send(&auth(&parameters, 1)).unwrap();
+        let public = h.receive_operation(39);
+        let challenge = server.public(&blob(&public)).unwrap();
+        h.remote.send(&auth(&challenge, 1)).unwrap();
+        let proof = h.receive_operation(39);
+        let confirmation = server.proof(&blob(&proof)).unwrap().0;
+        h.remote.send(&auth(&confirmation, 1)).unwrap();
+        h.remote
+            .send(&join_acknowledgement(101, "Probe LAN", [3; 16]))
+            .unwrap();
+        h.remote.send(&join_approval([3; 16])).unwrap();
+        loop {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(_) => {}
+                Message::Update(Update::CommandResult {
+                    id: 30,
+                    error: false,
+                    ..
+                }) => break,
+                _ => panic!("correlation probe failed"),
+            }
+        }
+        send_join(&h, 31, "Private one");
+        send_join(&h, 32, "Private two");
+        let hello_one = h.receive_operation(39);
+        let hello_two = h.receive_operation(39);
+        let mut servers = ["Private one", "Private two"].map(make_server);
+        let parameters = [
+            servers[0].hello(&blob(&hello_one)).unwrap(),
+            servers[1].hello(&blob(&hello_two)).unwrap(),
+        ];
         for (index, name, guid) in [(1, "Private two", [2; 16]), (0, "Private one", [1; 16])] {
-            let sequence = index as u32 + 1;
+            let sequence = index as u32 + 2;
             h.remote.send(&auth(&parameters[index], sequence)).unwrap();
             let public = h.receive_operation(39);
             let challenge = servers[index].public(&blob(&public)).unwrap();
@@ -2751,7 +3001,7 @@ mod control_tests {
             let confirmation = servers[index].proof(&blob(&proof)).unwrap().0;
             h.remote.send(&auth(&confirmation, sequence)).unwrap();
             h.remote
-                .send(&join_acknowledgement(101 + index as u64, name, guid))
+                .send(&join_acknowledgement(102 + index as u64, name, guid))
                 .unwrap();
             h.remote.send(&join_approval(guid)).unwrap();
         }
@@ -2882,41 +3132,61 @@ mod control_tests {
         assert!(!results[&52]);
     }
     #[test]
-    fn ambiguous_password_replies_cannot_advance_multiple_private_joins() {
+    fn unknown_servers_serialize_private_joins_without_losing_attachment() {
         use crate::network::NetworkPassword;
         let mut h = Harness::with_timeout(false, Diagnostics::default(), Duration::from_secs(3));
-        for name in ["Private one", "Private two"] {
+        for (id, name) in [(51, "Private one"), (52, "Private two")] {
             h.commands
-                .send(Command::Network(NetworkRequest::Join {
-                    name: name.into(),
-                    password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
-                }))
+                .send(Command::Tagged {
+                    id,
+                    command: Box::new(Command::Network(NetworkRequest::Join {
+                        name: name.into(),
+                        password: Some(NetworkPassword::new("synthetic password".into()).unwrap()),
+                    })),
+                })
                 .unwrap();
         }
         h.receive_operation(39);
-        h.receive_operation(39);
-        h.remote
-            .send(
+        let until = Instant::now() + Duration::from_millis(150);
+        while Instant::now() < until {
+            if h.remote.stream.ready(20).unwrap() {
+                let data = h.remote.receive().unwrap();
+                assert_ne!(
+                    int32(field(&records(&data).unwrap(), CLIENT_OP).unwrap()).unwrap(),
+                    39
+                );
+            }
+        }
+        let refusal = [
+            u32v(SERVER_OP, 40),
+            tlv(
+                0x131c,
                 &[
-                    u32v(SERVER_OP, 40),
+                    u64v(0x02000303, 0),
                     tlv(
-                        0x131c,
-                        &[
-                            u64v(0x02000303, 0),
-                            tlv(
-                                0x0a00030e,
-                                &crate::crypto::sh_record(0x10000000, &0u32.to_be_bytes()),
-                            ),
-                        ]
-                        .concat(),
+                        0x0a00030e,
+                        &crate::crypto::sh_record(0x10000000, &0u32.to_be_bytes()),
                     ),
                 ]
                 .concat(),
-            )
-            .unwrap();
-        assert!(
-            matches!(h.events.recv_timeout(Duration::from_secs(3)).unwrap(), Message::ControlFailed(error) if error.contains("Ambiguous network password reply"))
-        );
+            ),
+        ]
+        .concat();
+        h.remote.send(&refusal).unwrap();
+        h.receive_operation(39);
+        h.remote.send(&refusal).unwrap();
+        let mut results = BTreeMap::new();
+        while results.len() < 2 {
+            match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Message::Membership(_) => {}
+                Message::Update(Update::CommandResult { id, error, .. }) => {
+                    results.insert(id, error);
+                }
+                _ => panic!("uncorrelated private joins disrupted the attachment"),
+            }
+        }
+        assert_eq!(results, BTreeMap::from([(51, true), (52, true)]));
+        h.receive_operation(4);
     }
 
     #[test]
@@ -3012,7 +3282,7 @@ mod control_tests {
         h.receive_operation(39);
         match h.events.recv_timeout(Duration::from_secs(3)).unwrap() {
             Message::ControlFailed(error) => {
-                assert!(error.contains("reconnect to reload server membership"))
+                assert!(format!("{error:#}").contains("reconnect to reload server membership"))
             }
             _ => panic!("an uncertain mutation must not preserve stale authorization"),
         }

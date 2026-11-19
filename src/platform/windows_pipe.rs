@@ -7,21 +7,29 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    ffi::{OsStr, OsString},
     io,
-    os::windows::{ffi::OsStrExt, io::OwnedHandle},
+    os::windows::{
+        ffi::{OsStrExt, OsStringExt},
+        io::{AsRawHandle, OwnedHandle},
+    },
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
     Foundation::{ERROR_PIPE_BUSY, ERROR_SEM_TIMEOUT, GENERIC_READ, GENERIC_WRITE},
+    Globalization::{CompareStringOrdinal, CSTR_EQUAL},
     Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
         PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     },
-    System::Pipes::{
-        CreateNamedPipeW, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_TYPE_BYTE, PIPE_WAIT,
+    System::{
+        Pipes::{
+            CreateNamedPipeW, GetNamedPipeServerProcessId, WaitNamedPipeW, PIPE_READMODE_BYTE,
+            PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+        },
+        Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION},
     },
 };
 
@@ -46,15 +54,87 @@ pub fn exists(path: &Path) -> bool {
     matches!(io::Error::last_os_error().raw_os_error(), Some(code) if code == ERROR_PIPE_BUSY as i32 || code == ERROR_SEM_TIMEOUT as i32)
 }
 
+fn image_path(path: &OsStr) -> Vec<u16> {
+    let path: Vec<_> = path.encode_wide().collect();
+    // GetModuleFileNameW and QueryFullProcessImageNameW can disagree on the
+    // extended-length DOS prefix while naming the same installation.
+    const EXTENDED: &[u16] = &[92, 92, 63, 92];
+    const UNC: &[u16] = &[85, 78, 67, 92];
+    let Some(rest) = path.strip_prefix(EXTENDED) else {
+        return path;
+    };
+    if let Some(server) = rest.strip_prefix(UNC) {
+        return [92, 92].into_iter().chain(server.iter().copied()).collect();
+    }
+    rest.to_vec()
+}
+
+fn same_image(actual: &OsStr, expected: &OsStr) -> bool {
+    let actual = image_path(actual);
+    let expected = image_path(expected);
+    // SAFETY: both slices remain alive and their lengths are explicit.
+    unsafe {
+        CompareStringOrdinal(
+            actual.as_ptr(),
+            actual.len() as i32,
+            expected.as_ptr(),
+            expected.len() as i32,
+            1,
+        ) == CSTR_EQUAL
+    }
+}
+
+fn verify_server(handle: &OwnedHandle, expected: Option<&Path>) -> io::Result<()> {
+    const UNTRUSTED: &str = "Local service endpoint does not belong to this OpenRad installation";
+    let mut pid = 0;
+    // SAFETY: the connected pipe owns the handle and writes only to the supplied PID.
+    if unsafe { GetNamedPipeServerProcessId(handle.as_raw_handle(), &mut pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Retain the process object while checking both its user and image.
+    let server =
+        unsafe { windows_io::owned(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)) }?;
+    if windows_security::process_user_sid(server.as_raw_handle())? != windows_security::user_sid()?
+    {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, UNTRUSTED));
+    }
+    let mut image = vec![0u16; 32768];
+    let mut size = image.len() as u32;
+    // SAFETY: live process handle, writable image buffer and capacity parameter.
+    if unsafe {
+        QueryFullProcessImageNameW(server.as_raw_handle(), 0, image.as_mut_ptr(), &mut size)
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let actual = OsString::from_wide(&image[..size as usize]);
+    let trusted = if let Some(expected) = expected {
+        same_image(&actual, expected.canonicalize()?.as_os_str())
+    } else {
+        let executable = std::env::current_exe()?;
+        let cli = executable.with_file_name("openrad.exe");
+        same_image(&actual, cli.as_os_str()) || same_image(&actual, executable.as_os_str())
+    };
+    if trusted {
+        Ok(())
+    } else {
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, UNTRUSTED))
+    }
+}
+
 pub struct Connection {
     handle: Arc<OwnedHandle>,
 }
 impl Connection {
     #[cfg(test)]
     pub fn connect(path: &Path) -> io::Result<Self> {
-        Self::connect_timeout(path, Duration::from_secs(5))
+        Self::connect_timeout(path, Duration::from_secs(5), None)
     }
-    pub fn connect_timeout(path: &Path, timeout: Duration) -> io::Result<Self> {
+    pub fn connect_timeout(
+        path: &Path,
+        timeout: Duration,
+        expected: Option<&Path>,
+    ) -> io::Result<Self> {
         if timeout.is_zero() {
             return Err(io::ErrorKind::TimedOut.into());
         }
@@ -76,9 +156,10 @@ impl Connection {
             };
             match handle {
                 Ok(handle) => {
+                    verify_server(&handle, expected)?;
                     return Ok(Self {
                         handle: Arc::new(handle),
-                    })
+                    });
                 }
                 Err(e)
                     if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
@@ -139,8 +220,8 @@ impl Connection {
         }
         Ok(())
     }
-    pub fn acknowledge(&mut self) -> io::Result<()> {
-        self.write_message(b"A", Duration::from_secs(5))
+    pub fn acknowledge(&mut self, timeout: Duration) -> io::Result<()> {
+        self.write_message(b"A", timeout)
     }
     pub fn wait_for_acknowledgement(&mut self) -> io::Result<()> {
         if self.read_message(1, Duration::from_secs(5))? == b"A" {
@@ -229,7 +310,7 @@ mod tests {
         ));
         let mut listener = Listener::bind(&path).unwrap();
         assert_eq!(
-            Connection::connect_timeout(&path, Duration::ZERO)
+            Connection::connect_timeout(&path, Duration::ZERO, None)
                 .err()
                 .unwrap()
                 .kind(),
@@ -253,7 +334,11 @@ mod tests {
                 client.read_message(64, Duration::from_secs(2)).unwrap(),
                 b"reply"
             );
-            client.acknowledge().unwrap();
+            assert_eq!(
+                client.acknowledge(Duration::ZERO).unwrap_err().kind(),
+                io::ErrorKind::TimedOut
+            );
+            client.acknowledge(Duration::from_secs(2)).unwrap();
         });
         let until = Instant::now() + Duration::from_secs(2);
         let mut connection = loop {

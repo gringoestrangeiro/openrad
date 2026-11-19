@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.5 (unreleased, Rust)
+
+- Harden local IPC, peer ARP validation, session lifecycle and reconnect handling.
+- Preserve usable profiles and support bounded round trips of large service preferences.
+- Bind Linux TAP adoption to the authorized session and improve Windows TAP cancellation.
+- Apply desktop preference patches without overwriting unrelated CLI changes.
+- Restore the Windows executable icon on MSVC builds and update Rust dependencies.
+- See [audit implementation status](docs/audits/openrad-2.4.5-status.md) for remaining qualification and open findings.
+
 ## 2.4.0
 
 - Android TCP rendezvous (issue #25): outgoing peers now advertise a bounded

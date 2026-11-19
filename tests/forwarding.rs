@@ -101,8 +101,13 @@ fn shared_validation_preserves_forwarding_for_valid_mutated_and_truncated_frames
             for target in targets {
                 for mac in [tunnel::mac(target), [255; 6], [2; 6]] {
                     let gratuitous_reply = frame.len() <= tunnel::MAX_FRAME
-                        && tunnel::arp_endpoints(frame)
-                            .is_some_and(|(src, dst)| frame[21] == 2 && src == dst);
+                        && tunnel::arp_endpoints(frame).is_some_and(|(src, dst)| {
+                            frame[21] == 2
+                                && src == dst
+                                && src == source
+                                && frame[6..12] == sender_mac
+                                && frame[22..28] == sender_mac
+                        });
                     let expected = gratuitous_reply
                         || original_deliver_to(frame, source, sender_mac, target, mac);
                     assert_eq!(

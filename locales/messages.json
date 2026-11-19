@@ -4623,5 +4623,190 @@
     "Voltar para o servidor oficial do OpenRad",
     "Вернуться на официальный сервер OpenRad",
     "Quay lại máy chủ OpenRad chính thức"
+  ],
+  "Could not finish saving after the frontend closed: {error}": [
+    "Não foi possível concluir o salvamento após fechar a interface: {error}",
+    "Не удалось завершить сохранение после закрытия интерфейса: {error}",
+    "Không thể hoàn tất lưu sau khi giao diện đóng: {error}"
+  ],
+  "No saved identity to reset": [
+    "Nenhuma identidade salva para redefinir",
+    "Нет сохранённой идентичности для сброса",
+    "Không có danh tính đã lưu để đặt lại"
+  ],
+  "The VPN was stopped. Connect to restart it using the saved server selection": [
+    "A VPN foi interrompida. Conecte-se para reiniciá-la usando o servidor salvo",
+    "VPN остановлена. Подключитесь, чтобы запустить её с сохранённым сервером",
+    "VPN đã dừng. Hãy kết nối để khởi động lại bằng máy chủ đã lưu"
+  ],
+  "The server was saved. Its identity could not be read. Resolve the storage error and choose Connect to retry": [
+    "Servidor salvo, mas não foi possível ler sua identidade. Resolva o erro de armazenamento e escolha Conectar para tentar novamente",
+    "Сервер сохранён, но его идентичность не удалось прочитать. Устраните ошибку хранилища и нажмите «Подключиться»",
+    "Máy chủ đã được lưu nhưng không thể đọc danh tính. Hãy khắc phục lỗi lưu trữ và chọn Kết nối để thử lại"
+  ],
+  "VPN preferences": [
+    "Preferências da VPN",
+    "Настройки VPN",
+    "Tùy chọn VPN"
+  ],
+  "device name": [
+    "nome do dispositivo",
+    "имя устройства",
+    "tên thiết bị"
+  ],
+  "Windows startup task": [
+    "Tarefa de inicialização do Windows",
+    "Задача автозапуска Windows",
+    "Tác vụ khởi động Windows"
+  ],
+  "Settings only partly saved ({0}). The Windows startup task could not be restored: {rollback}": [
+    "Configurações salvas parcialmente ({0}). Não foi possível restaurar a tarefa de inicialização do Windows: {rollback}",
+    "Настройки сохранены частично ({0}). Не удалось восстановить задачу автозапуска Windows: {rollback}",
+    "Chỉ lưu được một phần cài đặt ({0}). Không thể khôi phục tác vụ khởi động Windows: {rollback}"
+  ],
+  "Settings only partly saved. Applied: {0}": [
+    "Configurações salvas parcialmente. Aplicadas: {0}",
+    "Настройки сохранены частично. Применено: {0}",
+    "Chỉ lưu được một phần cài đặt. Đã áp dụng: {0}"
+  ],
+  "The replacement registration receipt is invalid. Reconnect with your saved identity": [
+    "O comprovante de registro da substituição é inválido. Reconecte-se com a identidade salva",
+    "Запись о регистрации новой идентичности недействительна. Подключитесь с сохранённой идентичностью",
+    "Biên nhận đăng ký thay thế không hợp lệ. Hãy kết nối lại bằng danh tính đã lưu"
+  ],
+  "An earlier replacement registration did not finish. Reconnect with your saved identity or import a backed-up identity": [
+    "Um registro de substituição anterior não foi concluído. Reconecte-se com a identidade salva ou importe uma identidade de backup",
+    "Предыдущая регистрация новой идентичности не завершена. Подключитесь с сохранённой идентичностью или импортируйте резервную копию",
+    "Lần đăng ký thay thế trước chưa hoàn tất. Kết nối lại bằng danh tính đã lưu hoặc nhập bản sao lưu"
+  ],
+  "Recording replacement registration before contacting the server": [
+    "Registrando a intenção de substituição antes de contatar o servidor",
+    "Запись намерения заменить идентичность перед обращением к серверу",
+    "Ghi nhận yêu cầu đăng ký thay thế trước khi liên hệ máy chủ"
+  ],
+  "Replacement registration directory missing": [
+    "Diretório de registro da substituição ausente",
+    "Отсутствует каталог регистрации новой идентичности",
+    "Thiếu thư mục đăng ký thay thế"
+  ],
+  "Syncing the replacement registration receipt": [
+    "Sincronizando o comprovante de registro da substituição",
+    "Синхронизация записи о регистрации новой идентичности",
+    "Đang đồng bộ biên nhận đăng ký thay thế"
+  ],
+  "Could not remove the saved replacement registration receipt: {error}": [
+    "Não foi possível remover o comprovante de registro da substituição: {error}",
+    "Не удалось удалить сохранённую запись о регистрации новой идентичности: {error}",
+    "Không thể xóa biên nhận đăng ký thay thế đã lưu: {error}"
+  ],
+  "Missing registration endpoint": [
+    "Endpoint de registro ausente",
+    "Отсутствует адрес регистрации",
+    "Thiếu địa chỉ đăng ký"
+  ],
+  "Could not remove incomplete local profile; inspect it before retrying": [
+    "Não foi possível remover o perfil local incompleto; verifique-o antes de tentar novamente",
+    "Не удалось удалить неполный локальный профиль; проверьте его перед повторной попыткой",
+    "Không thể xóa hồ sơ cục bộ chưa hoàn chỉnh; hãy kiểm tra trước khi thử lại"
+  ],
+  "Registration may have reached the server; preserve this profile for recovery": [
+    "O registro pode ter chegado ao servidor; preserve este perfil para recuperação",
+    "Запрос регистрации мог дойти до сервера; сохраните этот профиль для восстановления",
+    "Yêu cầu đăng ký có thể đã đến máy chủ; hãy giữ hồ sơ này để khôi phục"
+  ],
+  "Stop was accepted but the service has not stopped yet": [
+    "A solicitação de parada foi aceita, mas o serviço ainda não parou",
+    "Запрос остановки принят, но служба ещё не остановлена",
+    "Yêu cầu dừng đã được chấp nhận nhưng dịch vụ chưa dừng"
+  ],
+  "Interface setup did not complete; check service status": [
+    "A configuração da interface não foi concluída; verifique o status do serviço",
+    "Настройка интерфейса не завершена; проверьте состояние службы",
+    "Thiết lập giao diện chưa hoàn tất; hãy kiểm tra trạng thái dịch vụ"
+  ],
+  "Service did not return a session generation": [
+    "O serviço não retornou a geração da sessão",
+    "Служба не вернула номер поколения сеанса",
+    "Dịch vụ không trả về thế hệ phiên"
+  ],
+  "Interface authorization expired; retry": [
+    "A autorização da interface expirou; tente novamente",
+    "Срок разрешения настройки интерфейса истёк; повторите попытку",
+    "Quyền thiết lập giao diện đã hết hạn; hãy thử lại"
+  ],
+  "Settings are too large": [
+    "As configurações excedem o tamanho permitido",
+    "Размер настроек превышает допустимый предел",
+    "Cài đặt vượt quá giới hạn kích thước"
+  ],
+  "Network command expired before it was sent": [
+    "O comando de rede expirou antes de ser enviado",
+    "Срок действия сетевой команды истёк до отправки",
+    "Lệnh mạng đã hết hạn trước khi gửi"
+  ],
+  "Network command outcome is unknown; check `openrad status` before retrying": [
+    "O resultado do comando de rede é desconhecido; verifique `openrad status` antes de tentar novamente",
+    "Результат сетевой команды неизвестен; проверьте `openrad status` перед повторной попыткой",
+    "Chưa rõ kết quả lệnh mạng; kiểm tra `openrad status` trước khi thử lại"
+  ],
+  "Interface authorization is no longer current; retry": [
+    "A autorização da interface não é mais válida; tente novamente",
+    "Разрешение настройки интерфейса больше не действует; повторите попытку",
+    "Quyền thiết lập giao diện không còn hiệu lực; hãy thử lại"
+  ],
+  "The command expired before it was sent": [
+    "O comando expirou antes de ser enviado",
+    "Срок действия команды истёк до отправки",
+    "Lệnh đã hết hạn trước khi gửi"
+  ],
+  "network operation timed out after dispatch; outcome is unknown, reconnect to reload server membership": [
+    "a operação de rede expirou após o envio; o resultado é desconhecido, reconecte-se para recarregar as participações no servidor",
+    "время ожидания сетевой операции истекло после отправки; результат неизвестен, переподключитесь для обновления списка участников",
+    "thao tác mạng hết thời gian chờ sau khi gửi; chưa rõ kết quả, hãy kết nối lại để tải lại danh sách thành viên"
+  ],
+  "No authenticated control records received before the heartbeat deadline": [
+    "Nenhum registro de controle autenticado recebido antes do prazo do heartbeat",
+    "До истечения срока ожидания не поступило аутентифицированных управляющих записей",
+    "Không nhận được bản ghi điều khiển đã xác thực trước thời hạn heartbeat"
+  ],
+  "Authenticated TCP peer stopped responding": [
+    "O peer TCP autenticado parou de responder",
+    "Аутентифицированный TCP-узел перестал отвечать",
+    "Peer TCP đã xác thực ngừng phản hồi"
+  ],
+  "The server replaced this connection with another session for the same identity": [
+    "O servidor substituiu esta conexão por outra sessão da mesma identidade",
+    "Сервер заменил это подключение другим сеансом с той же идентичностью",
+    "Máy chủ đã thay thế kết nối này bằng phiên khác của cùng danh tính"
+  ],
+  "The server disconnected the session (reason {reason})": [
+    "O servidor desconectou a sessão (motivo {reason})",
+    "Сервер отключил сеанс (причина {reason})",
+    "Máy chủ đã ngắt phiên (lý do {reason})"
+  ],
+  "The server disconnected the session": [
+    "O servidor desconectou a sessão",
+    "Сервер отключил сеанс",
+    "Máy chủ đã ngắt phiên"
+  ],
+  "Could not sync the parent directory of a saved file: {error}": [
+    "Não foi possível sincronizar o diretório pai de um arquivo salvo: {error}",
+    "Не удалось синхронизировать родительский каталог сохранённого файла: {error}",
+    "Không thể đồng bộ thư mục cha của tệp đã lưu: {error}"
+  ],
+  "received TAP descriptor does not allow reading and writing": [
+    "o descritor TAP recebido não permite leitura e escrita",
+    "полученный дескриптор TAP не допускает чтение и запись",
+    "bộ mô tả TAP nhận được không cho phép đọc và ghi"
+  ],
+  "Cannot inspect OpenRad TAP addresses": [
+    "Não foi possível verificar os endereços do TAP do OpenRad",
+    "Не удалось проверить адреса TAP OpenRad",
+    "Không thể kiểm tra địa chỉ TAP của OpenRad"
+  ],
+  "OpenRad TAP interface is missing the active session's IPv4 address and /8 prefix": [
+    "A interface TAP do OpenRad não possui o endereço IPv4 e o prefixo /8 da sessão ativa",
+    "У интерфейса TAP OpenRad отсутствуют IPv4-адрес и префикс /8 активного сеанса",
+    "Giao diện TAP OpenRad thiếu địa chỉ IPv4 và tiền tố /8 của phiên đang hoạt động"
   ]
 }

@@ -297,7 +297,7 @@ fn initialize(
     );
     let modulus = if let Some(path) = modulus_path {
         let bytes = openrad::file_io::read_bounded(&path, 4096)?;
-        ensure!(!bytes.is_empty(), "public modulus size is invalid");
+        openrad::crypto::validate_modulus(&bytes)?;
         Some(bytes.to_vec())
     } else {
         None
@@ -307,28 +307,54 @@ fn initialize(
     } else {
         None
     };
-    let reports = ReportDirectory::new(&dir.identity_root().join("profile"))?;
-    if let Some(modulus) = &modulus {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        let mut file = options.open(dir.modulus())?;
-        file.write_all(modulus)?;
+    let imported = source
+        .as_ref()
+        .map(|path| openrad::protocol::Identity::load(path))
+        .transpose()?;
+    if let Some(endpoint) = &endpoint {
+        openrad::crypto::validate_modulus(modulus.as_deref().unwrap_or(&endpoint.modulus))?;
+        openrad::protocol::validate_node_name(name.as_deref().context("--node-name is required")?)?;
     }
-    let identity = match (source, endpoint) {
-        (Some(path), _) => {
-            let id = openrad::protocol::Identity::load(&path)?;
-            id.save(&reports)?;
-            id
+    let reports = ReportDirectory::new(&dir.identity_root().join("profile"))?;
+    let mut committed = false;
+    let result = (|| -> Result<_> {
+        if let Some(modulus) = &modulus {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options.open(dir.modulus())?;
+            file.write_all(modulus)?;
+            file.sync_all()?;
         }
-        (None, None) => unreachable!(),
-        (None, Some(endpoint)) => Session::provision(
+        if let Some(id) = imported {
+            id.save(&reports)?;
+            return Ok(id);
+        }
+        let endpoint = endpoint.context("Missing registration endpoint")?;
+        Session::provision_with_commit(
             modulus.as_deref().unwrap_or(&endpoint.modulus),
             name.as_deref().context("--node-name is required")?,
             host.as_deref().unwrap_or(&endpoint.host),
             &reports,
-        )?,
+            &mut || {
+                committed = true;
+                Ok(())
+            },
+        )
+    })();
+    let identity = match result {
+        Ok(identity) => identity,
+        Err(error) if !committed => {
+            std::fs::remove_dir_all(&reports.directory)
+                .context("Could not remove incomplete local profile; inspect it before retrying")?;
+            return Err(error);
+        }
+        Err(error) => {
+            return Err(error.context(
+                "Registration may have reached the server; preserve this profile for recovery",
+            ))
+        }
     };
     Ok(daemon::Reply {
         ok: true,
@@ -501,7 +527,15 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
                 while dir.endpoint_exists() && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                reply
+                if reply.ok && dir.endpoint_exists() {
+                    daemon::Reply {
+                        ok: false,
+                        message: "Stop was accepted but the service has not stopped yet".into(),
+                        data: json!({"phase": "stopping"}),
+                    }
+                } else {
+                    reply
+                }
             }
             Err(_) if !dir.endpoint_exists() => daemon::Reply {
                 ok: true,
@@ -573,7 +607,16 @@ fn run_command(cli: Cli) -> Result<daemon::Reply> {
         Command::RetryPeers => daemon::request(&dir, &Request::RetryPeers)?,
         Command::RetryInterface if terminal_authorization_available() => {
             if authorize_interface_in_terminal(&dir, false)? {
-                daemon::request(&dir, &Request::Status)?
+                let status = daemon::request(&dir, &Request::Status)?;
+                if status.data["snapshot"]["interface_ready"] != true {
+                    daemon::Reply {
+                        ok: false,
+                        message: "Interface setup did not complete; check service status".into(),
+                        data: status.data,
+                    }
+                } else {
+                    status
+                }
             } else {
                 daemon::request(&dir, &Request::RetryInterface)?
             }
@@ -700,8 +743,8 @@ fn authorize_interface_in_terminal(dir: &daemon::DataDir, started: bool) -> Resu
         LanguagePreference::System,
     );
     // A fresh service connects first; an existing one answers immediately.
-    let until = Instant::now() + Duration::from_secs(if started { 30 } else { 3 });
-    let vip = loop {
+    let until = Instant::now() + Duration::from_secs(if started { 50 } else { 3 });
+    let (vip, generation, interface_name) = loop {
         let status = daemon::request(dir, &Request::Status)?;
         let snapshot = &status.data["snapshot"];
         if status.data["interface_disabled"] == true || snapshot["interface_ready"] == true {
@@ -714,7 +757,14 @@ fn authorize_interface_in_terminal(dir: &daemon::DataDir, started: bool) -> Resu
                 .as_str()
                 .and_then(|v| v.parse::<Ipv4Addr>().ok())
             {
-                break vip;
+                let generation = status.data["session_generation"]
+                    .as_u64()
+                    .context("Service did not return a session generation")?;
+                let name = status.data["preferences"]["interface_name"]
+                    .as_str()
+                    .context("Service did not return an interface name")?
+                    .to_owned();
+                break (vip, generation, name);
             }
         }
         if status.data["phase"] == "error" || Instant::now() >= until {
@@ -728,18 +778,21 @@ fn authorize_interface_in_terminal(dir: &daemon::DataDir, started: bool) -> Resu
             "The VPN interface needs administrator permission; sudo will ask for your password."
         )
     );
-    let status = daemon::request(dir, &Request::Status)?;
-    let interface_name = status.data["preferences"]["interface_name"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Service did not return an interface name"))?;
-    tap::validate_linux_interface_name(interface_name)?;
+    tap::validate_linux_interface_name(&interface_name)?;
+    let authorized_at = Instant::now();
     let attached = tap::authorize_lan_in_terminal(
         vip,
         &std::env::current_exe()?,
         &AtomicBool::new(false),
-        interface_name,
+        &interface_name,
     )
-    .and_then(|file| daemon::attach_interface(dir, file));
+    .and_then(|file| {
+        ensure!(
+            authorized_at.elapsed() < Duration::from_secs(120),
+            "Interface authorization expired; retry"
+        );
+        daemon::attach_interface(dir, file, generation, vip, interface_name)
+    });
     match attached {
         Ok(reply) if reply.ok => {
             let until = Instant::now() + Duration::from_secs(15);

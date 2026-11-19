@@ -2,16 +2,18 @@
 use crate::windows_io;
 use std::{
     ffi::OsString,
-    io::{self, Write},
+    io::{self, Read, Write},
     os::windows::{
         ffi::{OsStrExt, OsStringExt},
         io::AsRawHandle,
     },
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::LocalFree,
+    Foundation::{LocalFree, HANDLE},
     Security::{
         Authorization::{
             ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -77,8 +79,58 @@ pub(crate) fn powershell_command(script: &str) -> io::Result<Command> {
 /// the whole recovery program would exceed CreateProcess's command-line limit.
 /// The fixed bootstrap still uses the protected executable/modules/working dir.
 pub(crate) fn powershell_output(script: &str) -> io::Result<Output> {
+    powershell_output_until(
+        script,
+        &AtomicBool::new(false),
+        Instant::now() + Duration::from_secs(90),
+    )
+}
+
+fn private_job(child: &Child) -> io::Result<std::os::windows::io::OwnedHandle> {
+    use windows_sys::Win32::System::JobObjects::*;
+    let job = unsafe { windows_io::owned(CreateJobObjectW(std::ptr::null(), std::ptr::null())) }?;
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle(),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(job)
+}
+
+fn bounded_output(reader: impl Read) -> io::Result<Vec<u8>> {
+    const LIMIT: u64 = 1024 * 1024;
+    let mut bytes = Vec::new();
+    reader.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PowerShell output exceeded its limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn powershell_output_until(
+    script: &str,
+    stop: &AtomicBool,
+    deadline: Instant,
+) -> io::Result<Output> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    if stop.load(Ordering::Relaxed) || Instant::now() >= deadline {
+        return Err(io::Error::from(io::ErrorKind::Interrupted));
+    }
     let mut child = powershell_command(
         "[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))",
     )?
@@ -87,15 +139,65 @@ pub(crate) fn powershell_output(script: &str) -> io::Result<Output> {
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .spawn()?;
+    let job = match private_job(&child) {
+        Ok(job) => job,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
     let mut input = child.stdin.take().expect("piped PowerShell stdin");
-    if let Err(error) = input.write_all(script.as_bytes()) {
-        drop(input);
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(error);
-    }
-    drop(input);
-    child.wait_with_output()
+    let stdout = child.stdout.take().expect("piped PowerShell stdout");
+    let stderr = child.stderr.take().expect("piped PowerShell stderr");
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(move || input.write_all(script.as_bytes()));
+        let stdout = scope.spawn(move || bounded_output(stdout));
+        let stderr = scope.spawn(move || bounded_output(stderr));
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {}
+                Err(error) => break Err(error),
+            }
+            if stop.load(Ordering::Relaxed) {
+                break Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "PowerShell recovery cancelled",
+                ));
+            }
+            if Instant::now() >= deadline {
+                break Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "PowerShell recovery exceeded its deadline",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        drop(job);
+        if status.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let input_result = writer
+            .join()
+            .map_err(|_| io::Error::other("PowerShell input worker failed"))?;
+        let stdout = stdout
+            .join()
+            .map_err(|_| io::Error::other("PowerShell stdout worker failed"))?;
+        let stderr = stderr
+            .join()
+            .map_err(|_| io::Error::other("PowerShell stderr worker failed"))?;
+        let status = status?;
+        if status.success() {
+            input_result?;
+        }
+        Ok(Output {
+            status,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
+    })
 }
 
 struct LocalAllocation(*mut std::ffi::c_void);
@@ -133,9 +235,14 @@ pub fn token_is_elevated() -> io::Result<bool> {
     Ok(elevation.TokenIsElevated != 0)
 }
 pub fn user_sid() -> io::Result<String> {
+    // SAFETY: this pseudo-handle identifies the process for the duration of the call.
+    process_user_sid(unsafe { GetCurrentProcess() })
+}
+
+pub(crate) fn process_user_sid(process: HANDLE) -> io::Result<String> {
     let mut raw = std::ptr::null_mut();
-    // SAFETY: borrowed process pseudo-handle; token output owned immediately.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } == 0 {
+    // SAFETY: process is a borrowed handle and a successful token output is owned immediately.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut raw) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let token = unsafe { windows_io::owned(raw) }?;
@@ -264,7 +371,7 @@ mod tests {
     #[test]
     fn large_immutable_powershell_program_accepts_utf8_stdin() {
         // Requires only Windows' built-in PowerShell; no elevation or networking.
-        let text = "não, ошибка, lỗi";
+        let text = "nÃ£o, Ð¾ÑˆÐ¸Ð±ÐºÐ°, lá»—i";
         let script = format!(
             "# {}\n$text = '{text}'; if ($text.Length -ne {}) {{ exit 2 }}; [Console]::Write('stdin-ok')",
             "synthetic padding ".repeat(2000),
@@ -274,6 +381,18 @@ mod tests {
         let output = powershell_output(&script).unwrap();
         assert!(output.status.success(), "{:?}", output.stderr);
         assert_eq!(output.stdout, b"stdin-ok");
+    }
+
+    #[test]
+    fn sleeping_powershell_is_terminated_at_external_deadline() {
+        let started = Instant::now();
+        let result = powershell_output_until(
+            "Start-Sleep -Seconds 60",
+            &AtomicBool::new(false),
+            started + Duration::from_millis(500),
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

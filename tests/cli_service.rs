@@ -52,6 +52,26 @@ impl Drop for Harness {
 }
 
 #[test]
+fn invalid_import_does_not_reserve_the_profile() {
+    let harness = Harness::new();
+    let source = harness.dir.join("source.json");
+    fs::write(&source, b"invalid").unwrap();
+    assert!(!harness
+        .run(&["init", "--identity", source.to_str().unwrap()])
+        .status
+        .success());
+    assert!(!harness.dir.join("state/profile").exists());
+    fs::write(&source, IDENTITY).unwrap();
+    harness.ok(&["init", "--identity", source.to_str().unwrap()]);
+    let dir = openrad::daemon::DataDir::open(Some(harness.dir.join("state"))).unwrap();
+    assert_eq!(dir.load_identity().unwrap().rid, 123);
+    assert!(!harness
+        .run(&["init", "--identity", source.to_str().unwrap()])
+        .status
+        .success());
+}
+
+#[test]
 fn offline_cli_rename_respects_profile_and_service_ownership() {
     for profile_owned in [true, false] {
         let harness = Harness::new();
@@ -261,6 +281,8 @@ fn gui_service_start_and_cli_start_share_one_process_in_either_order() {
         harness.ok(&["init", "--identity", source.to_str().unwrap()]);
         let dir = DataDir::open(Some(harness.dir.join("state"))).unwrap();
         let executable = Path::new(env!("CARGO_BIN_EXE_openrad"));
+        #[cfg(windows)]
+        let dir = dir.with_service_executable(executable);
         if gui_first {
             assert!(daemon::spawn_with_executable(&dir, true, executable).unwrap());
         } else {
@@ -336,6 +358,8 @@ fn simultaneous_frontend_starts_are_serialized_and_offline_rename_preserves_secr
     let saved = dir.load_identity().unwrap();
     assert_eq!(saved.node_name, "new device name");
     assert_eq!(saved.password().unwrap(), [1, 2, 3, 4, 5, 6]);
+    #[cfg(windows)]
+    let dir = dir.with_service_executable(Path::new(env!("CARGO_BIN_EXE_openrad")));
     let starts: Vec<_> = (0..4)
         .map(|_| {
             let dir = dir.clone();

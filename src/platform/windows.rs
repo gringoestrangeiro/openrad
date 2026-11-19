@@ -8,7 +8,15 @@ use crate::{
     windows_io::{self, Operation},
 };
 use anyhow::{bail, ensure, Context, Result};
-use std::{net::Ipv4Addr, os::windows::io::OwnedHandle, path::Path, sync::Arc};
+use std::{
+    net::Ipv4Addr,
+    os::windows::io::OwnedHandle,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use windows_sys::Win32::{
     Foundation::{ERROR_FILE_NOT_FOUND, ERROR_OBJECT_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE},
     NetworkManagement::{
@@ -48,11 +56,19 @@ impl Drop for MibTable {
         }
     }
 }
-fn check_addresses(luid: NET_LUID_LH) -> Result<()> {
+fn check_cancelled(stop: &AtomicBool) -> Result<()> {
+    ensure!(!stop.load(Ordering::Relaxed), "TAP setup cancelled");
+    Ok(())
+}
+
+fn check_addresses(luid: NET_LUID_LH, stop: &AtomicBool) -> Result<()> {
     crate::windows_radmin::prepare_addresses(
         unsafe { luid.Value },
-        interface_addresses,
-        crate::windows_radmin::recover,
+        || {
+            check_cancelled(stop)?;
+            interface_addresses()
+        },
+        |indices| crate::windows_radmin::recover(indices, stop),
         || std::thread::sleep(std::time::Duration::from_millis(250)),
     )
 }
@@ -124,22 +140,35 @@ impl Tap {
         })
     }
     pub fn create(vip: Ipv4Addr, peers: &[Ipv4Addr]) -> Result<Self> {
-        Self::create_configured(vip, peers, false)
+        Self::create_configured(vip, peers, false, &AtomicBool::new(false))
     }
     pub fn create_with_helper(vip: Ipv4Addr, peers: &[Ipv4Addr], _: &Path) -> Result<Self> {
         Self::create(vip, peers)
     }
     pub fn create_lan_with_helper(vip: Ipv4Addr, _: &Path) -> Result<Self> {
-        Self::create_configured(vip, &[], true)
+        Self::create_configured(vip, &[], true, &AtomicBool::new(false))
     }
-    fn create_configured(vip: Ipv4Addr, peers: &[Ipv4Addr], lan: bool) -> Result<Self> {
-        let result = Self::configure(vip, peers, lan);
+    pub(crate) fn create_lan_with_helper_cancellable(
+        vip: Ipv4Addr,
+        _: &Path,
+        stop: &AtomicBool,
+    ) -> Result<Self> {
+        Self::create_configured(vip, &[], true, stop)
+    }
+    fn create_configured(
+        vip: Ipv4Addr,
+        peers: &[Ipv4Addr],
+        lan: bool,
+        stop: &AtomicBool,
+    ) -> Result<Self> {
+        let result = Self::configure(vip, peers, lan, stop);
         if let Err(error) = &result {
             early_log::fatal_error(error);
         }
         result
     }
-    fn configure(vip: Ipv4Addr, peers: &[Ipv4Addr], lan: bool) -> Result<Self> {
+    fn configure(vip: Ipv4Addr, peers: &[Ipv4Addr], lan: bool, stop: &AtomicBool) -> Result<Self> {
+        check_cancelled(stop)?;
         contract::validate_parameters(vip, peers)?;
         early_log::tap_step(TapStage::DiscoverAdapter);
         let guid = adapter_guid()?;
@@ -160,7 +189,8 @@ impl Tap {
             "Enable the OpenRad TAP-Windows6 adapter before connecting"
         );
         early_log::tap_step(TapStage::CheckAddresses);
-        check_addresses(luid)?;
+        check_addresses(luid, stop)?;
+        check_cancelled(stop)?;
         early_log::tap_step(TapStage::CreateFileW);
         let path = windows_io::wide(&contract::device_path(&guid)?);
         // SAFETY: exclusive, non-inheritable overlapped handle, owned immediately.
@@ -199,6 +229,7 @@ impl Tap {
                 && u32::from_ne_bytes(tap.control.data(4).try_into()?) >= 1500,
             "TAP-Windows6 driver MTU must be at least 1500"
         );
+        check_cancelled(stop)?;
         early_log::tap_step(TapStage::SetMediaStatus);
         tap.media(true)?;
         let mut interface = MIB_IPINTERFACE_ROW {
@@ -235,6 +266,7 @@ impl Tap {
         tap.address = Some(address);
         early_log::tap_step(TapStage::ConfigureRoutes);
         for (destination, prefix) in contract::routes(lan, peers) {
+            check_cancelled(stop)?;
             let mut route = MIB_IPFORWARD_ROW2::default();
             unsafe {
                 InitializeIpForwardEntry(&mut route);
@@ -262,6 +294,7 @@ impl Tap {
         // The setup thread hands this device to the engine and exits. Windows
         // cancels pending I/O issued by an exiting thread, so the engine must
         // start the first read itself rather than inherit a cancelled request.
+        check_cancelled(stop)?;
         early_log::tap_step(TapStage::Ready);
         Ok(tap)
     }
@@ -293,13 +326,18 @@ impl Tap {
             return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock).into());
         }
         let len = self.read.finish(0)?;
-        ensure!(
-            (14..=tunnel::MAX_FRAME).contains(&len),
-            "invalid TAP-Windows6 Ethernet frame length"
-        );
+        if !(14..=tunnel::MAX_FRAME).contains(&len) {
+            self.read.read()?;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid TAP-Windows6 Ethernet frame length",
+            )
+            .into());
+        }
         let mut frame = self.read.data(len).to_vec();
         self.read.read()?;
-        contract::translate_mac(&mut frame, self.adapter_mac, self.wire_mac)?;
+        contract::translate_mac(&mut frame, self.adapter_mac, self.wire_mac)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         Ok(frame)
     }
     pub fn send(&mut self, frame: &[u8]) -> Result<()> {

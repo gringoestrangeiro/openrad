@@ -26,12 +26,24 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
+        #[cfg(unix)]
+        sync_parent(path);
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(unix)]
+pub(crate) fn sync_parent(path: &Path) {
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+            // Rename already committed; callers must continue with the new contents.
+            log::warn!("Could not sync the parent directory of a saved file: {error}");
+        }
+    }
 }
 
 pub fn read_bounded(path: &Path, limit: u64) -> Result<Zeroizing<Vec<u8>>> {

@@ -75,17 +75,20 @@ pub(crate) fn prepare_addresses(
 }
 
 #[cfg(windows)]
-pub(crate) fn recover(indices: &[u32]) -> Result<()> {
-    invoke_recovery(Some(indices))
+pub(crate) fn recover(indices: &[u32], stop: &std::sync::atomic::AtomicBool) -> Result<()> {
+    invoke_recovery(Some(indices), Some(stop))
 }
 
 #[cfg(windows)]
 pub(crate) fn prepare_installation() -> Result<()> {
-    invoke_recovery(None)
+    invoke_recovery(None, None)
 }
 
 #[cfg(windows)]
-fn invoke_recovery(indices: Option<&[u32]>) -> Result<()> {
+fn invoke_recovery(
+    indices: Option<&[u32]>,
+    stop: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<()> {
     use anyhow::Context;
 
     ensure!(
@@ -114,8 +117,15 @@ fn invoke_recovery(indices: Option<&[u32]>) -> Result<()> {
     crate::early_log::event(format_args!(
         "Preparing official Radmin VPN: administrator recovery with SYSTEM fallback"
     ));
-    let output = crate::windows_security::powershell_output(&script)
-        .context("Cannot start SYSTEM recovery for the official Radmin VPN adapter")?;
+    let output = match stop {
+        Some(stop) => crate::windows_security::powershell_output_until(
+            &script,
+            stop,
+            std::time::Instant::now() + std::time::Duration::from_secs(90),
+        ),
+        None => crate::windows_security::powershell_output(&script),
+    }
+    .context("Cannot start SYSTEM recovery for the official Radmin VPN adapter")?;
     ensure!(output.status.success(), "Cannot stop RvControlSvc.exe/RvRvpnGui.exe or disable the official Radmin VPN adapter using administrator/SYSTEM recovery: {}", String::from_utf8_lossy(&output.stderr).trim());
     crate::early_log::event(format_args!(
         "Official Radmin VPN processes stopped and adapters disabled"

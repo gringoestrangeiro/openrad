@@ -1,10 +1,6 @@
 //! Embed the canonical logo as the Windows executable icon.
 //!
-//! Zero-dependency: invokes the MinGW resource compiler directly instead of
-//! pulling a `winres`-style build crate (which is absent from the offline
-//! cargo cache). No-op on non-Windows targets, and any resource-compiler
-//! failure degrades to a warning so a missing `windres` never breaks the
-//! cross build — the executable just ships without an embedded icon.
+//! Use the native Windows SDK resource compiler for MSVC and windres for GNU.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -17,10 +13,18 @@ fn main() {
     // CWD of a build script is the package root (desktop/).
     let icon = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../assets/logo.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
+    for name in [
+        "WINDRES",
+        "RC",
+        "WindowsSdkDir",
+        "WindowsSDKVersion",
+        "ProgramFiles(x86)",
+        "PATH",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
     if let Err(reason) = embed(&icon) {
-        println!(
-            "cargo:warning=openrad-desktop: embedding the window icon failed ({reason}); continuing without it"
-        );
+        panic!("cannot embed the OpenRad executable icon: {reason}");
     }
 }
 
@@ -35,6 +39,9 @@ fn embed(icon: &Path) -> Result<(), String> {
     let rc = out.join("openrad-logo.rc");
     let rc_contents = format!("1 ICON \"{}\"\n", rc_path(&icon));
     std::fs::write(&rc, rc_contents).map_err(|e| e.to_string())?;
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        return embed_msvc(&rc, &out);
+    }
     let object = out.join("openrad-logo.o");
     let candidates = [
         env::var("WINDRES").unwrap_or_default(),
@@ -53,7 +60,6 @@ fn embed(icon: &Path) -> Result<(), String> {
         {
             Ok(output) if output.status.success() && object.is_file() => {
                 println!("cargo:rustc-link-arg={}", object.display());
-                println!("cargo:rerun-if-changed={}", rc.display());
                 return Ok(());
             }
             Ok(output) => {
@@ -66,6 +72,64 @@ fn embed(icon: &Path) -> Result<(), String> {
         }
     }
     Err(last_error)
+}
+
+fn embed_msvc(rc: &Path, out: &Path) -> Result<(), String> {
+    let resource = out.join("openrad-logo.res");
+    let mut compilers = Vec::new();
+    if let Some(explicit) = env::var_os("RC") {
+        compilers.push(PathBuf::from(explicit));
+    }
+    if let (Some(root), Some(version)) = (
+        env::var_os("WindowsSdkDir"),
+        env::var_os("WindowsSDKVersion"),
+    ) {
+        compilers.push(
+            PathBuf::from(root)
+                .join("bin")
+                .join(version)
+                .join("x64/rc.exe"),
+        );
+    }
+    compilers.push(PathBuf::from("rc.exe"));
+    if let Some(program_files) = env::var_os("ProgramFiles(x86)") {
+        let sdk = PathBuf::from(program_files).join("Windows Kits/10/bin");
+        if let Ok(entries) = std::fs::read_dir(sdk) {
+            let mut versions: Vec<_> = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect();
+            versions.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
+            compilers.extend(
+                versions
+                    .into_iter()
+                    .map(|version| version.join("x64/rc.exe")),
+            );
+        }
+    }
+    let mut errors = Vec::new();
+    for compiler in compilers {
+        match Command::new(&compiler)
+            .arg("/nologo")
+            .arg("/fo")
+            .arg(&resource)
+            .arg(rc)
+            .output()
+        {
+            Ok(output) if output.status.success() && resource.is_file() => {
+                println!("cargo:rustc-link-arg={}", resource.display());
+                return Ok(());
+            }
+            Ok(output) => errors.push(format!(
+                "{}: {}{}",
+                compiler.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )),
+            Err(error) => errors.push(format!("{}: {error}", compiler.display())),
+        }
+    }
+    Err(errors.join("; "))
 }
 
 /// windres accepts forward slashes on every host, but not the `\\?\` verbatim

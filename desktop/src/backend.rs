@@ -1,7 +1,7 @@
 use crate::storage::{self, Paths, Settings};
 use anyhow::{ensure, Context, Result};
 use openrad::{
-    daemon::CustomServer,
+    daemon::{CustomServer, ServicePreferencePatch, ServicePreferences},
     i18n::LanguagePreference,
     output::ReportDirectory,
     protocol::Identity,
@@ -57,6 +57,8 @@ pub enum Notice {
     },
     /// The active server has no saved identity yet.
     NoIdentity,
+    /// The active server's identity could not be read.
+    IdentityUnavailable,
     /// The server this profile uses; None is the official server.
     Server(Option<CustomServer>),
     Settings(Settings),
@@ -70,7 +72,7 @@ pub enum Notice {
         message: String,
     },
     NodeName(String),
-    RelayPreference(bool),
+    ConnectionPreferences(Settings),
     BroadcastPreference(runtime::BroadcastSelection),
     BlockList(runtime::BlockList),
 }
@@ -80,7 +82,10 @@ pub enum Action {
     ResetIdentity,
     /// Switch to a custom server, or back to the official one with None.
     SetServer(Option<ServerChoice>),
-    Save(Settings),
+    Save {
+        next: Settings,
+        previous: Settings,
+    },
     BroadcastPeers {
         targets: Vec<String>,
         exclude: bool,
@@ -231,7 +236,6 @@ impl Backend {
                 self.cancel.connection.store(true, Ordering::Relaxed);
                 self.cancel.replacement.store(false, Ordering::Relaxed);
             }
-            Action::SetServer(_) => self.cancel.connection.store(true, Ordering::Relaxed),
             Action::Disconnect | Action::Shutdown => {
                 self.cancel.connection.store(true, Ordering::Relaxed);
                 self.cancel.replacement.store(true, Ordering::Relaxed);
@@ -280,6 +284,17 @@ fn manager(
             return;
         }
     };
+    let executable = options.helper.take().unwrap_or_else(|| {
+        std::env::current_exe()
+            .unwrap_or_default()
+            .with_file_name(if cfg!(windows) {
+                "openrad.exe"
+            } else {
+                "openrad"
+            })
+    });
+    #[cfg(windows)]
+    let dir = dir.with_service_executable(&executable);
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendSettings);
     let mut settings = match paths.settings() {
         Ok(settings) => settings,
@@ -300,13 +315,9 @@ fn manager(
     if dir.path.join("service.json").exists() {
         match dir.preferences() {
             Ok(preferences) => {
-                settings.force_relay = preferences.force_relay;
-                settings.interface_name = preferences.interface_name.clone();
+                apply_service_preferences(&mut settings, &preferences);
                 broadcast_selection = preferences.broadcast_selection();
                 blocked = preferences.blocked.clone();
-                settings.auto_reconnect = preferences.auto_reconnect;
-                settings.reconnect_attempts = preferences.reconnect_attempts;
-                settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
             }
             Err(error) => {
                 report(Notice::Phase(Phase::Error, error.to_string()));
@@ -315,17 +326,15 @@ fn manager(
             }
         }
     }
-    if options.traffic_peers.is_some() {
-        if let Ok(mut reply) = service_status(&dir) {
-            let result = (|| -> Result<()> {
-                let mut preferences: daemon::ServicePreferences =
-                    serde_json::from_value(take_reply_field(&mut reply.data, "preferences"))?;
-                preferences.traffic_peers = options.traffic_peers.clone();
-                let reply = daemon::request(&dir, &Request::Configure { preferences })?;
-                ensure!(reply.ok, "{}", reply.message);
-                Ok(())
-            })();
-            if let Err(error) = result {
+    if let Some(traffic_peers) = options.traffic_peers.clone() {
+        if service_status(&dir).is_ok() {
+            let request = Request::PatchPreferences {
+                patch: ServicePreferencePatch {
+                    traffic_peers: Some(traffic_peers),
+                    ..Default::default()
+                },
+            };
+            if let Err(error) = checked_request(&dir, &request) {
                 report(Notice::Phase(Phase::Error, error.to_string()));
                 report(Notice::Stopped);
                 return;
@@ -365,6 +374,7 @@ fn manager(
     crate::startup_log::checkpoint(crate::startup_log::Stage::BackendReady);
     let mut persisted = identity.is_some();
     let mut current_server = dir.server();
+    let mut shown_server = current_server.clone();
     report(Notice::Server(current_server.clone()));
     report(Notice::Settings(settings.clone()));
     report(Notice::BroadcastPreference(broadcast_selection.clone()));
@@ -377,25 +387,6 @@ fn manager(
             "Ready when you are".into(),
         ));
     }
-    let executable = options.helper.take().unwrap_or_else(|| {
-        std::env::current_exe()
-            .unwrap_or_default()
-            .with_file_name(if cfg!(windows) {
-                "openrad.exe"
-            } else {
-                "openrad"
-            })
-    });
-    let configure = |settings: &Settings| -> Result<daemon::ServicePreferences> {
-        let mut preferences = dir.preferences()?;
-        preferences.force_relay = settings.force_relay;
-        preferences.interface_name = settings.interface_name.clone();
-        preferences.auto_reconnect = settings.auto_reconnect;
-        preferences.reconnect_attempts = settings.reconnect_attempts;
-        preferences.reconnect_base_delay_seconds = settings.reconnect_base_delay_seconds;
-        preferences.traffic_peers = options.traffic_peers.clone();
-        Ok(preferences)
-    };
     let operation = |result: Result<()>| {
         if let Err(error) = result {
             report(Notice::Engine(runtime::Update::Operation {
@@ -490,7 +481,21 @@ fn manager(
                     Phase::Connecting,
                     "Authenticating your saved identity…".into(),
                 ));
-                dir.save_preferences(&configure(&settings)?)?;
+                {
+                    let _service_lock = dir.stopped_lock()?;
+                    // Existing shared preferences belong to the daemon and all
+                    // frontends. Seed them once for legacy desktop-only profiles.
+                    let initial = !dir.path.join("service.json").try_exists()?;
+                    let mut patch = if initial {
+                        desktop_preferences_patch(&settings, None).unwrap()
+                    } else {
+                        ServicePreferencePatch::default()
+                    };
+                    patch.traffic_peers = options.traffic_peers.clone();
+                    if initial || patch.traffic_peers.is_some() {
+                        dir.patch_preferences(&patch)?;
+                    }
+                }
                 drop(profile_lock);
                 daemon::spawn_with_executable(&dir, options.disable_interface, &executable)?;
                 service_running = true;
@@ -532,9 +537,8 @@ fn manager(
                     if let Ok(preferences) = serde_json::from_value::<daemon::ServicePreferences>(
                         take_reply_field(&mut reply.data, "preferences"),
                     ) {
-                        if settings.force_relay != preferences.force_relay {
-                            settings.force_relay = preferences.force_relay;
-                            report(Notice::RelayPreference(preferences.force_relay));
+                        if apply_service_preferences(&mut settings, &preferences) {
+                            report(Notice::ConnectionPreferences(settings.clone()));
                         }
                         let selection = preferences.broadcast_selection();
                         if broadcast_selection != selection {
@@ -590,8 +594,11 @@ fn manager(
                 _ => {}
             }
             // Keep offline CLI edits visible without blocking the UI thread.
-            if !service_running {
+            if !service_running && dir.path.join("service.json").exists() {
                 if let Ok(preferences) = dir.preferences() {
+                    if apply_service_preferences(&mut settings, &preferences) {
+                        report(Notice::ConnectionPreferences(settings.clone()));
+                    }
                     let selection = preferences.broadcast_selection();
                     if broadcast_selection != selection {
                         broadcast_selection = selection;
@@ -623,25 +630,26 @@ fn manager(
                 operation(stop_service(&dir));
                 next_status = Instant::now();
             }
-            Ok(Action::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            received @ (Ok(Action::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected)) => {
                 // Closing a frontend leaves the shared service available to CLI
-                // clients. Disconnect/Stop are explicit, shared session actions.
-                if replacement.is_pending() {
-                    let result =
-                        commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut identity);
-                    if let Err(error) = result {
+                // clients. Only an interactive close can be kept open for retry.
+                let saved = (|| -> Result<()> {
+                    if replacement.is_pending() {
+                        commit_shutdown_replacement(&paths, &dir, &mut replacement, &mut identity)?;
+                    }
+                    if let Some(id) = identity.as_ref().filter(|_| !persisted) {
+                        commit_shutdown_initial_identity(&dir, &paths.entry(&dir)?, id)?;
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = saved {
+                    if received.is_ok() {
                         report(Notice::CloseBlocked(error.to_string()));
                         continue;
                     }
-                }
-                if let Some(id) = identity.as_ref().filter(|_| !persisted) {
-                    if let Err(error) = paths
-                        .entry(&dir)
-                        .and_then(|vault| commit_shutdown_initial_identity(&dir, &vault, id))
-                    {
-                        report(Notice::CloseBlocked(error.to_string()));
-                        continue;
-                    }
+                    crate::startup_log::event(format_args!(
+                        "Could not finish saving after the frontend closed: {error:#}"
+                    ));
                 }
                 report(Notice::Stopped);
                 break;
@@ -688,18 +696,32 @@ fn manager(
                             "The server changed in another frontend. Keep this window open to recover the pending replacement."
                         );
                     }
+                    let prior_rid = identity.as_ref().context("No saved identity to reset")?.rid;
+                    let pending_path = dir.identity_root().join("reset-registration.pending");
+                    if !replacement.is_pending() {
+                        check_reset_registration(&pending_path, prior_rid)?;
+                    }
                     report(Notice::Phase(
                         Phase::Resetting,
                         "Creating your replacement identity…".into(),
                     ));
                     let endpoint = dir.use_server()?;
                     replacement.prepare(|| {
+                        let mut sent = false;
                         Session::provision_controlled(
                             &endpoint.modulus,
                             &settings.node_name,
                             &endpoint.host,
                             &ReportDirectory::disabled(),
-                            &mut || Ok(()),
+                            &mut || {
+                                // An explicit server redirect may register a second endpoint
+                                // within the same controlled attempt.
+                                if !sent {
+                                    mark_reset_registration(&pending_path, prior_rid)?;
+                                    sent = true;
+                                }
+                                Ok(())
+                            },
                             Some(cancel.replacement.clone()),
                             &mut |progress| provision_progress(&report, Phase::Resetting, progress),
                         )
@@ -728,6 +750,7 @@ fn manager(
                         )?;
                     }
                     let id = identity.as_ref().unwrap();
+                    remove_reset_registration(&pending_path);
                     persisted = true;
                     report(Notice::Identity {
                         rid: id.rid,
@@ -792,6 +815,7 @@ fn manager(
                         })
                         .transpose()?;
                     let _profile_lock = dir.try_profile_lock()?;
+                    dir.validate_server_change(change.as_ref())?;
                     report(Notice::Phase(
                         Phase::Disconnecting,
                         "Stopping the VPN service before changing servers…".into(),
@@ -801,15 +825,33 @@ fn manager(
                     let _service_lock = dir.stopped_lock()?;
                     // Only the selection changes. Every server keeps its own
                     // identity slot, so the previous identity stays saved.
-                    dir.set_server(change)?;
+                    dir.set_server(change).context(
+                        "The VPN was stopped. Connect to restart it using the saved server selection",
+                    )?;
                     current_server = dir.server();
-                    identity = if dir.identity_file_present() {
-                        dir.load_identity().ok()
-                    } else {
-                        storage::load(&paths.entry(&dir)?).ok().flatten()
-                    };
-                    persisted = identity.is_some();
+                    identity = None;
+                    persisted = false;
+                    last_identity = None;
+                    shown_server = current_server.clone();
                     report(Notice::Server(current_server.clone()));
+                    report(Notice::Engine(runtime::Update::State(
+                        runtime::Snapshot::default(),
+                    )));
+                    let loaded = if dir.identity_file_present() {
+                        dir.load_identity().map(Some)
+                    } else {
+                        paths.entry(&dir).and_then(|entry| storage::load(&entry))
+                    };
+                    match loaded {
+                        Ok(loaded) => identity = loaded,
+                        Err(error) => {
+                            report(Notice::IdentityUnavailable);
+                            return Err(error).context(
+                                "The server was saved. Its identity could not be read. Resolve the storage error and choose Connect to retry",
+                            );
+                        }
+                    }
+                    persisted = identity.is_some();
                     report(match &identity {
                         Some(id) => Notice::Identity {
                             rid: id.rid,
@@ -817,9 +859,6 @@ fn manager(
                         },
                         None => Notice::NoIdentity,
                     });
-                    report(Notice::Engine(runtime::Update::State(
-                        runtime::Snapshot::default(),
-                    )));
                     report(Notice::Phase(
                         Phase::Disconnected,
                         if custom {
@@ -869,7 +908,7 @@ fn manager(
                 })();
                 operation(result);
             }
-            Ok(Action::Save(next)) => {
+            Ok(Action::Save { mut next, previous }) => {
                 #[cfg(windows)]
                 let startup_change = crate::windows_startup::requested_change(
                     &settings,
@@ -877,61 +916,87 @@ fn manager(
                     persisted || (service_running && dir.load_identity().is_ok()),
                 );
                 let result = (|| -> Result<()> {
-                    openrad::protocol::validate_node_name(&next.node_name)?;
-                    // Apply a requested logon-task change before any other write,
-                    // so a Task Scheduler failure leaves the service and saved
-                    // settings untouched.
+                    let rename = next.node_name != previous.node_name;
+                    if rename {
+                        openrad::protocol::validate_node_name(&next.node_name)?;
+                    } else {
+                        next.node_name.clone_from(&settings.node_name);
+                    }
+                    let patch = desktop_preferences_patch(&next, Some(&previous));
                     #[cfg(windows)]
                     if let Some(enabled) = startup_change {
                         crate::windows_startup::set_start_with_windows(&paths, enabled)?;
                         startup_task_checked |= enabled;
                     }
+                    let mut applied = Vec::new();
                     let saved = (|| -> Result<()> {
                         if service_running {
-                            let reply = daemon::request(
-                                &dir,
-                                &Request::Configure {
-                                    preferences: configure(&next)?,
-                                },
-                            )?;
-                            ensure!(reply.ok, "{}", reply.message);
-                            if next.node_name != settings.node_name {
-                                let reply = daemon::request(
+                            if let Some(patch) = patch {
+                                checked_request(&dir, &Request::PatchPreferences { patch })?;
+                                applied.push("VPN preferences");
+                            }
+                            if rename {
+                                checked_request(
                                     &dir,
                                     &Request::Rename {
                                         node_name: next.node_name.clone(),
                                     },
                                 )?;
-                                ensure!(reply.ok, "{}", reply.message);
+                                applied.push("device name");
+                                settings.node_name.clone_from(&next.node_name);
+                                report(Notice::NodeName(next.node_name.clone()));
                             }
-                        } else {
-                            // Status is only a cached observation. Exclude identity
-                            // replacement and a newly started service before offline writes.
+                        } else if patch.is_some()
+                            || (rename && (identity.is_some() || last_identity.is_some()))
+                        {
                             let _profile_lock = dir.try_profile_lock()?;
                             let _service_lock = dir.stopped_lock()?;
-                            dir.save_preferences(&configure(&next)?)?;
-                            if (identity.is_some() || last_identity.is_some())
-                                && next.node_name != settings.node_name
-                            {
-                                let mut renamed = dir.load_identity()?;
-                                renamed.node_name = next.node_name.clone();
-                                dir.save_identity(&renamed)?;
-                                identity = Some(renamed);
+                            if let Some(patch) = patch {
+                                let initial = !dir.path.join("service.json").try_exists()?;
+                                let patch = if initial {
+                                    desktop_preferences_patch(&next, None).unwrap()
+                                } else {
+                                    patch
+                                };
+                                dir.patch_preferences(&patch)?;
+                                applied.push("VPN preferences");
                             }
+                            if rename && (identity.is_some() || last_identity.is_some()) {
+                                let mut renamed = dir.load_identity()?;
+                                renamed.node_name.clone_from(&next.node_name);
+                                dir.save_identity(&renamed)?;
+                                settings.node_name.clone_from(&next.node_name);
+                                report(Notice::NodeName(next.node_name.clone()));
+                                identity = Some(renamed);
+                                applied.push("device name");
+                            }
+                        }
+                        if dir.path.join("service.json").try_exists()? {
+                            apply_service_preferences(&mut next, &dir.preferences()?);
                         }
                         paths.save_settings(&next)
                     })();
-                    #[cfg(windows)]
-                    if let (Err(error), Some(enabled)) = (&saved, startup_change) {
-                        if let Err(rollback) =
-                            crate::windows_startup::set_start_with_windows(&paths, !enabled)
-                        {
-                            return Err(anyhow::anyhow!(
-                                "Settings were not saved: {error:#}. The Windows startup task could not be rolled back: {rollback:#}"
-                            ));
+                    if let Err(error) = saved {
+                        #[cfg(windows)]
+                        if let Some(enabled) = startup_change {
+                            if let Err(rollback) =
+                                crate::windows_startup::set_start_with_windows(&paths, !enabled)
+                            {
+                                applied.push("Windows startup task");
+                                return Err(error.context(format!(
+                                    "Settings only partly saved ({}). The Windows startup task could not be restored: {rollback:#}",
+                                    applied.join(", ")
+                                )));
+                            }
                         }
+                        if !applied.is_empty() {
+                            return Err(error.context(format!(
+                                "Settings only partly saved. Applied: {}",
+                                applied.join(", ")
+                            )));
+                        }
+                        return Err(error);
                     }
-                    saved?;
                     settings = next.clone();
                     report(Notice::Settings(next));
                     if let Some(id) = &mut identity {
@@ -1167,10 +1232,108 @@ fn commit_shutdown_replacement(
     };
     ensure!(unchanged, "The saved identity changed in another frontend. Keep this window open to recover the pending replacement.");
     if dir.identity_file_present() {
-        replacement.commit(&ProfileVault(dir.clone()), identity)
+        replacement.commit(&ProfileVault(dir.clone()), identity)?;
     } else {
-        replacement.commit(&paths.entry(dir)?, identity)
+        replacement.commit(&paths.entry(dir)?, identity)?;
     }
+    remove_reset_registration(&dir.identity_root().join("reset-registration.pending"));
+    Ok(())
+}
+
+// The marker is separate from the identity credential, which remains usable
+// while the result of a replacement registration is unknown.
+fn check_reset_registration(path: &std::path::Path, prior_rid: u64) -> Result<()> {
+    let Some(saved) = openrad::file_io::read_optional_bounded(path, 8)? else {
+        return Ok(());
+    };
+    let recorded_rid = u64::from_le_bytes(saved.as_slice().try_into().context(
+        "The replacement registration receipt is invalid. Reconnect with your saved identity",
+    )?);
+    ensure!(
+        recorded_rid != prior_rid,
+        "An earlier replacement registration did not finish. Reconnect with your saved identity or import a backed-up identity"
+    );
+    // A replacement was saved or a different identity was imported.
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+fn mark_reset_registration(path: &std::path::Path, prior_rid: u64) -> Result<()> {
+    openrad::file_io::atomic_write(path, &prior_rid.to_le_bytes())
+        .context("Recording replacement registration before contacting the server")?;
+    #[cfg(unix)]
+    std::fs::File::open(
+        path.parent()
+            .context("Replacement registration directory missing")?,
+    )?
+    .sync_all()
+    .context("Syncing the replacement registration receipt")?;
+    Ok(())
+}
+
+fn remove_reset_registration(path: &std::path::Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            crate::startup_log::event(format_args!(
+                "Could not remove the saved replacement registration receipt: {error}"
+            ));
+        }
+    }
+}
+
+fn desktop_preferences_patch(
+    next: &Settings,
+    previous: Option<&Settings>,
+) -> Option<ServicePreferencePatch> {
+    let patch = ServicePreferencePatch {
+        interface_name: previous
+            .is_none_or(|old| old.interface_name != next.interface_name)
+            .then(|| next.interface_name.clone()),
+        force_relay: previous
+            .is_none_or(|old| old.force_relay != next.force_relay)
+            .then_some(next.force_relay),
+        auto_reconnect: previous
+            .is_none_or(|old| old.auto_reconnect != next.auto_reconnect)
+            .then_some(next.auto_reconnect),
+        reconnect_attempts: previous
+            .is_none_or(|old| old.reconnect_attempts != next.reconnect_attempts)
+            .then_some(next.reconnect_attempts),
+        reconnect_base_delay_seconds: previous
+            .is_none_or(|old| old.reconnect_base_delay_seconds != next.reconnect_base_delay_seconds)
+            .then_some(next.reconnect_base_delay_seconds),
+        ..Default::default()
+    };
+    (patch.interface_name.is_some()
+        || patch.force_relay.is_some()
+        || patch.auto_reconnect.is_some()
+        || patch.reconnect_attempts.is_some()
+        || patch.reconnect_base_delay_seconds.is_some())
+    .then_some(patch)
+}
+
+fn apply_service_preferences(settings: &mut Settings, preferences: &ServicePreferences) -> bool {
+    let changed = settings.force_relay != preferences.force_relay
+        || settings.interface_name != preferences.interface_name
+        || settings.auto_reconnect != preferences.auto_reconnect
+        || settings.reconnect_attempts != preferences.reconnect_attempts
+        || settings.reconnect_base_delay_seconds != preferences.reconnect_base_delay_seconds;
+    settings.force_relay = preferences.force_relay;
+    settings
+        .interface_name
+        .clone_from(&preferences.interface_name);
+    settings.auto_reconnect = preferences.auto_reconnect;
+    settings.reconnect_attempts = preferences.reconnect_attempts;
+    settings.reconnect_base_delay_seconds = preferences.reconnect_base_delay_seconds;
+    changed
+}
+
+fn checked_request(
+    dir: &openrad::daemon::DataDir,
+    request: &openrad::daemon::Request,
+) -> Result<()> {
+    let reply = openrad::daemon::request(dir, request)?;
+    ensure!(reply.ok, "{}", reply.message);
+    Ok(())
 }
 
 // Move owned JSON subtrees into deserialization. Missing fields retain the
@@ -1551,10 +1714,13 @@ mod tests {
             .unwrap();
             let (sender, actions) = mpsc::channel();
             sender
-                .send(Action::Save(Settings {
-                    node_name: "renamed".into(),
-                    ..settings
-                }))
+                .send(Action::Save {
+                    next: Settings {
+                        node_name: "renamed".into(),
+                        ..settings.clone()
+                    },
+                    previous: settings,
+                })
                 .unwrap();
             sender.send(Action::Shutdown).unwrap();
             let notices = Notices::default();

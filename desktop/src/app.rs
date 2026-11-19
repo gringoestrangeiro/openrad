@@ -1044,11 +1044,40 @@ impl App {
                     }
                     self.saved_settings.node_name = name;
                 }
-                Notice::RelayPreference(enabled) => {
+                Notice::ConnectionPreferences(current) => {
                     if self.settings.force_relay == self.saved_settings.force_relay {
-                        self.settings.force_relay = enabled;
+                        self.settings.force_relay = current.force_relay;
                     }
-                    self.saved_settings.force_relay = enabled;
+                    self.saved_settings.force_relay = current.force_relay;
+                    if self.settings.interface_name == self.saved_settings.interface_name {
+                        self.settings
+                            .interface_name
+                            .clone_from(&current.interface_name);
+                    }
+                    self.saved_settings.interface_name = current.interface_name;
+                    if self.settings.auto_reconnect == self.saved_settings.auto_reconnect {
+                        self.settings.auto_reconnect = current.auto_reconnect;
+                    }
+                    self.saved_settings.auto_reconnect = current.auto_reconnect;
+                    if self.settings.reconnect_attempts == self.saved_settings.reconnect_attempts {
+                        self.settings.reconnect_attempts = current.reconnect_attempts;
+                    }
+                    self.saved_settings.reconnect_attempts = current.reconnect_attempts;
+                    if self.settings.reconnect_base_delay_seconds
+                        == self.saved_settings.reconnect_base_delay_seconds
+                    {
+                        self.settings.reconnect_base_delay_seconds =
+                            current.reconnect_base_delay_seconds;
+                    }
+                    self.saved_settings.reconnect_base_delay_seconds =
+                        current.reconnect_base_delay_seconds;
+                }
+                Notice::IdentityUnavailable => {
+                    self.interrupt_join();
+                    self.join_passwords.clear();
+                    self.snapshot.replace(Snapshot::default());
+                    self.selected_network = None;
+                    self.identity = None;
                 }
                 Notice::BroadcastPreference(selection) => {
                     if !self.broadcast_dirty {
@@ -3486,7 +3515,10 @@ impl App {
                 )
                 .clicked()
             {
-                self.backend.send(Action::Save(self.settings.clone()));
+                self.backend.send(Action::Save {
+                    next: self.settings.clone(),
+                    previous: self.saved_settings.clone(),
+                });
             }
             if ui
                 .add_enabled(
@@ -3990,7 +4022,7 @@ impl App {
                             }
                         }
                         self.settings.onboarding_complete = true;
-                        self.backend.send(Action::Save(self.settings.clone()));
+                        self.backend.send(Action::Save { next: self.settings.clone(), previous: self.saved_settings.clone() });
                     }
                 });
             });
@@ -6403,7 +6435,7 @@ mod tests {
             click_control(&ctx, app, "Peer IP", egui::accesskit::Role::CheckBox);
             assert!(app.settings.show_peer_ip);
             click_button(&ctx, app, language.text("Save preferences"));
-            let Action::Save(saved) = actions.try_recv().unwrap() else {
+            let Action::Save { next: saved, .. } = actions.try_recv().unwrap() else {
                 panic!("expected saved preferences");
             };
             app.paths.save_settings(&saved).unwrap();
@@ -7598,7 +7630,7 @@ mod tests {
             }
             assert!(app.settings.force_relay);
             click_button(&ctx, app, language.text("Save preferences"));
-            let Action::Save(saved) = actions.try_recv().unwrap() else {
+            let Action::Save { next: saved, .. } = actions.try_recv().unwrap() else {
                 panic!("expected saved preferences");
             };
             assert_eq!(saved.node_name, "renamed-device");

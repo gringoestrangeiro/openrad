@@ -101,6 +101,15 @@ impl Tap {
             read_buffer: Vec::new(),
         })
     }
+    pub(crate) fn from_descriptor_for_session(
+        file: File,
+        name: &str,
+        vip: Ipv4Addr,
+    ) -> Result<Self> {
+        let tap = Self::from_descriptor_named(file, name)?;
+        verify_lan_address(name, vip)?;
+        Ok(tap)
+    }
     pub fn ready(&self, timeout: i32) -> Result<bool> {
         readable(self.file.as_raw_fd(), timeout)
     }
@@ -127,10 +136,13 @@ fn ensure_nonblocking(file: &File) -> Result<()> {
     let descriptor = file.as_raw_fd();
     // SAFETY: F_GETFL/F_SETFL take no pointers and the descriptor is owned by `file`.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-    if flags >= 0
-        && (flags & libc::O_NONBLOCK != 0
+    ensure!(
+        flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDWR,
+        "received TAP descriptor does not allow reading and writing"
+    );
+    if flags & libc::O_NONBLOCK != 0
             // SAFETY: as above; only sets a status flag on the owned descriptor.
-            || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0)
+        || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0
     {
         return Ok(());
     }
@@ -206,10 +218,69 @@ fn verify_descriptor(file: &File, expected_name: &str) -> Result<()> {
     // SAFETY: TUNGETIFF reports the interface flags in this union member.
     let flags = unsafe { request.ifr_ifru.ifru_flags };
     ensure!(
-        attached && name == expected_name.as_bytes() && flags & libc::IFF_TAP as libc::c_short != 0,
+        attached && name == expected_name.as_bytes() && supported_tap_flags(flags),
         "received descriptor is not the OpenRad TAP interface"
     );
     Ok(())
+}
+
+fn supported_tap_flags(flags: libc::c_short) -> bool {
+    let required = (libc::IFF_TAP | libc::IFF_NO_PI) as libc::c_short;
+    // TUNGETIFF returns interface options, not Ethernet link flags. A virtual
+    // network header or multiqueue attachment changes our descriptor contract.
+    let incompatible =
+        (libc::IFF_TUN | libc::IFF_VNET_HDR | libc::IFF_MULTI_QUEUE) as libc::c_short;
+    flags & required == required && flags & incompatible == 0
+}
+
+fn verify_lan_address(name: &str, vip: Ipv4Addr) -> Result<()> {
+    struct Addresses(*mut libc::ifaddrs);
+    impl Drop for Addresses {
+        fn drop(&mut self) {
+            // SAFETY: getifaddrs allocated this list, which is freed exactly once.
+            unsafe { libc::freeifaddrs(self.0) };
+        }
+    }
+
+    let mut first = std::ptr::null_mut();
+    // SAFETY: first is a live writable out pointer.
+    if unsafe { libc::getifaddrs(&mut first) } < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("Cannot inspect OpenRad TAP addresses");
+    }
+    let addresses = Addresses(first);
+    let mut next = addresses.0;
+    // SAFETY: the OS-owned list, its names and family-tagged addresses remain
+    // valid until Addresses is dropped.
+    while let Some(address) = unsafe { next.as_ref() } {
+        next = address.ifa_next;
+        if address.ifa_name.is_null()
+            || address.ifa_addr.is_null()
+            || address.ifa_netmask.is_null()
+            || address.ifa_flags & libc::IFF_UP as u32 == 0
+            || unsafe { std::ffi::CStr::from_ptr(address.ifa_name) }.to_bytes() != name.as_bytes()
+            || unsafe { (*address.ifa_addr).sa_family } as i32 != libc::AF_INET
+            || unsafe { (*address.ifa_netmask).sa_family } as i32 != libc::AF_INET
+        {
+            continue;
+        }
+        let ip = unsafe {
+            (*address.ifa_addr.cast::<libc::sockaddr_in>())
+                .sin_addr
+                .s_addr
+        };
+        let mask = unsafe {
+            (*address.ifa_netmask.cast::<libc::sockaddr_in>())
+                .sin_addr
+                .s_addr
+        };
+        if ip.to_ne_bytes() == vip.octets() && mask.to_ne_bytes() == [255, 0, 0, 0] {
+            return Ok(());
+        }
+    }
+    anyhow::bail!(
+        "OpenRad TAP interface is missing the active session's IPv4 address and /8 prefix"
+    )
 }
 
 // A detached service has no launching terminal's sudo timestamp. Keep the
@@ -530,6 +601,22 @@ mod tests {
             "../invalid",
         )
         .is_err());
+    }
+
+    #[test]
+    fn tap_adoption_requires_raw_ethernet_framing() {
+        let raw_tap = (libc::IFF_TAP | libc::IFF_NO_PI) as libc::c_short;
+        assert!(supported_tap_flags(raw_tap));
+        assert!(!supported_tap_flags(libc::IFF_TAP as libc::c_short));
+        assert!(!supported_tap_flags(
+            raw_tap | libc::IFF_VNET_HDR as libc::c_short
+        ));
+        assert!(!supported_tap_flags(
+            raw_tap | libc::IFF_MULTI_QUEUE as libc::c_short
+        ));
+        assert!(!supported_tap_flags(
+            (libc::IFF_TUN | libc::IFF_NO_PI) as libc::c_short
+        ));
     }
 
     #[test]

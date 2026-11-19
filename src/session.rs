@@ -6,6 +6,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use std::{
+    fmt,
     io::{self, IoSlice, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::{
@@ -14,6 +15,38 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+/// An explicit disconnect delivered by the authenticated attachment server.
+#[derive(Debug)]
+pub struct ServerDisconnect {
+    pub reason: Option<u32>,
+}
+impl ServerDisconnect {
+    pub(crate) fn parse(data: &[u8]) -> Result<Self> {
+        let fields = records(data)?;
+        Ok(Self {
+            reason: optional(&fields, 0x010001d2)?.map(int32).transpose()?,
+        })
+    }
+
+    pub fn identity_replaced(&self) -> bool {
+        self.reason == Some(1)
+    }
+}
+impl fmt::Display for ServerDisconnect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.identity_replaced() {
+            f.write_str(
+                "The server replaced this connection with another session for the same identity",
+            )
+        } else if let Some(reason) = self.reason {
+            write!(f, "The server disconnected the session (reason {reason})")
+        } else {
+            f.write_str("The server disconnected the session")
+        }
+    }
+}
+impl std::error::Error for ServerDisconnect {}
 
 /// Capacity of the per-connection read-ahead buffer. Typical tunnel records are
 /// below 2 KiB, so one `read` usually returns a record and often several.
@@ -1241,6 +1274,9 @@ impl Session {
         for i in 0..8 {
             let data = s.receive()?;
             let operation = op(&data)?;
+            if operation == 16 {
+                return Err(ServerDisconnect::parse(&data)?.into());
+            }
             if i == 0 {
                 ensure!(
                     operation == 21,
@@ -1293,7 +1329,7 @@ impl Session {
             match op(&data)? {
                 38 => membership.snapshot(&data)?,
                 41 | 42 => membership.changes(&data)?,
-                16 => bail!("server disconnected the session"),
+                16 => return Err(ServerDisconnect::parse(&data)?.into()),
                 _ => {}
             }
             let progress = operation.handle(&data, membership)?;

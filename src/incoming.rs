@@ -126,9 +126,18 @@ pub struct Hub {
     route_ip: IpAddr,
     ues: Vec<Ipv4Addr>,
     wire: SyncSender<Vec<u8>>,
+    relay_guard: Arc<acceptor_relay::Guard>,
 }
 impl Hub {
     pub fn new(route_ip: IpAddr, ues: Vec<Ipv4Addr>, wire: SyncSender<Vec<u8>>) -> Self {
+        Self::with_relay_guard(route_ip, ues, wire, Arc::new(acceptor_relay::Guard::new()))
+    }
+    pub(crate) fn with_relay_guard(
+        route_ip: IpAddr,
+        ues: Vec<Ipv4Addr>,
+        wire: SyncSender<Vec<u8>>,
+        relay_guard: Arc<acceptor_relay::Guard>,
+    ) -> Self {
         Self {
             pending: HashMap::new(),
             routes: HashMap::new(),
@@ -137,6 +146,7 @@ impl Hub {
             route_ip,
             ues,
             wire,
+            relay_guard,
         }
     }
     pub fn ingest(&mut self, data: &[u8]) -> Result<()> {
@@ -232,6 +242,7 @@ impl Hub {
             password: p.password,
             records: rx,
             wire: self.wire.clone(),
+            relay_guard: self.relay_guard.clone(),
             route_ip: self.route_ip,
             ues: self.ues.clone(),
             policy,
@@ -243,6 +254,7 @@ pub struct Setup {
     password: Vec<u8>,
     records: Receiver<Vec<u8>>,
     wire: SyncSender<Vec<u8>>,
+    relay_guard: Arc<acceptor_relay::Guard>,
     route_ip: IpAddr,
     ues: Vec<Ipv4Addr>,
     policy: Policy,
@@ -514,12 +526,9 @@ impl Setup {
                 }
                 if relay.is_none() && relay_request_at.is_some_and(|at| Instant::now() >= at) {
                     relay_request_at = None;
-                    if acceptor_relay::allowed() {
+                    if self.relay_guard.allowed() {
                         // A full advertisement queue only loses this fallback.
                         let queued = self.wire.try_send(request_relay(self.cid)).is_ok();
-                        if queued {
-                            acceptor_relay::requested();
-                        }
                         attempts.push(json!({
                             "phase":"relay_request","queued":queued,
                             "after_ms":begun.elapsed().as_millis(),
@@ -670,13 +679,12 @@ const ACCEPTOR_RELAY_DELAY: Duration = Duration::from_secs(2);
 /// An offer whose initiator never sends a candidate or ticket is abandoned.
 const ABANDONED_OFFER: Duration = Duration::from_secs(15);
 
-/// Process-wide guard for acceptor relay requests. They use the shared
-/// attachment session, so if the service ever objects shortly after one, the
-/// requests stop for the rest of this process rather than risk the session.
+/// The control writer timestamps the sent requests of one attachment. A
+/// refusal from that attachment can disable this fallback for its workers.
 pub(crate) mod acceptor_relay {
     use std::sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        OnceLock,
+        atomic::{AtomicBool, Ordering},
+        Mutex,
     };
     use std::time::{Duration, Instant};
 
@@ -684,48 +692,34 @@ pub(crate) mod acceptor_relay {
 
     pub(crate) struct Guard {
         disabled: AtomicBool,
-        /// Milliseconds after `epoch()` of the last request, plus one (0 = none).
-        last_request: AtomicU64,
+        last_request: Mutex<Option<Instant>>,
     }
     impl Guard {
         pub(crate) const fn new() -> Self {
             Self {
                 disabled: AtomicBool::new(false),
-                last_request: AtomicU64::new(0),
+                last_request: Mutex::new(None),
             }
         }
         pub(crate) fn allowed(&self) -> bool {
             !self.disabled.load(Ordering::Relaxed)
         }
-        pub(crate) fn requested_at(&self, now_ms: u64) {
-            self.last_request.store(now_ms + 1, Ordering::Relaxed);
+        pub(crate) fn sent_at(&self, now: Instant) {
+            *self.last_request.lock().unwrap() = Some(now);
         }
-        pub(crate) fn objected_at(&self, now_ms: u64) -> bool {
-            let last = self.last_request.load(Ordering::Relaxed);
-            let recent = last != 0
-                && (now_ms + 1).saturating_sub(last) <= OBJECTION_WINDOW.as_millis() as u64;
+        pub(crate) fn objected_at(&self, now: Instant) -> bool {
+            let recent = self
+                .last_request
+                .lock()
+                .unwrap()
+                .take()
+                .and_then(|sent_at| now.checked_duration_since(sent_at))
+                .is_some_and(|elapsed| elapsed <= OBJECTION_WINDOW);
             if recent {
                 self.disabled.store(true, Ordering::Relaxed);
             }
             recent
         }
-    }
-
-    static GUARD: Guard = Guard::new();
-    fn now_ms() -> u64 {
-        static EPOCH: OnceLock<Instant> = OnceLock::new();
-        EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64
-    }
-    pub(crate) fn allowed() -> bool {
-        GUARD.allowed()
-    }
-    pub(crate) fn requested() {
-        GUARD.requested_at(now_ms());
-    }
-    /// Report a server refusal or disconnect. Returns true when it followed an
-    /// acceptor relay request closely enough to disable further requests.
-    pub(crate) fn server_objected() -> bool {
-        GUARD.objected_at(now_ms())
     }
 
     #[cfg(test)]
@@ -734,15 +728,19 @@ pub(crate) mod acceptor_relay {
         #[test]
         fn only_an_objection_soon_after_a_request_disables_requests() {
             let guard = Guard::new();
-            // No request yet.
-            assert!(!guard.objected_at(1_000));
+            let now = Instant::now();
+            assert!(!guard.objected_at(now));
             assert!(guard.allowed());
-            guard.requested_at(10_000);
+            guard.sent_at(now);
             // An unrelated, later refusal.
-            assert!(!guard.objected_at(16_000));
+            assert!(!guard.objected_at(now + Duration::from_secs(6)));
             assert!(guard.allowed());
-            guard.requested_at(20_000);
-            assert!(guard.objected_at(24_000));
+            guard.sent_at(now + Duration::from_secs(20));
+            let reply = now + Duration::from_secs(24);
+            let other_attachment = Guard::new();
+            assert!(!other_attachment.objected_at(reply));
+            assert!(other_attachment.allowed());
+            assert!(guard.objected_at(reply));
             assert!(!guard.allowed());
         }
     }

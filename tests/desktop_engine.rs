@@ -360,43 +360,26 @@ fn gratuitous_arp_replies_and_requests_fan_out_without_rewriting() {
 }
 
 #[test]
-fn gratuitous_arp_replies_allow_unrelated_ip_and_mac_addresses() {
+fn gratuitous_arp_replies_require_the_authenticated_source_ip_and_mac() {
     let source = Ipv4Addr::new(26, 1, 2, 3);
-    let peers = [Ipv4Addr::new(26, 4, 5, 6), Ipv4Addr::new(26, 7, 8, 9)];
-    let mut frame = tunnel::gratuitous_arp(Ipv4Addr::new(192, 168, 1, 42));
-    frame[..6].copy_from_slice(&[2, 1, 2, 3, 4, 5]);
-    frame[6..12].copy_from_slice(&[2, 6, 7, 8, 9, 10]);
-    frame[22..28].copy_from_slice(&[2, 11, 12, 13, 14, 15]);
-    frame[32..38].copy_from_slice(&[2, 16, 17, 18, 19, 20]);
-    let before = frame.clone();
-    assert!(tunnel::forwarding(&frame, source, tunnel::mac(source))
-        .unwrap()
-        .target()
-        .is_none());
-    for peer in peers {
-        assert!(tunnel::deliver_to(
-            &frame,
-            source,
-            tunnel::mac(source),
-            peer,
-            tunnel::mac(peer)
-        ));
-        assert!(valid_inbound(&frame, peer, source, tunnel::mac(source)));
+    let peer = Ipv4Addr::new(26, 4, 5, 6);
+    let actual_mac = tunnel::mac(source);
+    let valid = tunnel::gratuitous_arp(source);
+    assert!(valid_inbound(&valid, peer, source, actual_mac));
+    let mut unrelated_vip = tunnel::gratuitous_arp(Ipv4Addr::new(192, 168, 1, 42));
+    unrelated_vip[6..12].copy_from_slice(&actual_mac);
+    unrelated_vip[22..28].copy_from_slice(&actual_mac);
+    assert!(!valid_inbound(&unrelated_vip, peer, source, actual_mac));
+    for offset in [6, 22] {
+        let mut frame = valid.clone();
+        frame[offset] ^= 0x40;
+        assert!(tunnel::forwarding(&frame, source, actual_mac).is_none());
+        assert!(!valid_inbound(&frame, peer, source, actual_mac));
     }
-    assert_eq!(frame, before);
     for len in 0..42 {
-        assert!(!valid_inbound(
-            &frame[..len],
-            peers[0],
-            source,
-            tunnel::mac(source)
-        ));
+        assert!(!valid_inbound(&valid[..len], peer, source, actual_mac));
     }
-    frame.resize(tunnel::MAX_FRAME + 1, 0);
-    assert!(!valid_inbound(
-        &frame,
-        peers[0],
-        source,
-        tunnel::mac(source)
-    ));
+    let mut oversized = valid;
+    oversized.resize(tunnel::MAX_FRAME + 1, 0);
+    assert!(!valid_inbound(&oversized, peer, source, actual_mac));
 }

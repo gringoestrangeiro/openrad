@@ -34,13 +34,14 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender, SyncSender},
-        Arc, Mutex, MutexGuard, PoisonError, RwLock,
+        Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock,
     },
     thread,
     time::{Duration, Instant},
 };
 
-const REQUEST_LIMIT: u64 = 64 * 1024;
+const PREFERENCES_LIMIT: u64 = 128 * 1024;
+const REQUEST_LIMIT: u64 = PREFERENCES_LIMIT + 1024;
 const REPLY_LIMIT: u64 = 8 * 1024 * 1024;
 const CONTROL_CONNECTION_LIMIT: usize = 32;
 const COMMAND_QUEUE_LIMIT: usize = 128;
@@ -103,6 +104,8 @@ pub struct DataDir {
     /// lock is taken, so identity reads and writes made under that lock always
     /// target the current server's identity slot.
     server: Arc<RwLock<Option<CustomServer>>>,
+    #[cfg(windows)]
+    service_executable: Option<PathBuf>,
 }
 impl DataDir {
     pub fn open(override_path: Option<PathBuf>) -> Result<Self> {
@@ -167,9 +170,18 @@ impl DataDir {
         let dir = Self {
             path,
             server: Arc::default(),
+            #[cfg(windows)]
+            service_executable: None,
         };
         dir.reload_server()?;
         Ok(dir)
+    }
+    /// Select the trusted daemon binary explicitly for a frontend with a
+    /// custom executable location. The path is never learned from the pipe.
+    #[cfg(windows)]
+    pub fn with_service_executable(mut self, executable: &Path) -> Self {
+        self.service_executable = Some(executable.to_path_buf());
+        self
     }
     fn read_server(&self) -> Result<Option<CustomServer>> {
         let path = self.path.join(SERVER_FILE);
@@ -238,6 +250,7 @@ impl DataDir {
     /// switching back restores the previous identity untouched. A custom
     /// server needs a modulus the first time; later switches may reuse it.
     pub fn set_server(&self, change: Option<(CustomServer, Option<Vec<u8>>)>) -> Result<()> {
+        self.validate_server_change(change.as_ref())?;
         let Some((server, modulus)) = change else {
             match fs::remove_file(self.path.join(SERVER_FILE)) {
                 Ok(()) => {}
@@ -246,7 +259,6 @@ impl DataDir {
             }
             return self.reload_server();
         };
-        server.validate()?;
         let slot = self.path.join("servers").join(server.slot());
         for directory in [self.path.join("servers"), slot.clone()] {
             let mut builder = fs::DirBuilder::new();
@@ -265,18 +277,34 @@ impl DataDir {
             );
             crate::output::secure_directory(&directory)?;
         }
-        match modulus {
-            Some(modulus) => {
-                crate::crypto::validate_modulus(&modulus)?;
-                atomic_save(&slot.join("modulus.bin"), &modulus)?;
-            }
-            None => ensure!(
-                crate::file_io::read_optional_bounded(&slot.join("modulus.bin"), 4096)?.is_some(),
-                "Choose the server's modulus file"
-            ),
+        if let Some(modulus) = modulus {
+            atomic_save(&slot.join("modulus.bin"), &modulus)?;
         }
         atomic_save(&self.path.join(SERVER_FILE), &serde_json::to_vec(&server)?)?;
         self.reload_server()
+    }
+    /// Check all required server inputs before stopping an existing session.
+    pub fn validate_server_change(
+        &self,
+        change: Option<&(CustomServer, Option<Vec<u8>>)>,
+    ) -> Result<()> {
+        let Some((server, modulus)) = change else {
+            return Ok(());
+        };
+        server.validate()?;
+        match modulus {
+            Some(bytes) => crate::crypto::validate_modulus(bytes),
+            None => {
+                let path = self
+                    .path
+                    .join("servers")
+                    .join(server.slot())
+                    .join("modulus.bin");
+                let bytes = crate::file_io::read_optional_bounded(&path, 4096)?
+                    .context("Choose the server's modulus file")?;
+                crate::crypto::validate_modulus(&bytes)
+            }
+        }
     }
     #[cfg(unix)]
     pub fn socket(&self) -> PathBuf {
@@ -421,7 +449,7 @@ impl DataDir {
     }
     pub fn preferences(&self) -> Result<ServicePreferences> {
         let path = self.path.join("service.json");
-        let Some(bytes) = crate::file_io::read_optional_bounded(&path, 64 * 1024)? else {
+        let Some(bytes) = crate::file_io::read_optional_bounded(&path, PREFERENCES_LIMIT)? else {
             return Ok(ServicePreferences::default());
         };
         let preferences: ServicePreferences = serde_json::from_slice(&bytes)?;
@@ -430,37 +458,24 @@ impl DataDir {
     }
     pub fn save_preferences(&self, preferences: &ServicePreferences) -> Result<()> {
         preferences.validate()?;
-        atomic_save(
-            &self.path.join("service.json"),
-            &serde_json::to_vec(preferences)?,
-        )
+        let bytes = serde_json::to_vec(preferences)?;
+        ensure!(
+            bytes.len() as u64 <= PREFERENCES_LIMIT,
+            "Settings are too large"
+        );
+        atomic_save(&self.path.join("service.json"), &bytes)
+    }
+    /// Offline callers hold both the profile and stopped service locks.
+    pub fn patch_preferences(&self, patch: &ServicePreferencePatch) -> Result<()> {
+        let mut preferences = self.preferences()?;
+        patch.apply(&mut preferences);
+        self.save_preferences(&preferences)
     }
 }
 
 /// Atomic private writes also preserve the previous identity on storage errors.
 fn atomic_save(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_extension(format!(
-        "{}-{}.tmp",
-        std::process::id(),
-        rand::random::<u64>()
-    ));
-    let result = (|| -> Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-        let mut file = options.open(&temporary)?;
-        std::io::Write::write_all(&mut file, bytes)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
+    crate::file_io::atomic_write(path, bytes)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,6 +549,40 @@ impl ServicePreferences {
     }
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServicePreferencePatch {
+    pub interface_name: Option<String>,
+    pub force_relay: Option<bool>,
+    pub auto_reconnect: Option<bool>,
+    pub reconnect_attempts: Option<u32>,
+    pub reconnect_base_delay_seconds: Option<u64>,
+    pub traffic_peers: Option<std::collections::BTreeSet<u64>>,
+}
+
+impl ServicePreferencePatch {
+    fn apply(&self, preferences: &mut ServicePreferences) {
+        if let Some(name) = &self.interface_name {
+            preferences.interface_name.clone_from(name);
+        }
+        if let Some(force_relay) = self.force_relay {
+            preferences.force_relay = force_relay;
+        }
+        if let Some(auto_reconnect) = self.auto_reconnect {
+            preferences.auto_reconnect = auto_reconnect;
+        }
+        if let Some(attempts) = self.reconnect_attempts {
+            preferences.reconnect_attempts = attempts;
+        }
+        if let Some(seconds) = self.reconnect_base_delay_seconds {
+            preferences.reconnect_base_delay_seconds = seconds;
+        }
+        if let Some(peers) = &self.traffic_peers {
+            preferences.traffic_peers = Some(peers.clone());
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Request {
@@ -567,6 +616,11 @@ pub enum Request {
     RetryInterface,
     /// Linux: the TAP descriptor travels as SCM_RIGHTS data with this request.
     AttachInterface,
+    AttachAuthorizedInterface {
+        generation: u64,
+        vip: std::net::Ipv4Addr,
+        name: String,
+    },
     Ping {
         peer: u64,
     },
@@ -592,6 +646,9 @@ pub enum Request {
     BlockList,
     Configure {
         preferences: ServicePreferences,
+    },
+    PatchPreferences {
+        patch: ServicePreferencePatch,
     },
     #[cfg(target_os = "linux")]
     SetInterfaceName {
@@ -623,7 +680,7 @@ impl Request {
             Command::Ping { peer } => Self::Ping { peer },
             Command::RetryPeers => Self::RetryPeers,
             Command::RetryInterface => Self::RetryInterface,
-            Command::AttachInterface(_) => {
+            Command::AttachAuthorizedInterface { .. } => {
                 bail!("interface descriptors are attached with `attach_interface`")
             }
             Command::Join(name) => Self::Join {
@@ -650,7 +707,7 @@ impl Request {
                     },
                 },
             },
-            Command::Tagged { .. } => bail!("unsupported control command"),
+            Command::Tagged { .. } | Command::Timed { .. } => bail!("unsupported control command"),
         })
     }
 }
@@ -981,12 +1038,22 @@ fn read_bounded_with_descriptor(
 
 /// Hand a terminal-authorized TAP descriptor to the running service.
 #[cfg(target_os = "linux")]
-pub fn attach_interface(dir: &DataDir, file: File) -> Result<Reply> {
+pub fn attach_interface(
+    dir: &DataDir,
+    file: File,
+    generation: u64,
+    vip: std::net::Ipv4Addr,
+    name: String,
+) -> Result<Reply> {
     let timeout = Duration::from_secs(10);
     let until = Instant::now() + timeout;
     let mut stream =
         connect_control(dir, until).context("Service is stopped. Run `openrad start` first")?;
-    let payload = serde_json::to_vec(&Request::AttachInterface)?;
+    let payload = serde_json::to_vec(&Request::AttachAuthorizedInterface {
+        generation,
+        vip,
+        name,
+    })?;
     send_with_descriptor(&mut stream, &payload, &file, timeout)?;
     drop(file); // The service now holds its own copy.
     stream.shutdown(std::net::Shutdown::Write)?;
@@ -1178,9 +1245,12 @@ pub fn request(dir: &DataDir, command: &Request) -> Result<Reply> {
 #[cfg(windows)]
 pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration) -> Result<Reply> {
     let until = Instant::now() + timeout;
-    let mut stream =
-        windows_pipe::Connection::connect_timeout(&dir.path, timeout.min(Duration::from_secs(5)))
-            .context("Service is stopped. Run `openrad start` first")?;
+    let mut stream = windows_pipe::Connection::connect_timeout(
+        &dir.path,
+        timeout.min(Duration::from_secs(5)),
+        dir.service_executable.as_deref(),
+    )
+    .context("Service is stopped. Run `openrad start` first")?;
     let payload = zeroize::Zeroizing::new(serde_json::to_vec(command)?);
     ensure!(
         payload.len() as u64 <= REQUEST_LIMIT,
@@ -1194,8 +1264,13 @@ pub fn request_with_timeout(dir: &DataDir, command: &Request, timeout: Duration)
     )?;
     let bytes =
         stream.read_message(REPLY_LIMIT, until.saturating_duration_since(Instant::now()))?;
-    stream.acknowledge()?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let reply = serde_json::from_slice(&bytes)?;
+    let remaining = until.saturating_duration_since(Instant::now());
+    if !remaining.is_zero() {
+        // The reply already confirms the outcome, even if acknowledging it fails.
+        let _ = stream.acknowledge(remaining.min(Duration::from_secs(5)));
+    }
+    Ok(reply)
 }
 
 // The public Reply remains a JSON Value for API callers. IPC can serialize
@@ -1206,6 +1281,8 @@ struct StatusSnapshot {
     rid: u64,
     node_name: Option<String>,
     process_id: u32,
+    server: Option<CustomServer>,
+    session_generation: u64,
     preferences: ServicePreferences,
     interface_disabled: bool,
     error: Option<String>,
@@ -1234,6 +1311,8 @@ struct State {
     broadcast_policy: runtime::BroadcastPolicy,
     block_policy: runtime::BlockPolicy,
     restart: bool,
+    identity_replaced: bool,
+    session_generation: u64,
     phase: &'static str,
     error: Option<String>,
     snapshot: Option<Arc<Snapshot>>,
@@ -1243,6 +1322,7 @@ struct State {
 }
 struct Shared {
     state: Mutex<State>,
+    changed: Condvar,
     /// Serializes read-modify-write changes to persisted settings and identity.
     /// They hit the disk or credential store, which can be slow or wait on the
     /// user; `state` must stay free for the engine, which publishes through it.
@@ -1264,6 +1344,8 @@ impl Shared {
                 broadcast_policy: runtime::BroadcastPolicy::default(),
                 block_policy: runtime::BlockPolicy::default(),
                 restart: false,
+                identity_replaced: false,
+                session_generation: rand::random(),
                 phase: "connecting",
                 error: None,
                 snapshot: None,
@@ -1271,6 +1353,7 @@ impl Shared {
                 session_stop: None,
                 pending: BTreeMap::new(),
             }),
+            changed: Condvar::new(),
             config: Mutex::new(()),
             shutdown: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
@@ -1291,9 +1374,12 @@ impl Shared {
     }
     fn stop(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        if let Some(stop) = &self.lock_state().session_stop {
+        let mut state = self.lock_state();
+        state.phase = "stopping";
+        if let Some(stop) = &state.session_stop {
             stop.store(true, Ordering::Relaxed);
         }
+        self.changed.notify_all();
     }
     fn publish_session(
         &self,
@@ -1309,6 +1395,7 @@ impl Shared {
             return None;
         }
         state.phase = "connecting";
+        state.session_generation = state.session_generation.wrapping_add(1);
         state.sender = Some(sender);
         state.session_stop = Some(session_stop);
         state.restart = false;
@@ -1343,6 +1430,9 @@ impl Shared {
             Update::Ping { .. } => {}
             Update::State(snapshot) => {
                 let mut state = self.lock_state();
+                if self.shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
                 state.phase = "connected";
                 state.error = None;
                 state.snapshot = Some(Arc::new(snapshot));
@@ -1393,6 +1483,8 @@ impl Shared {
             rid: self.rid,
             node_name: state.identity.as_ref().map(|id| id.node_name.clone()),
             process_id: std::process::id(),
+            server: self.directory.as_ref().and_then(DataDir::server),
+            session_generation: state.session_generation,
             preferences: state.preferences.clone(),
             interface_disabled: self.disable_interface,
             error: state.error.clone(),
@@ -1424,6 +1516,13 @@ impl Shared {
             _ => None,
         };
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let timeout = if ping.is_some() {
+            runtime::PING_TIMEOUT
+        } else {
+            Duration::from_secs(27)
+        };
+        let until = Instant::now() + timeout;
+        let deadline = Arc::new(runtime::CommandDeadline::new(until));
         let (tx, rx) = mpsc::channel();
         let sender = {
             let mut state = self.lock_state();
@@ -1438,9 +1537,10 @@ impl Shared {
             state.pending.insert(id, tx);
             sender
         };
-        if let Err(error) = sender.try_send(Command::Tagged {
+        if let Err(error) = sender.try_send(Command::Timed {
             id,
             command: Box::new(command),
+            deadline: deadline.clone(),
         }) {
             self.lock_state().pending.remove(&id);
             return Reply::error(match error {
@@ -1448,13 +1548,10 @@ impl Shared {
                 mpsc::TrySendError::Disconnected(_) => "Service connection is unavailable",
             });
         }
-        match rx.recv_timeout(if ping.is_some() {
-            runtime::PING_TIMEOUT
-        } else {
-            Duration::from_secs(27)
-        }) {
+        match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
             Ok(reply) => reply,
             Err(_) => {
+                let prevented = deadline.cancel_before_send();
                 self.lock_state().pending.remove(&id);
                 if let Some(peer) = ping {
                     Reply {
@@ -1462,10 +1559,10 @@ impl Shared {
                         message: runtime::PING_TIMEOUT_MESSAGE.into(),
                         data: json!({"peer": peer, "rtt_ms": null}),
                     }
+                } else if prevented {
+                    Reply::error("Network command expired before it was sent")
                 } else {
-                    Reply::error(
-                        "Network command timed out; check `openrad status` before retrying",
-                    )
+                    Reply::error("Network command outcome is unknown; check `openrad status` before retrying")
                 }
             }
         }
@@ -1487,13 +1584,46 @@ impl Shared {
         }
     }
     #[cfg(target_os = "linux")]
-    fn attach_interface(&self, file: File) -> Reply {
+    fn attach_interface(
+        &self,
+        file: File,
+        generation: u64,
+        vip: std::net::Ipv4Addr,
+        name: String,
+    ) -> Reply {
         if self.disable_interface {
             return Reply::error("Interface setup is disabled for this service");
         }
-        self.queue(Command::AttachInterface(runtime::InterfaceDescriptor::new(
-            file,
-        )))
+        let state = self.lock_state();
+        if state.phase != "connected"
+            || state.restart
+            || state.session_generation != generation
+            || state.preferences.interface_name != name
+            || !state.snapshot.as_ref().is_some_and(|snapshot| {
+                snapshot.vip == Some(vip)
+                    && !snapshot.interface_ready
+                    && snapshot.interface_error.is_some()
+            })
+        {
+            return Reply::error("Interface authorization is no longer current; retry");
+        }
+        let Some(sender) = state.sender.as_ref() else {
+            return Reply::error("Service connection is unavailable");
+        };
+        match sender.try_send(Command::AttachAuthorizedInterface {
+            descriptor: runtime::InterfaceDescriptor::new(file),
+            vip,
+            name,
+            expires: Instant::now() + Duration::from_secs(10),
+        }) {
+            Ok(()) => Reply::ok("Requested", Value::Null),
+            Err(mpsc::TrySendError::Full(_)) => {
+                Reply::error("Service command queue is full; retry shortly")
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                Reply::error("Service connection is unavailable")
+            }
+        }
     }
     fn resolve_network(&self, name: &str) -> Result<String> {
         let state = self.lock_state();
@@ -1537,6 +1667,26 @@ impl Shared {
         state.preferences = preferences;
         Ok(block_reply(&state.preferences.blocked))
     }
+    fn configure_locked(&self, preferences: ServicePreferences) -> Result<()> {
+        self.directory
+            .as_ref()
+            .context("Profile is unavailable")?
+            .save_preferences(&preferences)?;
+        let mut state = self.lock_state();
+        let restart = preferences.force_relay != state.preferences.force_relay
+            || preferences.traffic_peers != state.preferences.traffic_peers
+            || preferences.interface_name != state.preferences.interface_name;
+        state.preferences = preferences;
+        if restart && !state.identity_replaced {
+            state.restart = true;
+            if let Some(stop) = &state.session_stop {
+                stop.store(true, Ordering::Relaxed);
+            }
+        }
+        self.changed.notify_all();
+        Ok(())
+    }
+
     fn handle_result(&self, command: Request) -> Result<Reply> {
         Ok(match command {
             Request::Status => self.status(),
@@ -1621,7 +1771,7 @@ impl Shared {
             }
             Request::RetryPeers => self.queue(Command::RetryPeers),
             Request::RetryInterface => self.queue(Command::RetryInterface),
-            Request::AttachInterface => {
+            Request::AttachInterface | Request::AttachAuthorizedInterface { .. } => {
                 Reply::error("interface attachment requires a descriptor from a local terminal")
             }
             Request::Ping { peer } => self.command(Command::Ping { peer }),
@@ -1682,7 +1832,8 @@ impl Shared {
                     .save_identity(&identity)?;
                 let mut state = self.lock_state();
                 state.identity = Some(identity);
-                state.restart = true;
+                state.restart = !state.identity_replaced;
+                self.changed.notify_all();
                 if let Some(stop) = &state.session_stop {
                     stop.store(true, Ordering::Relaxed);
                 }
@@ -1704,22 +1855,14 @@ impl Shared {
                     preferences.broadcast_peers = state.preferences.broadcast_peers.clone();
                     preferences.blocked = state.preferences.blocked.clone();
                 }
-                preferences.validate()?;
-                self.directory
-                    .as_ref()
-                    .context("Profile is unavailable")?
-                    .save_preferences(&preferences)?;
-                let mut state = self.lock_state();
-                let restart = preferences.force_relay != state.preferences.force_relay
-                    || preferences.traffic_peers != state.preferences.traffic_peers
-                    || preferences.interface_name != state.preferences.interface_name;
-                state.preferences = preferences;
-                if restart {
-                    state.restart = true;
-                    if let Some(stop) = &state.session_stop {
-                        stop.store(true, Ordering::Relaxed);
-                    }
-                }
+                self.configure_locked(preferences)?;
+                Reply::ok("Settings saved", Value::Null)
+            }
+            Request::PatchPreferences { patch } => {
+                let _serial = self.lock_config();
+                let mut preferences = self.lock_state().preferences.clone();
+                patch.apply(&mut preferences);
+                self.configure_locked(preferences)?;
                 Reply::ok("Settings saved", Value::Null)
             }
             #[cfg(target_os = "linux")]
@@ -1734,16 +1877,7 @@ impl Shared {
                     )
                 } else {
                     preferences.interface_name = name.clone();
-                    self.directory
-                        .as_ref()
-                        .context("Profile is unavailable")?
-                        .save_preferences(&preferences)?;
-                    let mut state = self.lock_state();
-                    state.preferences = preferences;
-                    state.restart = true;
-                    if let Some(stop) = &state.session_stop {
-                        stop.store(true, Ordering::Relaxed);
-                    }
+                    self.configure_locked(preferences)?;
                     Reply::ok(
                         "Interface name saved. Reconnecting to apply it.",
                         json!({"interface_name": name}),
@@ -1752,7 +1886,9 @@ impl Shared {
             }
             Request::Reconnect => {
                 let mut state = self.lock_state();
+                state.identity_replaced = false;
                 state.restart = true;
+                self.changed.notify_all();
                 if let Some(stop) = &state.session_stop {
                     stop.store(true, Ordering::Relaxed);
                 }
@@ -1760,6 +1896,50 @@ impl Shared {
             }
             Request::Stop => Reply::ok("Service stopping", Value::Null),
         })
+    }
+}
+
+fn reconnect_delay(preferences: &ServicePreferences, failures: u32) -> Option<Duration> {
+    if !preferences.auto_reconnect || failures > preferences.reconnect_attempts {
+        return None;
+    }
+    Some(Duration::from_secs(
+        preferences
+            .reconnect_base_delay_seconds
+            .saturating_mul(1u64 << failures.saturating_sub(1).min(9))
+            .min(300),
+    ))
+}
+
+impl Shared {
+    /// Reevaluate the live policy whenever configuration or an operator wakes us.
+    fn wait_to_reconnect(&self, failed_at: Instant, failures: u32) {
+        let mut state = self.lock_state();
+        while !self.shutdown.load(Ordering::Relaxed) && !state.restart {
+            let delay = if state.identity_replaced {
+                None
+            } else {
+                reconnect_delay(&state.preferences, failures)
+            };
+            if let Some(delay) = delay {
+                state.phase = "reconnecting";
+                let remaining = (failed_at + delay).saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (updated, _) = self
+                    .changed
+                    .wait_timeout(state, remaining)
+                    .unwrap_or_else(PoisonError::into_inner);
+                state = updated;
+            } else {
+                state.phase = "error";
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner);
+            }
+        }
     }
 }
 
@@ -1819,7 +1999,16 @@ fn supervisor(
         if shared.shutdown.load(Ordering::Relaxed) {
             break;
         }
-        if shared.lock_state().restart {
+        let identity_replaced = outcome
+            .as_ref()
+            .err()
+            .and_then(|error| error.downcast_ref::<crate::session::ServerDisconnect>())
+            .is_some_and(crate::session::ServerDisconnect::identity_replaced);
+        if identity_replaced {
+            let mut state = shared.lock_state();
+            state.identity_replaced = true;
+            state.restart = false;
+        } else if shared.lock_state().restart {
             failures = 0;
             shared.disconnected("Reconnecting with the same identity…".into());
             continue;
@@ -1836,25 +2025,9 @@ fn supervisor(
             failures = 0;
         }
         failures = failures.saturating_add(1);
-        if !preferences.auto_reconnect || failures > preferences.reconnect_attempts {
-            shared.lock_state().phase = "error";
-            while !shared.shutdown.load(Ordering::Relaxed) && !shared.lock_state().restart {
-                thread::sleep(Duration::from_millis(50));
-            }
-            continue;
-        }
-        let delay = Duration::from_secs(
-            preferences
-                .reconnect_base_delay_seconds
-                .saturating_mul(1u64 << failures.saturating_sub(1).min(9))
-                .min(300),
-        );
-        let until = Instant::now() + delay;
-        while !shared.shutdown.load(Ordering::Relaxed)
-            && !shared.lock_state().restart
-            && Instant::now() < until
-        {
-            thread::sleep(Duration::from_millis(100));
+        shared.wait_to_reconnect(Instant::now(), failures);
+        if shared.lock_state().restart {
+            failures = 0;
         }
     }
     shared.disconnected("Service stopped".into());
@@ -1872,9 +2045,19 @@ fn serve_connection(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     let stopping = matches!(&command, Request::Stop);
     #[cfg(target_os = "linux")]
     let payload = match (&command, descriptor) {
-        (Request::AttachInterface, Some(descriptor)) => {
-            serde_json::to_vec(&shared.attach_interface(File::from(descriptor)))?
-        }
+        (
+            Request::AttachAuthorizedInterface {
+                generation,
+                vip,
+                name,
+            },
+            Some(descriptor),
+        ) => serde_json::to_vec(&shared.attach_interface(
+            File::from(descriptor),
+            *generation,
+            *vip,
+            name.clone(),
+        ))?,
         // Any descriptor sent with another request is closed here.
         _ => shared.reply_payload(command)?,
     };
@@ -1939,6 +2122,7 @@ pub fn run_with(dir: DataDir, disable_interface: bool, await_interface: bool) ->
     let modulus = dir.use_server()?.modulus;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
+    let preferences = dir.preferences()?;
     let socket = dir.socket();
     match fs::symlink_metadata(&socket) {
         Ok(meta) if meta.file_type().is_socket() => fs::remove_file(&socket)?,
@@ -1957,7 +2141,7 @@ pub fn run_with(dir: DataDir, disable_interface: bool, await_interface: bool) ->
         .state
         .get_mut()
         .unwrap_or_else(PoisonError::into_inner)
-        .preferences = dir.preferences()?;
+        .preferences = preferences;
     let shared = Arc::new(shared);
     let on_signal = shared.clone();
     ctrlc::set_handler(move || on_signal.stop())?;
@@ -2040,6 +2224,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
     let modulus = dir.use_server()?.modulus;
     early_log::checkpoint(Stage::ServiceLock);
     let _lock = dir.lock()?;
+    let preferences = dir.preferences()?;
     let mut listener = windows_pipe::Listener::bind(&dir.path)?;
     drop(profile_lock);
     early_log::checkpoint(Stage::ServiceListening);
@@ -2049,7 +2234,7 @@ pub fn run(dir: DataDir, disable_interface: bool) -> Result<()> {
         .state
         .get_mut()
         .unwrap_or_else(PoisonError::into_inner)
-        .preferences = dir.preferences()?;
+        .preferences = preferences;
     let shared = Arc::new(shared);
     let worker_shared = shared.clone();
     let worker =
@@ -2105,6 +2290,10 @@ fn spawn_inner(
     await_interface: bool,
     executable: &std::path::Path,
 ) -> Result<bool> {
+    #[cfg(windows)]
+    let configured = dir.clone().with_service_executable(executable);
+    #[cfg(windows)]
+    let dir = &configured;
     early_log::checkpoint(Stage::ServiceStarting);
     if request(dir, &Request::Status).is_ok() {
         return Ok(false);
@@ -2601,6 +2790,51 @@ mod tests {
         assert!(legacy.validate().is_err());
         fs::remove_dir_all(directory.path).unwrap();
     }
+    #[test]
+    fn maximum_valid_preferences_round_trip_and_invalid_write_preserves_previous() {
+        let path = std::env::temp_dir().join(format!(
+            "openrad-preferences-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let directory = DataDir::open(Some(path)).unwrap();
+        let targets: std::collections::BTreeSet<_> = (0..1024).map(|i| u64::MAX - i).collect();
+        let blocked = (0..1024)
+            .map(|i| {
+                (
+                    Ipv4Addr::new(26, 100, 100 + (i / 100) as u8, 100 + (i % 100) as u8),
+                    BlockDirection::Incoming,
+                )
+            })
+            .collect();
+        let mut preferences = ServicePreferences {
+            traffic_peers: Some(targets.clone()),
+            broadcast_peers: Some(BroadcastSelection::Include(targets)),
+            blocked,
+            ..Default::default()
+        };
+        directory.save_preferences(&preferences).unwrap();
+        assert!(
+            fs::metadata(directory.path.join("service.json"))
+                .unwrap()
+                .len()
+                > 64 * 1024
+        );
+        assert_eq!(directory.preferences().unwrap(), preferences);
+        preferences.traffic_peers.as_mut().unwrap().insert(1);
+        assert!(directory.save_preferences(&preferences).is_err());
+        assert_eq!(
+            directory
+                .preferences()
+                .unwrap()
+                .traffic_peers
+                .unwrap()
+                .len(),
+            1024
+        );
+        fs::remove_dir_all(directory.path).unwrap();
+    }
+
     #[test]
     fn interface_names_have_backward_compatible_defaults_and_validation() {
         let mut preferences: ServicePreferences = serde_json::from_str("{}").unwrap();
