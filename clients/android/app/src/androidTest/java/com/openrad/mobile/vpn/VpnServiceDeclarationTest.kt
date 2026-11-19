@@ -58,7 +58,9 @@ class VpnServiceDeclarationTest {
         @Suppress("DEPRECATION")
         val pkg = context.packageManager.getPackageInfo(context.packageName, 0)
         assertEquals("com.openrad.mobile.debug", context.packageName)
-        assertEquals("2.4.0", pkg.versionName)
+        assertEquals("2.4.5-rc.1", pkg.versionName)
+        @Suppress("DEPRECATION")
+        assertEquals(11, pkg.versionCode)
     }
 
     @Test
