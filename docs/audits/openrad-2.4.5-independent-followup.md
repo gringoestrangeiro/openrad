@@ -98,3 +98,7 @@ CI and full platform packaging remain to be qualified; no release was
 published.
 
 Implementation commits: c77efaf (Rust fixes), 4ce189e (tooling and policy).
+
+## Native Windows portable packaging
+
+The initial MSVC packaging test exposed a missing notice for clipboard-win 5.4.3, fixed in 38f8314 using the exact upstream revision from the published crate. The portable Windows QA ZIP subsequently built successfully. Archive checksum, every staged payload checksum, the SBOM component graph, file hashes and the official CycloneDX schema passed. This is not the offline NSIS installer, a Linux package, or native TAP/UAC qualification.
