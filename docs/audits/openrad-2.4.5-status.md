@@ -25,7 +25,7 @@ Development checkpoint based on the 2.4.0 audit at `d4314fa`. Not a release qual
 | S02 | Partial | Check named-pipe server PID, SID and executable path before sensitive transmission. Same-user compromise of writable installations and elevated trust boundary require additional validation; path alone is not publisher authentication. |
 | S03 | Implemented, qualification pending | Validate administrator-controlled ownership, write ACLs and reparse points for installed executable, sibling CLI, DLLs and ancestors. Ordinary-user writable-path regression passed; real elevated task qualification pending. |
 | S04 | Partial | rustix 1.1.6, tokio 1.53.3, clipboard-win 5.4.3; local advisory snapshot reports zero vulnerabilities and four warnings (three unmaintained zbus-family dependencies, yanked async-executor). Linux and clipboard qualification pending. |
-| S05 | Implemented, CI pending | Rust workflow actions pinned by verified upstream SHA; dedicated dependency audit job. No remote CI run initiated. |
+| S05 | Implemented | Rust workflow actions pinned by verified upstream SHA; dedicated dependency audit job. The first development-branch Rust CI run passed. |
 | N01 | Implemented | Serialize private joins until response correlation is established; public join concurrency retained. Loopback tests. Native legacy interoperability pending. |
 | N02 | Implemented | IPC ACK uses remaining budget and does not turn a known reply into an unknown command outcome. |
 | P01 | Partial | Transactional roster admission with 1,024 peers, 256 networks, 16,384 links and 1 MiB of text; bounded active and retiring workers and lifecycle queue. Overflow regression passed. Incremental snapshots and resource measurements remain pending. |
@@ -46,7 +46,7 @@ Windows MSVC builds use the SDK resource compiler for the application icon; GNU 
 
 ## Remaining release gates
 
-- Run the Rust workflow on a development branch only after authorization.
+- Run Rust and tooling CI after each relevant development-branch change.
 - Windows/Linux real TAP, official Radmin client and mixed-version interoperability, disconnect/reconnect, route cleanup and concurrent GUI/CLI use, visual/accessibility checks.
 - 24–72 hour controlled soak plus roster scaling, memory, handle and latency measurements.
 - Implement the remaining findings before claiming the audit complete. Peer-quality history, incremental status and engine-path consolidation remain open.
@@ -65,3 +65,7 @@ The support bundle is available through `openrad diagnostics` (also with `--json
 - `cargo build --workspace --release --locked --jobs 1`: passed in 6m 26s. All three Windows executables rebuilt. Windows ExtractIconEx confirmed one embedded icon group in the desktop binary. Release CLI reported 2.4.5 and returned a valid privacy-filtered JSON diagnostic bundle using an isolated temporary profile.
 
 The local Windows checks are not a substitute for Linux or real TAP qualification. The current development commit is not a release candidate approval.
+
+## Tooling follow-up
+
+The initial development-branch Rust CI and sync-check passed (commit `42eb099`). The release tooling workflow failed because its startup fixture loaded only the registration script, without the ACL validator, and the current-version release documents were absent. The fixture now composes both production scripts and tests ACL, ownership, reparse points and missing ACLs without changing OS tasks. Added the two required 2.4.5 development release documents.

@@ -11,7 +11,7 @@
 - Persist desktop network preferences off the UI thread and correlate public-network searches with their session.
 - Harden elevated startup path checks and isolate control ports per session.
 - Add a privacy-filtered support bundle to the CLI and desktop.
-- See [audit implementation status](docs/audits/openrad-2.4.5-status.md) for remaining qualification and open findings.
+- See [release notes](docs/releases/2.4.5.md) and [detailed changes](docs/releases/2.4.5-changes.md) for remaining qualification and open findings.
 
 ## 2.4.0
 
